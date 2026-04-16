@@ -24,7 +24,7 @@ APP="$REPO/.build/Espalier.app"
 
 echo "→ rm -rf $APP && mkdir bundle dirs"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 
 echo "→ copy binaries"
 # The main app binary goes in Contents/MacOS/ per Apple convention.
@@ -33,6 +33,9 @@ echo "→ copy binaries"
 # directory (APFS treats them as the same filename).
 cp "$BIN_DIR/Espalier" "$APP/Contents/MacOS/Espalier"
 cp "$BIN_DIR/espalier-cli" "$APP/Contents/Helpers/espalier"
+
+echo "→ build + copy app icon"
+"$SCRIPT_DIR/build-icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 
 echo "→ write Info.plist"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -44,6 +47,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>Espalier</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.espalier.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
