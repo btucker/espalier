@@ -34,7 +34,7 @@ struct SidebarView: View {
             .buttonStyle(.plain)
             .padding(8)
         }
-        .background(theme.background)
+        .background(theme.sidebarBackground)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
         }

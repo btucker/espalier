@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import GhosttyKit
 import SwiftUI
@@ -40,49 +41,88 @@ final class GhosttyConfig {
     }
 }
 
-extension ghostty_config_color_s {
-    /// Convert a libghostty RGB triple to a SwiftUI color.
-    var swiftUIColor: Color {
-        Color(
-            .sRGB,
-            red: Double(r) / 255.0,
-            green: Double(g) / 255.0,
-            blue: Double(b) / 255.0,
-            opacity: 1.0
-        )
-    }
-}
-
 // MARK: - GhosttyTheme
 
 /// Snapshot of the ghostty-config-driven theme colors we apply to Espalier's
 /// app chrome (sidebar, title bar, breadcrumb) so the whole window visually
 /// matches the terminal's appearance.
+///
+/// Stores the raw RGB triples for background and foreground so we can derive
+/// shifted variants (a slightly-lighter-on-dark / slightly-darker-on-light
+/// sidebar shade) and expose the raw values as NSColor for NSWindow tinting.
 struct GhosttyTheme: Equatable {
-    let background: Color
-    let foreground: Color
+    /// RGB triple in 0..1 linear SwiftUI-compatible space.
+    struct RGB: Equatable {
+        let r: Double
+        let g: Double
+        let b: Double
+    }
+
+    let backgroundRGB: RGB
+    let foregroundRGB: RGB
+
+    var background: Color { color(backgroundRGB) }
+    var foreground: Color { color(foregroundRGB) }
+
+    /// NSColor version of the background, used to tint the NSWindow so the
+    /// title-bar area doesn't render as system white behind `.hiddenTitleBar`.
+    var backgroundNSColor: NSColor {
+        NSColor(
+            srgbRed: backgroundRGB.r,
+            green: backgroundRGB.g,
+            blue: backgroundRGB.b,
+            alpha: 1
+        )
+    }
+
+    /// Slightly shifted background for the sidebar, so there's visible
+    /// separation between chrome and terminal content without introducing
+    /// a color from outside the theme. On dark themes we lighten; on light
+    /// themes we darken.
+    var sidebarBackground: Color {
+        let bg = backgroundRGB
+        let luminance = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b
+        let shift = luminance < 0.5 ? 0.06 : -0.06
+        return color(RGB(
+            r: clamp01(bg.r + shift),
+            g: clamp01(bg.g + shift),
+            b: clamp01(bg.b + shift)
+        ))
+    }
 
     /// Fallback theme used when ghostty config is unavailable or doesn't
     /// specify background/foreground. Matches macOS dark-mode defaults so
     /// things don't look broken.
     static let fallback = GhosttyTheme(
-        background: Color(.sRGB, red: 0.05, green: 0.05, blue: 0.1, opacity: 1),
-        foreground: Color(.sRGB, red: 0.87, green: 0.87, blue: 0.87, opacity: 1)
+        backgroundRGB: RGB(r: 0.05, g: 0.05, b: 0.1),
+        foregroundRGB: RGB(r: 0.87, g: 0.87, b: 0.87)
     )
 
     /// Read theme colors from a `GhosttyConfig`. Missing keys fall back to
     /// `.fallback` component-wise.
     init(config: GhosttyConfig) {
-        self.background = config.color(forKey: "background")?.swiftUIColor
-            ?? Self.fallback.background
-        self.foreground = config.color(forKey: "foreground")?.swiftUIColor
-            ?? Self.fallback.foreground
+        self.backgroundRGB = config.color(forKey: "background").map(Self.toRGB)
+            ?? Self.fallback.backgroundRGB
+        self.foregroundRGB = config.color(forKey: "foreground").map(Self.toRGB)
+            ?? Self.fallback.foregroundRGB
     }
 
-    init(background: Color, foreground: Color) {
-        self.background = background
-        self.foreground = foreground
+    init(backgroundRGB: RGB, foregroundRGB: RGB) {
+        self.backgroundRGB = backgroundRGB
+        self.foregroundRGB = foregroundRGB
     }
+
+    private static func toRGB(_ c: ghostty_config_color_s) -> RGB {
+        RGB(r: Double(c.r) / 255.0, g: Double(c.g) / 255.0, b: Double(c.b) / 255.0)
+    }
+
+    private func color(_ rgb: RGB) -> Color {
+        Color(.sRGB, red: rgb.r, green: rgb.g, blue: rgb.b, opacity: 1)
+    }
+}
+
+private func clamp01(_ x: Double) -> Double {
+    min(1.0, max(0.0, x))
 }
 
 // MARK: - GhosttyApp

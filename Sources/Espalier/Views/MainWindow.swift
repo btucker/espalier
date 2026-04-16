@@ -56,6 +56,10 @@ struct MainWindow: View {
                 }
             }
         }
+        // Tint the NSWindow's backgroundColor to match the terminal theme
+        // so the title-bar strip (always reserved for the traffic lights,
+        // even with .hiddenTitleBar) doesn't render as system white.
+        .windowBackgroundTint(terminalManager.theme.background)
         // Let content flow under the hidden title bar so the breadcrumb row
         // sits alongside the traffic lights instead of dropping below them.
         // With .windowStyle(.hiddenTitleBar), the title bar is transparent
