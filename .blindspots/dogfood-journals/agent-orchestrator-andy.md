@@ -246,9 +246,25 @@ Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppS
 
 - 56/56 tests pass, build clean.
 
+## Cycle 12 — 2026-04-16
+
+### Explored
+- User launched the app fresh and hit the "Administrator Access Required" dialog immediately — Andy was trying to open a worktree and got a sudo-prompt detour before even seeing the main UI. The `offerCLIInstallIfNeeded` auto-offer from cycle 10 was firing, and because `/usr/local/bin` needs sudo, that path went to `showSudoInstallAlert` (cycle 7). The dialog is technically correct, but it's gate-keeping the first-run experience for a completely optional feature.
+
+### Fixed
+- Removed the `offerCLIInstallIfNeeded` function and its call site from `startup()`. The menu item (`Espalier -> Install CLI Tool...`) is still there for users who explicitly want PATH integration.
+- Updated SPECS.md: ATTN-4.1 now says CLI installation is opt-in via the menu. ATTN-4.2 merged into 4.1 since the menu was the only remaining path. The old "on first launch, the application shall offer..." language is gone; auto-prompting was strictly worse than menu-on-demand.
+
+### Gotcha
+- After removing the function, the dialog STILL appeared on relaunch. The binary at `~/Applications/Espalier.app` was stale — incremental SwiftPM build + a previous `cp` hadn't rippled through. Had to `touch` the source file to force a rebuild, nuke `.build/Espalier.app`, re-run the bundling script, then re-install. `strings` on the binary grepped for `cliInstallOffered` went from 1 → 0 after the clean cycle.
+
+### Verified
+- Fresh launch with cleaned state.json + cleaned `Saved Application State` + cleaned defaults: single window, title "Espalier", no modal dialog.
+- 56/56 tests still pass; build clean.
+
 ### Try next cycle
+- Actually dogfood opening a worktree and using the terminal (the pivot the user wants). Add the espalier repo itself, click a worktree, type in the ghostty surface.
 - NSSplitView autosave vs state.json sovereignty (from cycle 6).
-- The `installCLI` happy-path confirmation dialog still asks "Create a symlink at..." — Andy clicked "Install CLI Tool..." already. That second prompt is friction.
-- The socket server's `handleClient` does a blocking `read` loop. If a malicious/buggy client sends data slowly, it could starve other connections. Minor, but a SO_RCVTIMEO on the client fd would bound it.
-- The app has no `applicationWillTerminate` save. `onChange(of: appState)` covers most saves but the last few ms of mutation before quit might not round-trip. Empirically state.json has been current, but worth a belt-and-suspenders `willTerminate` observer.
-- Cycle 11's fix reads `NSScreen.main` in a computed property. If that's called before AppKit has enumerated screens (rare but possible at the very start of launch), the fallback `CGRect(0, 0, 1440, 900)` kicks in — harmless but not centered. Low priority.
+- The socket server's `handleClient` does a blocking `read` loop. A slow client could starve others. `SO_RCVTIMEO` on the client fd would bound it.
+- No `applicationWillTerminate` save. `onChange(of: appState)` covers most paths but the last few ms before quit might not flush to disk.
+- Cycle 11's `NSScreen.main` read in a computed property might return nil if AppKit hasn't enumerated screens yet. Harmless fallback; low priority.

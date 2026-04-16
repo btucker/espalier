@@ -130,7 +130,6 @@ struct EspalierApp: App {
 
         reconcileOnLaunch()
         restoreRunningWorktrees()
-        offerCLIInstallIfNeeded()
     }
 
     private func reconcileOnLaunch() {
@@ -158,37 +157,6 @@ struct EspalierApp: App {
                     appState.repos[repoIdx].worktrees[wtIdx].branch = match.branch
                 }
             }
-        }
-    }
-
-    private func offerCLIInstallIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: "cliInstallOffered") else { return }
-
-        let symlinkPath = "/usr/local/bin/espalier"
-        guard !FileManager.default.fileExists(atPath: symlinkPath) else {
-            // Symlink already in place — count this launch as "offered" so
-            // we don't prompt later if the user deletes the symlink and
-            // relaunches. ATTN-4.1 says "on first launch"; one offer per
-            // user is the intent.
-            defaults.set(true, forKey: "cliInstallOffered")
-            return
-        }
-
-        // Delay so the main window has a beat to render before we pop the
-        // modal. Set the "offered" flag INSIDE the closure, not before
-        // scheduling: if the app quits during the delay (rapid Cmd-Q, crash,
-        // whatever), the closure never fires, the flag stays unset, and the
-        // user gets the offer again on next launch. The pre-fix version
-        // burned the one-shot offer whenever startup was interrupted inside
-        // this 1-second window.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            // Additional safety: if the app is shutting down but a pending
-            // task on the main queue still gets drained, don't pop the
-            // modal against a dying window.
-            guard NSApp.isRunning else { return }
-            defaults.set(true, forKey: "cliInstallOffered")
-            installCLI()
         }
     }
 

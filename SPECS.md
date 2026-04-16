@@ -183,9 +183,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 5.4 CLI Distribution
 
-**ATTN-4.1** On first launch, the application shall offer to create a symlink at `/usr/local/bin/espalier` pointing to the CLI binary in the app bundle.
-
-**ATTN-4.2** The application shall provide a menu item (Espalier -> Install CLI Tool...) to create or update the symlink.
+**ATTN-4.1** The application shall provide a menu item (Espalier -> Install CLI Tool...) to create or update a symlink at `/usr/local/bin/espalier` pointing to the CLI binary in the app bundle. CLI installation is opt-in via this menu item; the application shall not auto-prompt for installation on launch.
 
 ## 6. Persistence
 
