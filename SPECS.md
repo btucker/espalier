@@ -148,7 +148,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 5.1 CLI Tool
 
-**ATTN-1.1** The application shall include a CLI binary (`espalier`) in the app bundle at `Espalier.app/Contents/MacOS/espalier`.
+**ATTN-1.1** The application shall include a CLI binary (`espalier`) in the app bundle at `Espalier.app/Contents/MacOS/espalier`. The Swift Package Manager product that builds this binary is named `espalier-cli` to avoid case-insensitive filesystem collision with the `Espalier` app during development builds; the binary is renamed to `espalier` when installed into the app bundle.
 
 **ATTN-1.2** The CLI shall support the command `espalier notify "<text>"` to set attention on the worktree containing the current working directory.
 
