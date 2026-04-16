@@ -11,19 +11,7 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Use List(selection:) + .tag() rather than .onTapGesture on each
-            // row. Inside a List with .sidebar style, List manages its own
-            // row-selection gesture handling, and .onTapGesture fires
-            // inconsistently — confirmed during dogfooding: clicks on row 3
-            // landed on the right UI element but did not trigger the tap
-            // handler. The selection binding is the idiomatic path and also
-            // enables keyboard arrow-key navigation out of the box.
-            List(selection: Binding(
-                get: { appState.selectedWorktreePath },
-                set: { newValue in
-                    if let path = newValue { onSelect(path) }
-                }
-            )) {
+            List {
                 ForEach(appState.repos) { repo in
                     repoSection(repo)
                 }
@@ -58,15 +46,22 @@ struct SidebarView: View {
             )
         ) {
             ForEach(repo.worktrees) { worktree in
-                WorktreeRow(
-                    entry: worktree,
-                    isSelected: appState.selectedWorktreePath == worktree.path,
-                    displayName: label(for: worktree, in: repo),
-                    isMainCheckout: worktree.path == repo.path
-                )
-                // Tag for List(selection:) — the path is unique across the
-                // entire sidebar, so it's a valid selection identifier.
-                .tag(worktree.path as String?)
+                // Wrap the row in a Button so clicks reliably trigger the
+                // handler. A bare `.onTapGesture` inside List with sidebar
+                // style is swallowed by List's own selection gestures;
+                // Button's built-in hit testing bypasses that. `.plain`
+                // keeps the row's visual styling.
+                Button {
+                    onSelect(worktree.path)
+                } label: {
+                    WorktreeRow(
+                        entry: worktree,
+                        isSelected: appState.selectedWorktreePath == worktree.path,
+                        displayName: label(for: worktree, in: repo),
+                        isMainCheckout: worktree.path == repo.path
+                    )
+                }
+                .buttonStyle(.plain)
                 .contextMenu {
                     worktreeContextMenu(worktree, repo: repo)
                 }

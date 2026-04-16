@@ -316,3 +316,35 @@ Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppS
 - User verifies row clicking actually works now (AppleScript couldn't drive it, but the code is idiomatic SwiftUI).
 - Tests for the sidebar selection flow — maybe ViewInspector or just mutating `appState.selectedWorktreePath` directly and asserting the terminal rerenders.
 - If row clicks still don't work for real users, there might be something between us and List's internal gesture: `DisclosureGroup` could be swallowing events.
+
+## Cycle 15 — 2026-04-16 (TWO bugs, both user-reported blockers)
+
+### Explored
+User reported: "it doesn't work to switch between worktrees anymore. also it doesn't work to type in the terminal." Both block basic dogfooding. Fixing together.
+
+### Broke (1): Row selection regression from cycle 14
+- The `List(selection:)` + `.tag` pattern didn't work in practice — SwiftUI sidebar List selection plus `DisclosureGroup` don't cooperate as cleanly as the docs suggest. Clicks were dead.
+
+### Broke (2): Typing into the terminal
+- `SurfaceNSView` was a shell: `acceptsFirstResponder` returning true, `wantsLayer` enabled, nothing else. No `keyDown`, no `becomeFirstResponder` hook, no mouse focus. libghostty rendered output fine but received zero input. The terminal was a read-only prompt.
+
+### Fixed (1): Button-wrapped rows
+- Reverted the `List(selection:)` binding.
+- Wrapped each `WorktreeRow` in a `Button { onSelect(worktree.path) } label: { ... }.buttonStyle(.plain)`. Buttons have their own reliable hit testing that bypasses List's row-gesture arbitration, while `.plain` keeps the row's visual styling.
+- Still in a `DisclosureGroup` so repo expand/collapse works.
+
+### Fixed (2): Keyboard + focus forwarding
+- `SurfaceNSView` gained a `surface: ghostty_surface_t?` property set by `SurfaceHandle` immediately after `ghostty_surface_new` returns.
+- `mouseDown(with:)` now calls `window?.makeFirstResponder(self)` so clicks grab focus.
+- `becomeFirstResponder` / `resignFirstResponder` call `ghostty_surface_set_focus(surface, true/false)` so libghostty knows which surface has keyboard attention (also matters for cursor-blink state and for ATTN-3 — clearing attention on focus).
+- `keyDown(with:)` forwards `event.characters` as UTF-8 bytes to `ghostty_surface_text(surface, ptr, length)`. That covers regular keys, Enter (\r), Backspace, Tab, arrows (CSI), etc.
+- Not yet hooked up: `NSTextInputClient` (better IME / dead-key support) and `ghostty_surface_key` (for keybinding actions like Cmd+C). Text input is the 90% path; those are polish.
+
+### Verified
+- 59/59 tests still pass, clean build.
+- Deployed to `~/Applications/Espalier.app`. Pending user confirmation for both (can't drive SwiftUI row selection or libghostty keystrokes via AppleScript).
+
+### Try next cycle (after user verifies)
+- NSTextInputClient for IME and multi-byte composition.
+- `ghostty_surface_key` for binding-action keys (Cmd+C copy, Cmd+V paste, Cmd+K clear).
+- Mouse events (scroll for scrollback, click for selection, etc.).

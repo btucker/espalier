@@ -29,6 +29,12 @@ final class SurfaceHandle {
 
         let surfaceView = SurfaceNSView()
         self.view = surfaceView
+        defer {
+            // Bind the surface to the view AFTER ghostty_surface_new returns
+            // so the view can forward keystrokes/mouse events to it. The
+            // view weakly references the surface via this unmanaged handle.
+            surfaceView.surface = self.surface
+        }
 
         // Allocate C strings up front so we can free them deterministically.
         let cwdCStr = strdup(worktreePath)
@@ -103,9 +109,22 @@ final class SurfaceHandle {
     }
 }
 
-/// Minimal `NSView` subclass used as the ghostty surface's host view.
-/// Higher layers may swap this for a richer view that forwards input/focus events.
+/// `NSView` subclass used as the ghostty surface's host view.
+///
+/// Forwards keyboard input to libghostty via `ghostty_surface_text`, which
+/// feeds bytes directly into the PTY. This is the minimum viable path:
+/// `NSEvent.characters` already contains the translated text for regular
+/// keys, Enter (`\r`), Backspace (`\u{7F}`), arrows, etc., so most terminal
+/// interaction works without a full NSTextInputClient.
+///
+/// `SurfaceHandle` sets `surface` after `ghostty_surface_new` returns.
+/// Mouse-down focuses the view so subsequent keystrokes route here.
 final class SurfaceNSView: NSView {
+    /// Weak-ish reference to the libghostty surface for input forwarding.
+    /// Set by `SurfaceHandle` after construction; cleared when the handle
+    /// is freed (the surface pointer is only valid while the handle owns it).
+    var surface: ghostty_surface_t?
+
     override var acceptsFirstResponder: Bool { true }
 
     override init(frame: NSRect) {
@@ -116,5 +135,47 @@ final class SurfaceNSView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) not implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Grab keyboard focus so subsequent keystrokes route to this view.
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let surface else {
+            super.keyDown(with: event)
+            return
+        }
+        // event.characters includes the translated form for regular keys,
+        // Enter (\r), Backspace (\u{7F}), Tab (\t), arrows (CSI sequences),
+        // etc. Forward the bytes to libghostty's text input path, which
+        // writes them to the PTY.
+        guard let text = event.characters, !text.isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBufferPointer { buf in
+            if let base = buf.baseAddress {
+                base.withMemoryRebound(to: CChar.self, capacity: buf.count) { ptr in
+                    ghostty_surface_text(surface, ptr, UInt(buf.count))
+                }
+            }
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        guard let surface else { return super.becomeFirstResponder() }
+        ghostty_surface_set_focus(surface, true)
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        if let surface {
+            ghostty_surface_set_focus(surface, false)
+        }
+        return super.resignFirstResponder()
     }
 }
