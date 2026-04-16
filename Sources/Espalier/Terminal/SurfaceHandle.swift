@@ -125,6 +125,11 @@ final class SurfaceNSView: NSView {
     /// is freed (the surface pointer is only valid while the handle owns it).
     var surface: ghostty_surface_t?
 
+    /// Mirror of libghostty's `toggle_readonly` state. Maintained from the
+    /// context-menu action so the checkmark reflects the current mode.
+    /// libghostty owns authoritative state; this is our UI shadow.
+    var isReadonly: Bool = false
+
     override var acceptsFirstResponder: Bool { true }
 
     override init(frame: NSRect) {
@@ -293,7 +298,7 @@ final class SurfaceNSView: NSView {
     }
 
     /// Translate an NSEvent modifier mask into libghostty's mod bitfield.
-    private static func ghosttyMods(from flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+    static func ghosttyMods(from flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
         var raw: UInt32 = 0
         if flags.contains(.shift)   { raw |= GHOSTTY_MODS_SHIFT.rawValue }
         if flags.contains(.control) { raw |= GHOSTTY_MODS_CTRL.rawValue }

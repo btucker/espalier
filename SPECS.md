@@ -114,6 +114,37 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **TERM-7.3** When the user navigates between panes via keyboard, the application shall use the split tree's spatial layout to determine the target pane.
 
+### 3.8 Context Menu
+
+**TERM-8.1** When the user right-clicks a terminal pane, the application shall display a context menu. When the user Control-clicks with the left mouse button on a terminal pane, the application shall display the same context menu, unless the terminal has enabled mouse capturing in which case the click shall be delivered to the terminal as a right-mouse-press instead.
+
+**TERM-8.2** The context menu shall contain the following items, in this order, separated by dividers as shown:
+  - Copy (only when the terminal has a non-empty text selection)
+  - Paste
+  - ---
+  - Split Right
+  - Split Left
+  - Split Down
+  - Split Up
+  - ---
+  - Reset Terminal
+  - Toggle Terminal Inspector
+  - Terminal Read-only
+
+**TERM-8.3** When the user selects "Copy", the application shall copy the current terminal selection to the system clipboard.
+
+**TERM-8.4** When the user selects "Paste", the application shall insert the system clipboard's text contents into the terminal.
+
+**TERM-8.5** When the user selects "Split Right", "Split Left", "Split Down", or "Split Up", the application shall create a new terminal pane adjacent to the focused pane in the corresponding direction.
+
+**TERM-8.6** When the user selects "Reset Terminal", the application shall reset the terminal's screen and state to a pristine post-init condition.
+
+**TERM-8.7** When the user selects "Toggle Terminal Inspector", the application shall toggle the display of libghostty's built-in debug inspector overlay on the terminal.
+
+**TERM-8.8** While a terminal pane is in read-only mode, the "Terminal Read-only" menu item shall display a checkmark.
+
+**TERM-8.9** When the user selects "Terminal Read-only", the application shall toggle the terminal's read-only state — in read-only mode the terminal renders updates but drops keyboard input from the user.
+
 ## 4. Worktree Discovery & Monitoring
 
 ### 4.1 Initial Discovery
