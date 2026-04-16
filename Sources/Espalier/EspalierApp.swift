@@ -113,6 +113,21 @@ struct EspalierApp: App {
     private func startup() {
         terminalManager.initialize()
 
+        // Route context-menu split requests through the same insertion code
+        // path that Cmd+D uses, but targeting the *menu's* surface rather
+        // than the currently-focused one — the two can differ if the user
+        // right-clicks an unfocused pane.
+        terminalManager.onSplitRequest = { [appState = $appState, tm = terminalManager] terminalID, direction in
+            MainActor.assumeIsolated {
+                Self.splitPane(
+                    appState: appState,
+                    terminalManager: tm,
+                    targetID: terminalID,
+                    split: direction
+                )
+            }
+        }
+
         try? services.socketServer.start()
         // SocketServer already dispatches onMessage to the main queue.
         let binding = $appState
@@ -233,14 +248,53 @@ struct EspalierApp: App {
                 let wt = appState.repos[repoIdx].worktrees[wtIdx]
                 if wt.path == path, wt.state == .running,
                    let focused = wt.focusedTerminalID ?? wt.splitTree.allLeaves.first {
-                    let newID = TerminalID()
-                    appState.repos[repoIdx].worktrees[wtIdx].splitTree =
-                        wt.splitTree.inserting(newID, at: focused, direction: direction)
-                    _ = terminalManager.createSurface(terminalID: newID, worktreePath: path)
-                    appState.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = newID
-                    terminalManager.setFocus(newID)
+                    // Cmd+D = "Split Horizontally" = new pane to the right;
+                    // Cmd+Shift+D = "Split Vertically" = new pane below. Map
+                    // to `PaneSplit` so we reuse the same insertion logic as
+                    // the context menu.
+                    let split: PaneSplit = direction == .horizontal ? .right : .down
+                    Self.splitPane(
+                        appState: $appState,
+                        terminalManager: terminalManager,
+                        targetID: focused,
+                        split: split
+                    )
                     return
                 }
+            }
+        }
+    }
+
+    /// Shared split implementation used by both the menu shortcuts and the
+    /// right-click context menu. Finds the worktree that currently owns the
+    /// target terminal, inserts a new leaf adjacent to it, spawns a surface,
+    /// and moves focus to the new pane.
+    @MainActor
+    fileprivate static func splitPane(
+        appState: Binding<AppState>,
+        terminalManager: TerminalManager,
+        targetID: TerminalID,
+        split: PaneSplit
+    ) {
+        for repoIdx in appState.wrappedValue.repos.indices {
+            for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
+                let wt = appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
+                guard wt.state == .running, wt.splitTree.allLeaves.contains(targetID) else { continue }
+
+                let direction: SplitDirection = (split == .right || split == .left) ? .horizontal : .vertical
+                let newID = TerminalID()
+                let newTree: SplitTree
+                switch split {
+                case .right, .down:
+                    newTree = wt.splitTree.inserting(newID, at: targetID, direction: direction)
+                case .left, .up:
+                    newTree = wt.splitTree.insertingBefore(newID, at: targetID, direction: direction)
+                }
+                appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = newTree
+                _ = terminalManager.createSurface(terminalID: newID, worktreePath: wt.path)
+                appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = newID
+                terminalManager.setFocus(newID)
+                return
             }
         }
     }

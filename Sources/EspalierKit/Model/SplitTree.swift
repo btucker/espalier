@@ -54,6 +54,14 @@ public struct SplitTree: Codable, Sendable, Equatable {
         return SplitTree(root: root.inserting(newLeaf, at: target, direction: direction))
     }
 
+    /// Like `inserting`, but the new leaf becomes the *left/top* child rather
+    /// than the *right/bottom*. Used by "Split Left" / "Split Up" from the
+    /// context menu — same split, opposite placement.
+    public func insertingBefore(_ newLeaf: TerminalID, at target: TerminalID, direction: SplitDirection) -> SplitTree {
+        guard let root else { return self }
+        return SplitTree(root: root.insertingBefore(newLeaf, at: target, direction: direction))
+    }
+
     public func removing(_ target: TerminalID) -> SplitTree {
         guard let root else { return self }
         return SplitTree(root: root.removing(target))
@@ -102,6 +110,28 @@ extension SplitTree.Node {
                 ratio: s.ratio,
                 left: s.left.inserting(newLeaf, at: target, direction: direction),
                 right: s.right.inserting(newLeaf, at: target, direction: direction)
+            ))
+        }
+    }
+
+    func insertingBefore(_ newLeaf: TerminalID, at target: TerminalID, direction: SplitDirection) -> SplitTree.Node {
+        switch self {
+        case .leaf(let id):
+            if id == target {
+                return .split(.init(
+                    direction: direction,
+                    ratio: 0.5,
+                    left: .leaf(newLeaf),
+                    right: .leaf(id)
+                ))
+            }
+            return self
+        case .split(let s):
+            return .split(.init(
+                direction: s.direction,
+                ratio: s.ratio,
+                left: s.left.insertingBefore(newLeaf, at: target, direction: direction),
+                right: s.right.insertingBefore(newLeaf, at: target, direction: direction)
             ))
         }
     }

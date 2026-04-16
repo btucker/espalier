@@ -98,25 +98,22 @@ extension SurfaceNSView {
     }
 
     // MARK: - Splits
+    //
+    // Dispatches split requests up to the host via
+    // `TerminalManager.onSplitRequest`. We *don't* call
+    // `ghostty_surface_split` directly: that routes through libghostty's
+    // action-callback system, which Espalier doesn't own (the action handler
+    // in TerminalManager is a stub). Going through the Swift callback
+    // lets the model layer (AppState → SplitTree) stay authoritative.
 
-    @objc func splitRight(_ sender: Any?) {
-        guard let surface else { return }
-        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
-    }
+    @objc func splitRight(_ sender: Any?) { requestSplit(.right) }
+    @objc func splitLeft(_ sender: Any?) { requestSplit(.left) }
+    @objc func splitDown(_ sender: Any?) { requestSplit(.down) }
+    @objc func splitUp(_ sender: Any?) { requestSplit(.up) }
 
-    @objc func splitLeft(_ sender: Any?) {
-        guard let surface else { return }
-        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_LEFT)
-    }
-
-    @objc func splitDown(_ sender: Any?) {
-        guard let surface else { return }
-        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_DOWN)
-    }
-
-    @objc func splitUp(_ sender: Any?) {
-        guard let surface else { return }
-        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_UP)
+    private func requestSplit(_ direction: PaneSplit) {
+        guard let terminalID, let terminalManager else { return }
+        terminalManager.onSplitRequest?(terminalID, direction)
     }
 
     // MARK: - Reset / Inspector / Read-only

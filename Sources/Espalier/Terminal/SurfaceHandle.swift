@@ -22,13 +22,16 @@ final class SurfaceHandle {
         terminalID: TerminalID,
         app: ghostty_app_t,
         worktreePath: String,
-        socketPath: String
+        socketPath: String,
+        terminalManager: TerminalManager? = nil
     ) {
         self.terminalID = terminalID
         self.worktreePath = worktreePath
 
         let surfaceView = SurfaceNSView()
         self.view = surfaceView
+        surfaceView.terminalID = terminalID
+        surfaceView.terminalManager = terminalManager
         defer {
             // Bind the surface to the view AFTER ghostty_surface_new returns
             // so the view can forward keystrokes/mouse events to it. The
@@ -125,6 +128,13 @@ final class SurfaceNSView: NSView {
     /// is freed (the surface pointer is only valid while the handle owns it).
     var surface: ghostty_surface_t?
 
+    /// The terminal ID this view represents, and a weak reference to the
+    /// terminal manager. Both are set by `SurfaceHandle` during init so
+    /// the context menu and other UI paths can request actions (splits,
+    /// close, etc.) that need model-layer cooperation.
+    var terminalID: TerminalID?
+    weak var terminalManager: TerminalManager?
+
     /// Mirror of libghostty's `toggle_readonly` state. Maintained from the
     /// context-menu action so the checkmark reflects the current mode.
     /// libghostty owns authoritative state; this is our UI shadow.
@@ -145,7 +155,73 @@ final class SurfaceNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         // Grab keyboard focus so subsequent keystrokes route to this view.
         window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
+        guard let surface else { return }
+        // Tell libghostty where the cursor is (so selection anchor is
+        // correct) before the press event — same order as Ghostty upstream.
+        sendMousePos(event, to: surface)
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_PRESS,
+            GHOSTTY_MOUSE_LEFT,
+            Self.ghosttyMods(from: event.modifierFlags)
+        )
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let surface else {
+            super.mouseUp(with: event)
+            return
+        }
+        sendMousePos(event, to: surface)
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_RELEASE,
+            GHOSTTY_MOUSE_LEFT,
+            Self.ghosttyMods(from: event.modifierFlags)
+        )
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let surface else { return }
+        sendMousePos(event, to: surface)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard let surface else { return }
+        sendMousePos(event, to: surface)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard let surface else { return }
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_PRESS,
+            GHOSTTY_MOUSE_MIDDLE,
+            Self.ghosttyMods(from: event.modifierFlags)
+        )
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard let surface else { return }
+        _ = ghostty_surface_mouse_button(
+            surface,
+            GHOSTTY_MOUSE_RELEASE,
+            GHOSTTY_MOUSE_MIDDLE,
+            Self.ghosttyMods(from: event.modifierFlags)
+        )
+    }
+
+    /// Forward the event's cursor position to libghostty.
+    /// Converts AppKit's bottom-left-origin coords to ghostty's
+    /// top-left-origin coords with `frame.height - pos.y`.
+    private func sendMousePos(_ event: NSEvent, to surface: ghostty_surface_t) {
+        let pos = convert(event.locationInWindow, from: nil)
+        ghostty_surface_mouse_pos(
+            surface,
+            pos.x,
+            frame.height - pos.y,
+            Self.ghosttyMods(from: event.modifierFlags)
+        )
     }
 
     /// Forward trackpad/mouse-wheel scroll to libghostty so scrollback and

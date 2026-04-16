@@ -34,6 +34,31 @@ struct SplitTreeTests {
         let newID = TerminalID()
         let updated = tree.inserting(newID, at: original, direction: .horizontal)
         #expect(updated.leafCount == 2)
+        guard case .split(let s) = updated.root else {
+            Issue.record("expected a split at the root")
+            return
+        }
+        // `inserting` places the new leaf on the right — this distinguishes it
+        // from `insertingBefore`, which does the opposite.
+        #expect(s.left == .leaf(original))
+        #expect(s.right == .leaf(newID))
+    }
+
+    @Test func insertBeforeSplitAtLeaf() {
+        let original = TerminalID()
+        let tree = SplitTree(root: .leaf(original))
+        let newID = TerminalID()
+        let updated = tree.insertingBefore(newID, at: original, direction: .vertical)
+        #expect(updated.leafCount == 2)
+        guard case .split(let s) = updated.root else {
+            Issue.record("expected a split at the root")
+            return
+        }
+        // `insertingBefore` places the new leaf on the *left/top* — that's what
+        // Split Left / Split Up rely on.
+        #expect(s.left == .leaf(newID))
+        #expect(s.right == .leaf(original))
+        #expect(s.direction == .vertical)
     }
 
     @Test func removeLeaf() {

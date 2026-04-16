@@ -2,6 +2,15 @@ import AppKit
 import GhosttyKit
 import EspalierKit
 
+/// Four-way pane split request — carries enough information for the host to
+/// pick both the `SplitDirection` (horizontal/vertical) and the placement
+/// (new pane before or after the target). The context menu emits these;
+/// `EspalierApp` translates them into `SplitTree.inserting(_:…)` /
+/// `insertingBefore(_:…)` calls.
+enum PaneSplit {
+    case right, left, down, up
+}
+
 /// Central lifecycle manager for libghostty surfaces.
 ///
 /// Owns a single `ghostty_app_t` (via `GhosttyApp`) and a map from `TerminalID`
@@ -22,6 +31,12 @@ final class TerminalManager: ObservableObject {
     /// Emitted post-`initialize()` once the config is read; defaults to
     /// `.fallback` before that so views have something to render with.
     @Published var theme: GhosttyTheme = .fallback
+
+    /// Called when a terminal surface requests a split (from the right-click
+    /// context menu, from libghostty action callbacks, or from future keyboard
+    /// bindings). The host (EspalierApp) wires this up to mutate AppState and
+    /// spawn a new surface; without it, split requests no-op.
+    var onSplitRequest: ((TerminalID, PaneSplit) -> Void)?
 
     /// Path to the Espalier control socket, exposed to spawned shells via `ESPALIER_SOCK`.
     let socketPath: String
@@ -93,7 +108,8 @@ final class TerminalManager: ObservableObject {
                 terminalID: terminalID,
                 app: app,
                 worktreePath: worktreePath,
-                socketPath: socketPath
+                socketPath: socketPath,
+                terminalManager: self
             )
             surfaces[terminalID] = handle
             created[terminalID] = handle
@@ -115,7 +131,8 @@ final class TerminalManager: ObservableObject {
             terminalID: terminalID,
             app: app,
             worktreePath: worktreePath,
-            socketPath: socketPath
+            socketPath: socketPath,
+            terminalManager: self
         )
         surfaces[terminalID] = handle
         return handle
