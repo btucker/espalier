@@ -50,6 +50,17 @@ struct MainWindow: View {
                 }
             }
         }
+        .trackWindowFrame { [$appState] frame in
+            let newFrame = WindowFrame(
+                x: frame.origin.x,
+                y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height
+            )
+            if $appState.wrappedValue.windowFrame != newFrame {
+                $appState.wrappedValue.windowFrame = newFrame
+            }
+        }
     }
 
     private var selectedRepo: RepoEntry? {

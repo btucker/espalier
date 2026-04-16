@@ -50,8 +50,29 @@
   - registering that copy
 - Hypothesis: the MCP tool's "installed" check likely requires a code-signed app or placement in `/Applications/` (system-owned path, requires admin). This is an environmental/signing concern, not a code fix.
 
+## Cycle 3 — 2026-04-16
+
+### Explored
+- Grepped for `windowFrame` writes. Only the AppState initializer sets it — nothing observes window move/resize. PERSIST-3.4 was silently broken: the saved frame was always the constructor default `(100, 100, 1400, 900)`, so "restoring window frame" on launch always restored defaults.
+- PERSIST-2.1 explicitly says "window resize or move (debounced)" — the spec author knew this needed debouncing but the code never implemented it.
+
+### Broke
+- Launched bundled app, used AppleScript to set window to `{1000, 700}` at `{100, 100}`, waited, killed the app.
+- state.json had the default `windowFrame` (never written), though since state.json is only written on `onChange(of: appState)` and the frame never mutated appState, no save occurred.
+
+### Fixed
+- Added `Sources/Espalier/Views/WindowFrameTracker.swift`: an `NSViewRepresentable` that hooks into its host view's `NSWindow` via `viewDidMoveToWindow`, subscribes to `didResizeNotification` and `didMoveNotification`, and reports frame changes with a 250ms debounce via a cancellable `Task.sleep`.
+- Added a View extension `.trackWindowFrame(debounceInterval:onChange:)` that wraps the tracker as a `.background()`.
+- Wired `MainWindow` to call `.trackWindowFrame { frame in ... }` at the top level: converts the NSWindow frame into a `WindowFrame` value, compares against the current `appState.windowFrame`, and only writes if changed (to avoid feedback loops with the `onChange(of: appState)` save handler).
+
+### Verified
+- Clean build with no warnings.
+- Manual test: launched bundled app, used AppleScript to resize to 1000×700 at (100, 100). Killed app. state.json contained `windowFrame: {height: 700, width: 1000, x: 100, y: 2208}` — real non-default values. (y is 2208 because NSWindow uses bottom-left origin; 2208 + 700 = 2908 = below screen top, which matches the (100,100) AppleScript top-left position on a large vertical-stitched display.)
+- Added two new tests: `windowFrameCustomValuesSurviveSaveAndLoad` (round-trip) and `windowFrameEquatableDistinguishesByValue` (proves the `!=` comparison in the tracker's deduplication works). 38/38 tests pass.
+
 ### Try next cycle
-- End-to-end socket test: launch the bundled app, then run `espalier notify` from a real git worktree (e.g., this one), verify the attention badge appears in the sidebar.
-- The `Install CLI Tool...` menu — does `installCLI()` actually work when invoked? It writes to `/usr/local/bin/espalier` which needs admin. Test error path.
-- Test what happens if `~/Library/Application Support/Espalier/espalier.sock` exists as a stale file (leftover from a crashed app).
-- Persistence: launch app, add a repo, kill -9, relaunch. Does state.json get written at all given we never got far enough to trigger `onChange(of: appState)`?
+- **Coordinate system mismatch concern**: state.json now saves NSWindow's bottom-left-origin y-coordinate, but SwiftUI's `.defaultPosition` likely expects top-left-origin (or UnitPoint on macOS 14). When restoring a saved frame, the window may end up in the wrong vertical position. Verify by relaunching with a saved state and seeing where the window appears.
+- End-to-end socket test: launch bundled app, `espalier notify` from a worktree, see badge.
+- `Install CLI Tool...` menu — writing to `/usr/local/bin/` needs admin; what's the error UX?
+- Stale socket scenario — does `SocketServer.start` handle a pre-existing socket file correctly? (It calls `unlink(socketPath)` first, so probably yes, but untested.)
+- Is `sidebarWidth` actually updated on drag? Same pattern as windowFrame — probably has the same bug.
