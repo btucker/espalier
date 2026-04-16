@@ -148,6 +148,27 @@ final class SurfaceNSView: NSView {
             super.keyDown(with: event)
             return
         }
+
+        // Don't forward Cmd-modified keys to the PTY as text. Without this,
+        // Cmd+C in the terminal would type "c" into the shell instead of
+        // invoking a copy binding; Cmd+V would type "v"; etc. Pass those
+        // events up the responder chain so NSApplication can dispatch them
+        // to matching menu items (Cmd+D split, Cmd+W close pane, etc.) or
+        // leave them unhandled.
+        //
+        // Option (Alt) is NOT filtered here — on macOS, Option+letter
+        // produces real composed characters (Option+o → ø, Option+u → diaeresis)
+        // that the user intends to see in the terminal.
+        //
+        // Future polish: use `ghostty_surface_key` with a fully-populated
+        // `ghostty_input_key_s` to run the event through libghostty's
+        // binding table and get proper copy/paste/scroll actions.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) {
+            super.keyDown(with: event)
+            return
+        }
+
         // event.characters includes the translated form for regular keys,
         // Enter (\r), Backspace (\u{7F}), Tab (\t), arrows (CSI sequences),
         // etc. Forward the bytes to libghostty's text input path, which

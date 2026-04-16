@@ -348,3 +348,26 @@ User reported: "it doesn't work to switch between worktrees anymore. also it doe
 - NSTextInputClient for IME and multi-byte composition.
 - `ghostty_surface_key` for binding-action keys (Cmd+C copy, Cmd+V paste, Cmd+K clear).
 - Mouse events (scroll for scrollback, click for selection, etc.).
+
+## Cycle 16 — 2026-04-16
+
+### Explored
+- Screenshot confirmed cycle 15's typing fix works: the terminal now shows `gfd    klkjlkjffffgg"""` that the user typed. Real keystrokes reach libghostty ✓.
+- But: with the current `keyDown` forwarding anything in `event.characters`, Cmd+C would pass "c" to the PTY as text, not invoke a copy action or reach the menu bar. Same for Cmd+V / Cmd+W / Cmd+D — each would corrupt the command line instead of doing the menu-bound action.
+
+### Broke
+- Reasoned about `event.characters` for Cmd-modified keys. On macOS, Cmd+C produces `event.characters == "c"`. The current handler forwards that to `ghostty_surface_text`, which writes "c" to the shell. Andy tries to copy, types "c".
+- Menu-bound shortcuts (Cmd+D split, Cmd+W close pane from earlier cycles) also wouldn't reach the menu bar because the `keyDown` overrides consume them before `super.keyDown` (which would dispatch to the menu).
+
+### Fixed
+- In `SurfaceNSView.keyDown(with:)`, if the event's modifier flags (masked with `.deviceIndependentFlagsMask`) contain `.command`, call `super.keyDown(with: event)` and return without forwarding to `ghostty_surface_text`. This lets AppKit dispatch the event to matching menu items (Cmd+D → split, Cmd+W → close pane, etc.) and leaves unbound Cmd combos unhandled instead of corrupting the shell input.
+- Did NOT filter Option — `Option+o → ø`, `Option+u → diaeresis`, etc. produce composed characters the user genuinely wants in the terminal.
+
+### Verified
+- Clean build, 59/59 tests.
+- Deployed. Needs user confirmation that Cmd+D now splits and Cmd+C no longer types "c".
+
+### Try next cycle
+- `ghostty_surface_key` wired up properly so libghostty's own binding table handles copy/paste/scroll within the terminal. Then drop this "any Cmd = skip text" shortcut in favor of the real path.
+- `scrollWheel(with:)` override + `ghostty_surface_mouse_scroll` for scrollback.
+- NSTextInputClient for IME / dead-key composition (Japanese, emoji picker, etc.).
