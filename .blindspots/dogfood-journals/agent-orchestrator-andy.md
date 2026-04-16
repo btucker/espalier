@@ -294,3 +294,25 @@ Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppS
 - Tooltip or popover with full worktree path.
 - The socket server's `handleClient` does a blocking `read` loop — slow clients could starve others.
 - No `applicationWillTerminate` save belt-and-suspenders.
+
+## Cycle 14 — 2026-04-16
+
+### Explored
+- Tried to switch worktrees by clicking the linked-worktree row in the sidebar. Selection didn't change — breadcrumb stayed on main, terminal stayed on main. Tried multiple AppleScript paths (click at coord, `click row`, `set selected of row ... to true`) — none worked.
+
+### Broke
+- `WorktreeRow` had `.onTapGesture { onSelect(worktree.path) }` attached inside a `List` with `.sidebar` style. SwiftUI's sidebar-style List manages its own row-selection gesture semantics and consumes tap events, so `.onTapGesture` is unreliable here — synthesized clicks definitely don't fire the handler, and there's good reason to suspect real clicks miss it too (especially when the row already has a running-state indicator, disclosure triangle, and other elements competing for hit testing).
+
+### Fixed
+- `SidebarView.List` now uses `List(selection:)` with a two-way binding: getter reads `appState.selectedWorktreePath`, setter calls `onSelect(path)` so the existing worktree-startup side effects (auto-start terminals, clear attention, etc.) still run through `MainWindow.selectWorktree`.
+- Each `WorktreeRow` in the `ForEach` now has `.tag(worktree.path as String?)` so List can identify it for selection.
+- Removed the `.onTapGesture`. List's native selection handles both mouse clicks (reliably) and gives us arrow-key navigation through the sidebar for free.
+
+### Verified
+- 59/59 tests still pass, clean build.
+- ⚠️ Could not confirm visually via AppleScript automation — the `click at coord`, accessibility `click row 3`, and `set selected to true` paths all fail to drive SwiftUI's List selection from outside the process. This appears to be a known limitation of AX/System Events for SwiftUI Lists. Needs real-user-click verification.
+
+### Try next cycle
+- User verifies row clicking actually works now (AppleScript couldn't drive it, but the code is idiomatic SwiftUI).
+- Tests for the sidebar selection flow — maybe ViewInspector or just mutating `appState.selectedWorktreePath` directly and asserting the terminal rerenders.
+- If row clicks still don't work for real users, there might be something between us and List's internal gesture: `DisclosureGroup` could be swallowing events.

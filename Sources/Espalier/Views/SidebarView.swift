@@ -11,7 +11,19 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            List {
+            // Use List(selection:) + .tag() rather than .onTapGesture on each
+            // row. Inside a List with .sidebar style, List manages its own
+            // row-selection gesture handling, and .onTapGesture fires
+            // inconsistently — confirmed during dogfooding: clicks on row 3
+            // landed on the right UI element but did not trigger the tap
+            // handler. The selection binding is the idiomatic path and also
+            // enables keyboard arrow-key navigation out of the box.
+            List(selection: Binding(
+                get: { appState.selectedWorktreePath },
+                set: { newValue in
+                    if let path = newValue { onSelect(path) }
+                }
+            )) {
                 ForEach(appState.repos) { repo in
                     repoSection(repo)
                 }
@@ -52,9 +64,9 @@ struct SidebarView: View {
                     displayName: label(for: worktree, in: repo),
                     isMainCheckout: worktree.path == repo.path
                 )
-                .onTapGesture {
-                    onSelect(worktree.path)
-                }
+                // Tag for List(selection:) — the path is unique across the
+                // entire sidebar, so it's a valid selection identifier.
+                .tag(worktree.path as String?)
                 .contextMenu {
                     worktreeContextMenu(worktree, repo: repo)
                 }
