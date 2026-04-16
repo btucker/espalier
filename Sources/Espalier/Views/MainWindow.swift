@@ -6,6 +6,10 @@ struct MainWindow: View {
     @Binding var appState: AppState
     @ObservedObject var terminalManager: TerminalManager
 
+    /// Debounces writes of `sidebarWidth` to AppState so a drag doesn't
+    /// generate hundreds of save-to-disk events.
+    @State private var pendingSidebarWidthTask: Task<Void, Never>?
+
     var body: some View {
         NavigationSplitView(
             columnVisibility: .constant(.all)
@@ -61,6 +65,19 @@ struct MainWindow: View {
             )
             if $appState.wrappedValue.windowFrame != newFrame {
                 $appState.wrappedValue.windowFrame = newFrame
+            }
+        }
+        .onPreferenceChange(SidebarWidthKey.self) { [$appState, $pendingSidebarWidthTask] width in
+            // Debounce by 250ms so a drag doesn't write on every layout
+            // pass. Only writes if the value actually changed (value-equality
+            // check prevents feedback loops with the onChange save handler).
+            $pendingSidebarWidthTask.wrappedValue?.cancel()
+            $pendingSidebarWidthTask.wrappedValue = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                if Task.isCancelled { return }
+                if $appState.wrappedValue.sidebarWidth != width {
+                    $appState.wrappedValue.sidebarWidth = width
+                }
             }
         }
     }

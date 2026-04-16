@@ -104,6 +104,19 @@ struct AppStateTests {
         #expect(loaded.windowFrame.height == 1000)
     }
 
+    @Test func sidebarWidthCustomValueSurvivesSaveAndLoad() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        var state = AppState()
+        state.sidebarWidth = 312.5
+
+        try state.save(to: dir)
+        let loaded = try AppState.load(from: dir)
+
+        #expect(loaded.sidebarWidth == 312.5)
+    }
+
     @Test func windowFrameEquatableDistinguishesByValue() {
         let a = WindowFrame(x: 0, y: 0, width: 800, height: 600)
         let b = WindowFrame(x: 0, y: 0, width: 800, height: 600)

@@ -30,6 +30,7 @@ struct SidebarView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
         }
+        .publishSidebarWidth()
     }
 
     @ViewBuilder

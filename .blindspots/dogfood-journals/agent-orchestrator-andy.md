@@ -120,9 +120,32 @@ Observed as a sanity check: the reconcile pass at startup discovers sibling work
 
 Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppState.load → worktree(forPath:) flow the CLI uses) and `cliTrackingCheckReturnsNilForMissingStateJSON` (fresh-install safety: fails closed). 47/47 tests pass.
 
+## Cycle 6 — 2026-04-16
+
+### Explored
+- `sidebarWidth` followed the exact broken pattern of the original `windowFrame` before cycle 3: read by `.navigationSplitViewColumnWidth(ideal: appState.sidebarWidth, ...)` but no mechanism to write back when the user dragged the divider. PERSIST-1.2 says state.json contains sidebarWidth, but it was never updated at runtime.
+
+### Broke
+- Confirmed by grep: only the AppState initializer ever wrote `sidebarWidth`. No code path observed drag events.
+
+### Fixed
+- Added `Sources/Espalier/Views/SidebarWidthPreference.swift`: a `PreferenceKey` (`SidebarWidthKey`) and a `View.publishSidebarWidth()` modifier that wraps a background `GeometryReader` and publishes the view's rendered width. Spurious zero widths (common during SwiftUI layout passes) are filtered out in `reduce`.
+- `SidebarView.body` now calls `.publishSidebarWidth()` on its root VStack.
+- `MainWindow` subscribes via `.onPreferenceChange(SidebarWidthKey.self)`. Writes debounced at 250ms (same as windowFrame) via a `@State private var pendingSidebarWidthTask: Task<Void, Never>?`. Writes guarded by `!=` check to avoid feedback loops with the `onChange(of: appState)` save handler.
+- Why `onGeometryChange`? Because it's macOS 15+; we target macOS 14. A background `GeometryReader` + preference key is the portable SwiftUI-native observation pattern here.
+
+### Verified
+- Added `sidebarWidthCustomValueSurvivesSaveAndLoad`. 48/48 tests pass.
+- Clean build, no warnings.
+- Manual: launched app with state.json `{sidebarWidth: 320}`, saw rendered width measure at 240 (more on this below) and get written back. The observation pipeline fires and updates appState as expected.
+
+### Known limitation (separate follow-up)
+- macOS's AppKit has its own `NSSplitView` autosave (via UserDefaults) that restores the last divider position independently of state.json. On a fresh launch, AppKit's restore runs before GeometryReader can measure, so if state.json and the autosave disagree, AppKit's value wins. For normal drag → save → restart → drag workflows both stores stay in sync, but if someone hand-edits state.json the sidebarWidth change won't take effect until they drag the divider.
+- Resolving this needs either (a) disabling AppKit's autosave or (b) programmatically setting the NSSplitView divider position from the saved value after launch. Both are non-trivial and out of scope for this cycle.
+
 ### Try next cycle
-- `sidebarWidth` has the same "never written" bug as the original windowFrame: `.navigationSplitViewColumnWidth(ideal: appState.sidebarWidth, ...)` reads it, but dragging the sidebar divider doesn't update it.
-- The fallback window from cycle 4 came up at 260×234. Something is undersizing the window when the saved frame is rejected. Investigate whether `.defaultSize` is being honored at all.
-- `Install CLI Tool...` menu — what happens when `/usr/local/bin/` write fails without admin? Expect the fix to need `NSWorkspace.open` for authorization or a sudo-prompting helper.
-- Stale socket file: kill -9 the app, check that the next launch cleanly removes the old socket. `SocketServer.start` calls `unlink(socketPath)` first, so this should work — but unverified.
-- Race in `offerCLIInstallIfNeeded`: uses `DispatchQueue.main.asyncAfter(deadline: .now() + 1)` to delay the prompt. If the app quits within that second, the prompt fires against a dying window. Trivial but worth fixing.
+- The above limitation. Requires digging into NSSplitView discovery (find it via NSApp.keyWindow.contentView traversal, or via the `NSWindowDelegate`).
+- The fallback window from cycle 4 came up at 260×234. Something is undersizing the window when the saved frame is rejected. Same category: NSWindowRestoration state fighting `.defaultSize`.
+- `Install CLI Tool...` menu — what happens when `/usr/local/bin/` write fails without admin?
+- Stale socket file scenario — `SocketServer.start` calls `unlink(socketPath)` first, so kill -9 recovery should work, but untested.
+- Race in `offerCLIInstallIfNeeded`: uses `DispatchQueue.main.asyncAfter(deadline: .now() + 1)`. If the app quits within that second, the prompt fires against a dying window.
