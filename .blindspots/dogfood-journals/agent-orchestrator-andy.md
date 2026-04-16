@@ -204,9 +204,27 @@ Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppS
 - Added `maxPathBytesMatchesSunPathSizeMinusNull` — a tripwire test that pins the shared constant to 103. If a well-meaning refactor changes the value, server and client would need to agree; the test makes the coupling explicit.
 - 56/56 tests pass.
 
+## Cycle 10 — 2026-04-16
+
+### Explored
+- `offerCLIInstallIfNeeded` sets `UserDefaults[cliInstallOffered] = true` BEFORE the `asyncAfter` closure fires. If the app terminates during that 1-second window (rapid Cmd-Q, SIGKILL, crash), the defaults flag is set but the dialog was never presented. User never gets the offer again, silently violating ATTN-4.1 ("on first launch, the application shall offer...").
+
+### Broke
+- Repro: deleted the defaults flag, launched bundled app, let SwiftUI boot (~1s), then SIGKILL at t=1.2s (after scheduling, before the 1s asyncAfter closure fired). Flag was 1 afterwards despite no dialog ever appearing. Used a `/tmp/espalier-offer-trace` sentinel file to pinpoint when the closure ran; confirmed the pre-fix code burned the one-shot offer on rapid quits.
+
+### Fixed
+- Moved the `defaults.set(true, forKey: "cliInstallOffered")` call INSIDE the asyncAfter closure. Added a `guard NSApp.isRunning else { return }` check inside the closure as defense-in-depth — if the app is shutting down but the main queue still drains pending tasks, don't pop a modal against a dying window.
+- Kept the already-installed shortcut (symlink exists → set flag and return synchronously). That case doesn't have the race because no async work happens.
+
+### Verified
+- Scenario A: kill at t=1.2s (inside the delay window) → flag stays "does not exist" → next launch will offer again.
+- Scenario B: wait for dialog, click Cancel → flag = 1 → next launch won't re-prompt.
+- 56/56 tests pass.
+- Build is clean.
+
 ### Try next cycle
 - NSSplitView autosave vs state.json sovereignty (from cycle 6).
 - Fallback window sized 260×234 on first launch — probably NSWindowRestoration fighting `.defaultSize`.
-- Race in `offerCLIInstallIfNeeded`: `DispatchQueue.main.asyncAfter(deadline: .now() + 1)`. If the app quits within that second, the prompt fires against a dying window.
 - The `installCLI` happy-path confirmation dialog still asks "Create a symlink at..." — Andy clicked "Install CLI Tool..." already. That second prompt is friction.
-- The socket server's `handleClient` does a blocking `read` loop on the socket-server queue. If a malicious/buggy client sends data slowly, it could starve other connections. Minor, but worth a timeout on reads.
+- The socket server's `handleClient` does a blocking `read` loop. If a malicious/buggy client sends data slowly, it could starve other connections. Minor, but a SO_RCVTIMEO on the client fd would bound it.
+- The app has no `applicationWillTerminate` save. `onChange(of: appState)` covers most saves but the last few ms of mutation before quit might not round-trip to disk. Empirically state.json has been current in every test, so probably fine, but worth a belt-and-suspenders `willTerminate` observer.
