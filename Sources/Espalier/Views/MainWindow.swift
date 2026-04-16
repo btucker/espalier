@@ -10,9 +10,13 @@ struct MainWindow: View {
     /// generate hundreds of save-to-disk events.
     @State private var pendingSidebarWidthTask: Task<Void, Never>?
 
+    /// Column visibility state — must be a real `@State` rather than a
+    /// `.constant(...)` so the toolbar toggle button actually toggles.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
     var body: some View {
         NavigationSplitView(
-            columnVisibility: .constant(.all)
+            columnVisibility: $columnVisibility
         ) {
             SidebarView(
                 appState: $appState,
@@ -27,6 +31,11 @@ struct MainWindow: View {
                 ideal: appState.sidebarWidth,
                 max: 400
             )
+            // Deliberately do NOT call ignoresSafeArea here. The sidebar
+            // respects the title-bar safe area so its content begins below
+            // the traffic lights rather than colliding with them. The
+            // detail column opts out so the breadcrumb sits alongside the
+            // traffic lights.
         } detail: {
             VStack(spacing: 0) {
                 BreadcrumbBar(
@@ -55,19 +64,13 @@ struct MainWindow: View {
                     )
                 }
             }
+            .ignoresSafeArea(.container, edges: .top)
         }
-        // Tint the NSWindow's backgroundColor to match the terminal theme
-        // so the title-bar strip (always reserved for the traffic lights,
-        // even with .hiddenTitleBar) doesn't render as system white.
-        .windowBackgroundTint(terminalManager.theme.background)
-        // Let content flow under the hidden title bar so the breadcrumb row
-        // sits alongside the traffic lights instead of dropping below them.
-        // With .windowStyle(.hiddenTitleBar), the title bar is transparent
-        // but NavigationSplitView still respects the safe area by default;
-        // ignoresSafeArea collapses that gap. The breadcrumb's leading
-        // padding (BreadcrumbBar.trafficLightsReservedWidth) keeps text
-        // from colliding with the traffic lights.
-        .ignoresSafeArea(.container, edges: .top)
+        // Tint the NSWindow to match the terminal theme: background color,
+        // transparent titlebar + full-size content view, and NSAppearance
+        // matching the theme's dark/light-ness so system chrome (traffic
+        // lights, sidebar toggle icon, menus) renders with correct contrast.
+        .windowBackgroundTint(theme: terminalManager.theme)
         .trackWindowFrame(
             initialFrame: initialWindowRect
         ) { [$appState] frame in

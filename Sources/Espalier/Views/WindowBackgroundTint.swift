@@ -1,33 +1,31 @@
 import SwiftUI
 import AppKit
 
-/// Applies a color to the host `NSWindow`'s `backgroundColor`. Used to tint
-/// the area behind the traffic-lights (the transparent hidden-title-bar
-/// region) so it doesn't render as system default white/light-gray behind
-/// our ghostty-themed content.
+/// Applies ghostty-derived chrome settings to the host `NSWindow`:
+/// background color tint (so the hidden-title-bar strip doesn't render
+/// system white), transparent titlebar + full-size content view (so the
+/// breadcrumb can sit at y=0 alongside the traffic lights), and
+/// appearance name (so system-rendered chrome — traffic lights, sidebar
+/// toggle icon, menus, alerts — matches the theme's dark/light-ness).
 ///
-/// Without this, `.windowStyle(.hiddenTitleBar)` leaves a visible strip of
-/// NSWindow chrome peeking through above the content.
+/// Without this, `.windowStyle(.hiddenTitleBar)` leaves a visible strip
+/// of white chrome and the traffic lights render with the wrong contrast.
 struct WindowBackgroundTint: NSViewRepresentable {
-    let color: Color
+    let theme: GhosttyTheme
 
     func makeNSView(context: Context) -> NSView {
         let view = TintView()
-        view.tint = nsColor(color)
+        view.theme = theme
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? TintView)?.tint = nsColor(color)
+        (nsView as? TintView)?.theme = theme
         (nsView as? TintView)?.apply()
     }
 
-    private func nsColor(_ color: Color) -> NSColor {
-        NSColor(color)
-    }
-
     private final class TintView: NSView {
-        var tint: NSColor = .windowBackgroundColor
+        var theme: GhosttyTheme = .fallback
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -36,17 +34,27 @@ struct WindowBackgroundTint: NSViewRepresentable {
 
         func apply() {
             guard let window else { return }
-            window.backgroundColor = tint
+            window.backgroundColor = theme.backgroundNSColor
             window.titlebarAppearsTransparent = true
+            // Extend the content view under the title bar so the
+            // breadcrumb row can sit alongside the traffic lights
+            // instead of below them. `.windowStyle(.hiddenTitleBar)`
+            // hides the title but doesn't set this on its own.
+            window.styleMask.insert(.fullSizeContentView)
+            // Appearance drives system chrome rendering — traffic
+            // lights' color, sidebar-toggle icon shade, context-menu
+            // style. Pick dark/light from the ghostty background so
+            // none of that fights the theme.
+            window.appearance = theme.nsAppearance
         }
     }
 }
 
 extension View {
-    /// Tint the host NSWindow's background color. Use with
-    /// `.windowStyle(.hiddenTitleBar)` to make the title-bar area match
-    /// the content chrome.
-    func windowBackgroundTint(_ color: Color) -> some View {
-        background(WindowBackgroundTint(color: color))
+    /// Apply ghostty-derived chrome to the host NSWindow: background tint,
+    /// transparent titlebar, full-size content view, and light/dark
+    /// appearance. Use with `.windowStyle(.hiddenTitleBar)`.
+    func windowBackgroundTint(theme: GhosttyTheme) -> some View {
+        background(WindowBackgroundTint(theme: theme))
     }
 }

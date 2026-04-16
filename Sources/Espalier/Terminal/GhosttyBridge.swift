@@ -81,13 +81,30 @@ struct GhosttyTheme: Equatable {
     /// themes we darken.
     var sidebarBackground: Color {
         let bg = backgroundRGB
-        let luminance = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b
-        let shift = luminance < 0.5 ? 0.06 : -0.06
+        let shift = isDark ? 0.06 : -0.06
         return color(RGB(
             r: clamp01(bg.r + shift),
             g: clamp01(bg.g + shift),
             b: clamp01(bg.b + shift)
         ))
+    }
+
+    /// True when the ghostty background is closer to black than white.
+    /// Drives NSWindow appearance so the traffic lights and sidebar toggle
+    /// render with the right contrast, and is the single source of truth
+    /// for all light-vs-dark decisions in Espalier chrome.
+    var isDark: Bool {
+        let bg = backgroundRGB
+        let luminance = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b
+        return luminance < 0.5
+    }
+
+    /// NSAppearance matching the theme's light/dark-ness. Applied to the
+    /// host NSWindow so system-rendered chrome (traffic lights, sidebar
+    /// toggle icon, context menus, alert dialogs) picks the right
+    /// contrast.
+    var nsAppearance: NSAppearance? {
+        NSAppearance(named: isDark ? .darkAqua : .aqua)
     }
 
     /// Fallback theme used when ghostty config is unavailable or doesn't
