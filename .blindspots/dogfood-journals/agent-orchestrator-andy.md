@@ -222,9 +222,33 @@ Added 2 unit tests: `cliTrackingCheckRoundTripsThroughStateJSON` (the exact AppS
 - 56/56 tests pass.
 - Build is clean.
 
+## Cycle 11 — 2026-04-16
+
+### Explored
+- First-launch window size. I expected 1400×900 per `.defaultSize(width: 1400, height: 900)` on the WindowGroup scene. Actual: 472×312. Scene-level `.defaultSize` is ignored when NavigationSplitView's detail has an intrinsic size (e.g. `ContentUnavailableView`). Same story for the "saved frame off-screen" fallback path (cycle 4) — tracker correctly refused the bad frame but then the window got the same 472×312 minimum.
+
+### Broke
+- Repro: nuked `~/Library/Application Support/Espalier/state.json` and `~/Library/Saved Application State/com.espalier.app.savedState/`, launched the bundled app. Got 472×312. Disgusting for a first impression; Andy would close it on reflex.
+
+### Fixed
+- Rewrote `MainWindow.initialWindowRect` to always return a valid CGRect (never nil). Priority ladder:
+  1. Saved frame, if visible on any attached screen → apply as-is.
+  2. Otherwise → center the `WindowFrame()` default (1400×900) on `NSScreen.main?.visibleFrame`.
+- The centering math uses `screen.visibleFrame` not `screen.frame`, so the window sits below the menu bar and above the Dock rather than overlapping them.
+- Leverages the existing `WindowFrameTracker.Coordinator.frameIsVisibleOnAnyScreen(_:)` static helper to validate the saved frame before accepting it. Keeps the cross-monitor-unplugged guard from cycle 4 but moves the *decision* into MainWindow where it can also supply the fallback rect. The tracker still has its own internal visibility check (defensive, harmless).
+
+### Verified
+| case | saved state | expected window | got |
+|---|---|---|---|
+| A. first launch | none | 1400×900 centered | 1400×900 at (120, 1069) ✓ |
+| B. saved on-screen | (300, 400, 1000×700) | 1000×700 at saved pos | 1000×700 at (300, 1908) ✓ |
+| C. saved off-screen | (9999, 9999, 900×650) | 1400×900 centered default | 1400×900 ✓ |
+
+- 56/56 tests pass, build clean.
+
 ### Try next cycle
 - NSSplitView autosave vs state.json sovereignty (from cycle 6).
-- Fallback window sized 260×234 on first launch — probably NSWindowRestoration fighting `.defaultSize`.
 - The `installCLI` happy-path confirmation dialog still asks "Create a symlink at..." — Andy clicked "Install CLI Tool..." already. That second prompt is friction.
 - The socket server's `handleClient` does a blocking `read` loop. If a malicious/buggy client sends data slowly, it could starve other connections. Minor, but a SO_RCVTIMEO on the client fd would bound it.
-- The app has no `applicationWillTerminate` save. `onChange(of: appState)` covers most saves but the last few ms of mutation before quit might not round-trip to disk. Empirically state.json has been current in every test, so probably fine, but worth a belt-and-suspenders `willTerminate` observer.
+- The app has no `applicationWillTerminate` save. `onChange(of: appState)` covers most saves but the last few ms of mutation before quit might not round-trip. Empirically state.json has been current, but worth a belt-and-suspenders `willTerminate` observer.
+- Cycle 11's fix reads `NSScreen.main` in a computed property. If that's called before AppKit has enumerated screens (rare but possible at the very start of launch), the fallback `CGRect(0, 0, 1440, 900)` kicks in — harmless but not centered. Low priority.

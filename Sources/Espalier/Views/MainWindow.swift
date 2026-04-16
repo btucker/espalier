@@ -82,14 +82,36 @@ struct MainWindow: View {
         }
     }
 
-    /// The initial window rect to apply, or nil if the saved frame has not
-    /// been set (still at defaults), in which case we let the OS pick the
-    /// placement.
+    /// The initial window rect to apply on first attach.
+    ///
+    /// Always returns a non-nil value: SwiftUI's `.defaultSize(width:height:)`
+    /// on the scene is ignored when NavigationSplitView's detail content has
+    /// an intrinsic size (e.g. `ContentUnavailableView`), so the window comes
+    /// up at the content's minimum — roughly 472×312 on macOS 14 — which is
+    /// way too small to be usable. Forcing the frame via `NSWindow.setFrame`
+    /// in `WindowFrameTracker` is the only reliable way.
+    ///
+    /// Priority:
+    /// 1. Saved non-default frame, if it overlaps a connected screen → apply as-is.
+    /// 2. Otherwise → center the default size (from `WindowFrame()`) on the
+    ///    primary screen's visible frame. This covers both first launch and
+    ///    the "user unplugged the external monitor the window was parked on"
+    ///    case.
     private var initialWindowRect: CGRect? {
-        let frame = appState.windowFrame
+        let savedFrame = appState.windowFrame
         let defaultFrame = WindowFrame()
-        guard frame != defaultFrame else { return nil }
-        return CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+        if savedFrame != defaultFrame {
+            let rect = CGRect(x: savedFrame.x, y: savedFrame.y,
+                              width: savedFrame.width, height: savedFrame.height)
+            if WindowFrameTracker.Coordinator.frameIsVisibleOnAnyScreen(rect) {
+                return rect
+            }
+        }
+        let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let originX = screen.minX + (screen.width - defaultFrame.width) / 2
+        let originY = screen.minY + (screen.height - defaultFrame.height) / 2
+        return CGRect(x: originX, y: originY,
+                      width: defaultFrame.width, height: defaultFrame.height)
     }
 
     private var selectedRepo: RepoEntry? {
