@@ -16,6 +16,7 @@ struct MainWindow: View {
         ) {
             SidebarView(
                 appState: $appState,
+                theme: terminalManager.theme,
                 onSelect: selectWorktree,
                 onAddRepo: addRepository,
                 onAddPath: addPath,
@@ -31,7 +32,8 @@ struct MainWindow: View {
                 BreadcrumbBar(
                     repoName: selectedRepo?.displayName,
                     branchName: selectedWorktree?.branch,
-                    path: selectedWorktree?.path
+                    path: selectedWorktree?.path,
+                    theme: terminalManager.theme
                 )
 
                 if let worktree = selectedWorktreeBinding {
@@ -54,6 +56,14 @@ struct MainWindow: View {
                 }
             }
         }
+        // Let content flow under the hidden title bar so the breadcrumb row
+        // sits alongside the traffic lights instead of dropping below them.
+        // With .windowStyle(.hiddenTitleBar), the title bar is transparent
+        // but NavigationSplitView still respects the safe area by default;
+        // ignoresSafeArea collapses that gap. The breadcrumb's leading
+        // padding (BreadcrumbBar.trafficLightsReservedWidth) keeps text
+        // from colliding with the traffic lights.
+        .ignoresSafeArea(.container, edges: .top)
         .trackWindowFrame(
             initialFrame: initialWindowRect
         ) { [$appState] frame in

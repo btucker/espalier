@@ -18,6 +18,11 @@ final class TerminalManager: ObservableObject {
     private var surfaces: [TerminalID: SurfaceHandle] = [:]
     private var wakeupObserver: NSObjectProtocol?
 
+    /// Theme colors pulled from the ghostty config (background, foreground).
+    /// Emitted post-`initialize()` once the config is read; defaults to
+    /// `.fallback` before that so views have something to render with.
+    @Published var theme: GhosttyTheme = .fallback
+
     /// Path to the Espalier control socket, exposed to spawned shells via `ESPALIER_SOCK`.
     let socketPath: String
 
@@ -60,6 +65,7 @@ final class TerminalManager: ObservableObject {
             return true
         }
         self.ghosttyApp = app
+        self.theme = app.theme
 
         wakeupObserver = NotificationCenter.default.addObserver(
             forName: .ghosttyWakeup,

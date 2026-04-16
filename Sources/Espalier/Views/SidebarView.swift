@@ -4,6 +4,7 @@ import EspalierKit
 
 struct SidebarView: View {
     @Binding var appState: AppState
+    let theme: GhosttyTheme
     let onSelect: (String) -> Void
     let onAddRepo: () -> Void
     let onAddPath: (String) -> Void
@@ -17,16 +18,23 @@ struct SidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            // Remove the default sidebar material so the ghostty background
+            // shows through. The scrollContentBackground hide is what lets
+            // the List render transparently on top of our theme color.
+            .scrollContentBackground(.hidden)
 
             Divider()
+                .opacity(0.4)
 
             Button(action: onAddRepo) {
                 Label("Add Repository", systemImage: "plus")
                     .frame(maxWidth: .infinity)
+                    .foregroundColor(theme.foreground.opacity(0.8))
             }
             .buttonStyle(.plain)
             .padding(8)
         }
+        .background(theme.background)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
         }
@@ -58,7 +66,8 @@ struct SidebarView: View {
                         entry: worktree,
                         isSelected: appState.selectedWorktreePath == worktree.path,
                         displayName: label(for: worktree, in: repo),
-                        isMainCheckout: worktree.path == repo.path
+                        isMainCheckout: worktree.path == repo.path,
+                        theme: theme
                     )
                 }
                 .buttonStyle(.plain)
@@ -69,6 +78,7 @@ struct SidebarView: View {
         } label: {
             Label(repo.displayName, systemImage: "folder.fill")
                 .fontWeight(.semibold)
+                .foregroundColor(theme.foreground)
         }
     }
 

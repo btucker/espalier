@@ -1,5 +1,6 @@
 import Foundation
 import GhosttyKit
+import SwiftUI
 
 // MARK: - GhosttyConfig
 
@@ -26,6 +27,62 @@ final class GhosttyConfig {
             ghostty_config_free(config)
         }
     }
+
+    /// Read a `ghostty_config_color_s` value from the config by key (e.g.
+    /// "background", "foreground", "cursor-color"). Returns nil if the key
+    /// is unknown or the value isn't set.
+    func color(forKey key: String) -> ghostty_config_color_s? {
+        var color = ghostty_config_color_s()
+        let ok = key.withCString { keyPtr -> Bool in
+            ghostty_config_get(config, &color, keyPtr, UInt(strlen(keyPtr)))
+        }
+        return ok ? color : nil
+    }
+}
+
+extension ghostty_config_color_s {
+    /// Convert a libghostty RGB triple to a SwiftUI color.
+    var swiftUIColor: Color {
+        Color(
+            .sRGB,
+            red: Double(r) / 255.0,
+            green: Double(g) / 255.0,
+            blue: Double(b) / 255.0,
+            opacity: 1.0
+        )
+    }
+}
+
+// MARK: - GhosttyTheme
+
+/// Snapshot of the ghostty-config-driven theme colors we apply to Espalier's
+/// app chrome (sidebar, title bar, breadcrumb) so the whole window visually
+/// matches the terminal's appearance.
+struct GhosttyTheme: Equatable {
+    let background: Color
+    let foreground: Color
+
+    /// Fallback theme used when ghostty config is unavailable or doesn't
+    /// specify background/foreground. Matches macOS dark-mode defaults so
+    /// things don't look broken.
+    static let fallback = GhosttyTheme(
+        background: Color(.sRGB, red: 0.05, green: 0.05, blue: 0.1, opacity: 1),
+        foreground: Color(.sRGB, red: 0.87, green: 0.87, blue: 0.87, opacity: 1)
+    )
+
+    /// Read theme colors from a `GhosttyConfig`. Missing keys fall back to
+    /// `.fallback` component-wise.
+    init(config: GhosttyConfig) {
+        self.background = config.color(forKey: "background")?.swiftUIColor
+            ?? Self.fallback.background
+        self.foreground = config.color(forKey: "foreground")?.swiftUIColor
+            ?? Self.fallback.foreground
+    }
+
+    init(background: Color, foreground: Color) {
+        self.background = background
+        self.foreground = foreground
+    }
 }
 
 // MARK: - GhosttyApp
@@ -40,6 +97,11 @@ final class GhosttyConfig {
 final class GhosttyApp {
     /// Underlying `ghostty_app_t` handle (opaque pointer).
     let app: ghostty_app_t
+
+    /// Theme snapshot read from the ghostty config at init time. Used by the
+    /// app chrome (sidebar, breadcrumb, title area) so the whole window
+    /// matches the terminal's visual theme.
+    let theme: GhosttyTheme
 
     /// Retained so the config outlives any internal references. `GhosttyApp` owns the
     /// config from the C side's perspective once `ghostty_app_new` succeeds.
@@ -58,6 +120,9 @@ final class GhosttyApp {
     ///   - actionHandler: Invoked when libghostty emits an action. May fire from any thread.
     ///     The return value is forwarded as the C callback's return value.
     init(config: GhosttyConfig, actionHandler: @escaping (ghostty_target_s, ghostty_action_s) -> Bool) {
+        // Read theme BEFORE ghostty_app_new transfers config ownership.
+        self.theme = GhosttyTheme(config: config)
+
         self.config = config
 
         let handlerBox = ActionHandlerBox(handler: actionHandler)

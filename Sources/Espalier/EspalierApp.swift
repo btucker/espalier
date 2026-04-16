@@ -39,6 +39,12 @@ struct EspalierApp: App {
                     try? newState.save(to: AppState.defaultDirectory)
                 }
         }
+        // Hide the macOS title bar so the breadcrumb row sits directly
+        // under the traffic lights — Andy wanted a terminal-multiplexer
+        // look, not a generic Cocoa app frame. Content can flow under
+        // the title bar area; MainWindow leaves ~72pt of leading space
+        // on the breadcrumb for the traffic lights.
+        .windowStyle(.hiddenTitleBar)
         // Default size only. Restoration of the exact saved frame is handled
         // by WindowFrameTracker (see MainWindow), which applies the saved
         // NSWindow.frame directly after the window is created. We cannot use

@@ -11,6 +11,9 @@ struct WorktreeRow: View {
     /// True if this is the repo's main checkout (path == repo.path).
     /// Gets a distinct leading icon to differentiate from linked worktrees.
     let isMainCheckout: Bool
+    /// Theme snapshot for foreground/dim text colors, so the sidebar
+    /// matches ghostty's palette rather than fighting it.
+    let theme: GhosttyTheme
 
     var body: some View {
         HStack(spacing: 6) {
@@ -33,7 +36,7 @@ struct WorktreeRow: View {
     private var typeIcon: some View {
         Image(systemName: isMainCheckout ? "house" : "arrow.triangle.branch")
             .font(.system(size: 10))
-            .foregroundColor(.secondary)
+            .foregroundColor(theme.foreground.opacity(0.6))
             .frame(width: 12)
     }
 
@@ -42,7 +45,7 @@ struct WorktreeRow: View {
         switch entry.state {
         case .closed:
             Circle()
-                .strokeBorder(Color.secondary, lineWidth: 1)
+                .strokeBorder(theme.foreground.opacity(0.5), lineWidth: 1)
                 .frame(width: 8, height: 8)
         case .running:
             Circle()
@@ -63,10 +66,14 @@ struct WorktreeRow: View {
             if entry.state == .stale {
                 Text(displayName)
                     .strikethrough()
-                    .foregroundColor(.secondary)
+                    .foregroundColor(theme.foreground.opacity(0.5))
             } else {
                 Text(displayName)
-                    .foregroundColor(isSelected ? .primary : .secondary)
+                    .foregroundColor(
+                        isSelected
+                            ? theme.foreground
+                            : theme.foreground.opacity(0.8)
+                    )
             }
 
             // Secondary label: git branch, dimmed. Skip when it duplicates
@@ -75,7 +82,7 @@ struct WorktreeRow: View {
             if entry.branch != displayName {
                 Text(entry.branch)
                     .font(.caption)
-                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .foregroundColor(theme.foreground.opacity(0.45))
             }
         }
     }
