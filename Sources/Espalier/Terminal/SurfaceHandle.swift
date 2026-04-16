@@ -143,6 +143,50 @@ final class SurfaceNSView: NSView {
         super.mouseDown(with: event)
     }
 
+    /// Forward trackpad/mouse-wheel scroll to libghostty so scrollback and
+    /// mouse-reporting applications (less, vim, etc.) work. Ported from
+    /// Ghostty's upstream `SurfaceView_AppKit.scrollWheel`.
+    ///
+    /// The mods parameter is a packed int (see ghostty.h):
+    ///   bit 0      = precision scroll (trackpad / Magic Mouse)
+    ///   bits 1..3  = momentum phase enum (NONE..MAY_BEGIN)
+    ///
+    /// For precision scrolling Ghostty doubles the delta: "subjective, it
+    /// 'feels' better." Replicated here.
+    override func scrollWheel(with event: NSEvent) {
+        guard let surface else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        var x = event.scrollingDeltaX
+        var y = event.scrollingDeltaY
+        let precision = event.hasPreciseScrollingDeltas
+        if precision {
+            x *= 2
+            y *= 2
+        }
+
+        var mods: Int32 = 0
+        if precision { mods |= 1 }
+        let momentum = Self.momentumPhase(event.momentumPhase)
+        mods |= (Int32(momentum.rawValue) & 0x7) << 1
+
+        ghostty_surface_mouse_scroll(surface, x, y, mods)
+    }
+
+    private static func momentumPhase(_ phase: NSEvent.Phase) -> ghostty_input_mouse_momentum_e {
+        // NSEvent.Phase is a bitmask. Match the first matching bit in the
+        // order upstream Ghostty uses.
+        if phase.contains(.began)       { return GHOSTTY_MOUSE_MOMENTUM_BEGAN }
+        if phase.contains(.stationary)  { return GHOSTTY_MOUSE_MOMENTUM_STATIONARY }
+        if phase.contains(.changed)     { return GHOSTTY_MOUSE_MOMENTUM_CHANGED }
+        if phase.contains(.ended)       { return GHOSTTY_MOUSE_MOMENTUM_ENDED }
+        if phase.contains(.cancelled)   { return GHOSTTY_MOUSE_MOMENTUM_CANCELLED }
+        if phase.contains(.mayBegin)    { return GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN }
+        return GHOSTTY_MOUSE_MOMENTUM_NONE
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let surface else {
             super.keyDown(with: event)

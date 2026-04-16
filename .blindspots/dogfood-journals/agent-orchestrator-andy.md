@@ -432,3 +432,30 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Verified
 - Clean build, 59/59 tests pass.
 - Deployed. Needs user verification that Backspace/arrows/Return now behave. The key fix: control-byte and PUA text is now NULLed out, letting libghostty's own key encoder do its job.
+
+## Cycle 19 — 2026-04-16
+
+### Explored
+- Screenshot confirmed cycle 17 worktree-switching works: breadcrumb now shows `blindspots / (detached)` with path `/Users/btucker/.codex/worktrees/6750/blindspots` and prompt `git:(a1d1f60)`. User clearly switched between the two worktrees.
+- Next Andy blocker: scrollback. If he's running claude-code or a long build, he can't scroll up to see earlier output. Trackpad/wheel events get dropped entirely because `SurfaceNSView` never overrode `scrollWheel`.
+
+### Broke
+- Default NSView behavior for `scrollWheel`: propagates up the responder chain. Nothing in the hierarchy forwards it into libghostty. Scroll delta is lost; terminal viewport stays pinned to the bottom.
+
+### Fixed
+- Added `scrollWheel(with:)` override on `SurfaceNSView`. Ported from Ghostty's upstream `SurfaceView_AppKit.scrollWheel`:
+  - Pull `scrollingDeltaX/Y` and `hasPreciseScrollingDeltas` from the event.
+  - If precision (trackpad / Magic Mouse), double both deltas — upstream comment: "subjective, it 'feels' better to me." Matched.
+  - Pack `ghostty_input_scroll_mods_t` (Int32): bit 0 = precision, bits 1–3 = momentum phase enum.
+  - Call `ghostty_surface_mouse_scroll(surface, x, y, mods)`.
+- Added `momentumPhase(_: NSEvent.Phase)` helper that maps the AppKit phase bitmask to the matching `GHOSTTY_MOUSE_MOMENTUM_*` enum (BEGAN, STATIONARY, CHANGED, ENDED, CANCELLED, MAY_BEGIN, NONE default) in the same priority order Ghostty uses.
+
+### Verified
+- Clean build, 59/59 tests. Deployed to `~/Applications/Espalier.app`.
+- Needs real-user trackpad test — scroll up in the terminal, scrollback should appear.
+
+### Try next cycle
+- Mouse click/drag/hover for text selection + mouse-reporting programs (less, vim, mc). Needs `mouseDown/Up`, `otherMouseDown/Up`, `rightMouseDown/Up`, `mouseMoved`, `mouseDragged`, `mouseEntered/Exited`, tracking-area setup, and y-flip (AppKit bottom-origin → ghostty top-origin).
+- `ghostty_surface_set_content_scale` on `viewDidChangeBackingProperties` — Retina correctness across display moves.
+- NSTextInputClient for IME (dead keys, Japanese/Chinese/Korean, emoji picker).
+- `performKeyEquivalent` redispatch hack so Cmd-key bindings can also reach libghostty (currently swallowed by AppKit menu).
