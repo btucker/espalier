@@ -311,7 +311,7 @@ struct EspalierApp: App {
 
     private func installCLI() {
         let bundleCLI = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/espalier")
+            .appendingPathComponent("Contents/Helpers/espalier")
         let symlink = "/usr/local/bin/espalier"
 
         let alert = NSAlert()
