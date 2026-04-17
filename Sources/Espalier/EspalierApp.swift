@@ -27,12 +27,40 @@ struct EspalierApp: App {
     private let services: AppServices
 
     init() {
+        // Espalier is single-instance: the state.json, the espalier.sock
+        // listener, and (most visibly) the per-pane zmx session names are
+        // shared-global resources keyed off paths that don't vary between
+        // app instances. Two Espaliers both attached to the same zmx
+        // session will both echo the shell's output and both forward
+        // keystrokes into the same PTY. Rather than isolate those three
+        // resources per-instance (large refactor), we enforce one-at-a-time
+        // here. Launch Services already dedupes normal Dock/Spotlight
+        // opens; this guard catches `open -n` and same-bundle-id dev
+        // relaunches.
+        Self.terminateIfAnotherInstanceIsRunning()
+
         let loaded = (try? AppState.load(from: AppState.defaultDirectory)) ?? AppState()
         _appState = State(initialValue: loaded)
 
         let socketPath = AppState.defaultDirectory.appendingPathComponent("espalier.sock").path
         _terminalManager = StateObject(wrappedValue: TerminalManager(socketPath: socketPath))
         services = AppServices(socketPath: socketPath)
+    }
+
+    /// If another Espalier process with our `CFBundleIdentifier` is
+    /// already running, bring it to the front and exit our own process
+    /// before any state, sockets, or zmx clients are created. Uses
+    /// `exit(0)` instead of `NSApp.terminate` because we run before
+    /// NSApplication has an app delegate, and because we have no
+    /// allocated resources that need graceful teardown yet.
+    private static func terminateIfAnotherInstanceIsRunning() {
+        let myBundleID = Bundle.main.bundleIdentifier ?? "com.espalier.app"
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: myBundleID)
+            .filter { $0.processIdentifier != myPID }
+        guard let existing = others.first else { return }
+        existing.activate()
+        exit(0)
     }
 
     var body: some Scene {
@@ -111,11 +139,15 @@ struct EspalierApp: App {
                 .keyboardShortcut("w", modifiers: [.command])
             }
 
-            CommandMenu("Espalier") {
+            CommandGroup(after: .appInfo) {
                 Button("Install CLI Tool...") {
                     installCLI()
                 }
             }
+        }
+
+        Settings {
+            SettingsView()
         }
     }
 
@@ -205,6 +237,19 @@ struct EspalierApp: App {
         // convey. The underlying plumbing in TerminalManager stays
         // wired; we can revisit with a dedicated, less-aggressive
         // visual if the need comes back.
+
+        // First prompt on a newly-ready pane → maybe type the user's
+        // default command. `maybeRunDefaultCommand` consults UserDefaults
+        // and the TerminalManager's first-pane / rehydration markers to
+        // decide; most of the time it's a no-op.
+        terminalManager.onShellReady = { [tm = terminalManager] terminalID in
+            MainActor.assumeIsolated {
+                Self.maybeRunDefaultCommand(
+                    terminalManager: tm,
+                    terminalID: terminalID
+                )
+            }
+        }
 
         try? services.socketServer.start()
         // SocketServer already dispatches onMessage to the main queue.
@@ -299,6 +344,16 @@ struct EspalierApp: App {
                     if wt.splitTree.root == nil {
                         let id = TerminalID()
                         appState.repos[repoIdx].worktrees[wtIdx].splitTree = SplitTree(root: .leaf(id))
+                    }
+                    // Mark every restored leaf as rehydrated *before*
+                    // surface creation so the first-PWD event (which
+                    // triggers onShellReady) finds wasRehydrated == true
+                    // and short-circuits command injection. Without this
+                    // guard, relaunching Espalier would type the default
+                    // command on top of whatever process is already
+                    // running inside the persisted zmx session.
+                    for leafID in appState.repos[repoIdx].worktrees[wtIdx].splitTree.allLeaves {
+                        terminalManager.markRehydrated(leafID)
                     }
                     _ = terminalManager.createSurfaces(
                         for: appState.repos[repoIdx].worktrees[wtIdx].splitTree,
@@ -788,6 +843,38 @@ struct EspalierApp: App {
                 }
                 return
             }
+        }
+    }
+
+    /// Called on the first `onShellReady` signal for a pane. Reads the
+    /// user's default-command preferences from UserDefaults, consults the
+    /// pure decision function in EspalierKit, and — if the decision is
+    /// `.type(command)` — types the command into the pane via
+    /// `SurfaceHandle.typeText` followed by `\r` to trigger execution.
+    @MainActor
+    fileprivate static func maybeRunDefaultCommand(
+        terminalManager: TerminalManager,
+        terminalID: TerminalID
+    ) {
+        let defaults = UserDefaults.standard
+        let command = defaults.string(forKey: "defaultCommand") ?? ""
+        // `@AppStorage` defaults apply only in the SwiftUI view; when
+        // read directly from UserDefaults the key returns nil on
+        // first run. Treat nil as `true` to match the SettingsView default.
+        let firstPaneOnly = defaults.object(forKey: "defaultCommandFirstPaneOnly") as? Bool ?? true
+
+        let decision = defaultCommandDecision(
+            defaultCommand: command,
+            firstPaneOnly: firstPaneOnly,
+            isFirstPane: terminalManager.isFirstPane(terminalID),
+            wasRehydrated: terminalManager.wasRehydrated(terminalID)
+        )
+
+        switch decision {
+        case .skip:
+            return
+        case .type(let trimmedCommand):
+            terminalManager.handle(for: terminalID)?.typeText(trimmedCommand + "\r")
         }
     }
 
