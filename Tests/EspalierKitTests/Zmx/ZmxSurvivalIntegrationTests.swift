@@ -269,4 +269,138 @@ struct ZmxSurvivalIntegrationTests {
             launcher.kill(sessionName: "espalier-doesnotexist")
         }
     }
+
+    // MARK: PWD-follow regression — Ghostty zsh integration across zmx
+
+    /// End-to-end proof that the zsh ZDOTDIR re-injection in
+    /// `attachInitialInput` keeps Ghostty's shell integration alive in the
+    /// inner shell. Without the re-injection, the outer shell's ZDOTDIR is
+    /// the user's original (restored by Ghostty's .zshenv), so the inner
+    /// shell zmx spawns never sources the integration and `cd` emits no
+    /// OSC 7 — which is exactly how PWD-follow broke when zmx arrived.
+    ///
+    /// Requires an installed Ghostty.app for its shell-integration dir;
+    /// skipped cleanly on machines that don't have one.
+    @Test func innerShellEmitsOsc7AfterCdWhenGhosttyIntegrationPresent() throws {
+        let ghosttyRes = try #require(
+            Self.locateGhosttyResourcesDir(),
+            "Ghostty.app shell-integration not found — skipping PWD-follow integration test"
+        )
+        try Self.withScopedZmxDir { launcher in
+            // Clean HOME stops the developer's own .zshrc from emitting its
+            // own OSC 7 and confusing the assertion.
+            let fakeHome = "/tmp/espalier-osc7-\(UUID().uuidString.prefix(8))"
+            try FileManager.default.createDirectory(
+                atPath: fakeHome, withIntermediateDirectories: true
+            )
+            defer { try? FileManager.default.removeItem(atPath: fakeHome) }
+            for name in [".zshrc", ".zshenv", ".zprofile", ".zlogin"] {
+                FileManager.default.createFile(atPath: "\(fakeHome)/\(name)", contents: nil)
+            }
+
+            let session = launcher.sessionName(for: UUID())
+            let initial = launcher.attachInitialInput(
+                sessionName: session,
+                userShell: "/bin/zsh",
+                ghosttyResourcesDir: ghosttyRes
+            )
+
+            // Outer zsh env mirrors what libghostty would inject at spawn:
+            // ZDOTDIR → Ghostty integration dir; GHOSTTY_ZSH_ZDOTDIR carries
+            // the user's original so integration's .zshenv can restore it.
+            var env = launcher.subprocessEnv(from: [:])
+            env["HOME"] = fakeHome
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            env["TERM"] = "xterm-256color"
+            env["ZDOTDIR"] = "\(ghosttyRes)/shell-integration/zsh"
+            env["GHOSTTY_ZSH_ZDOTDIR"] = fakeHome
+
+            let pty = try Self.spawnShellWithEnv(
+                executable: "/bin/zsh", args: ["-i"], env: env
+            )
+            defer {
+                pty.terminate()
+                launcher.kill(sessionName: session)
+            }
+
+            // Let the outer shell come up and source .zshenv (which sources
+            // Ghostty integration in the outer shell).
+            _ = Self.readUntil(marker: "", from: pty, deadline: 1.0)
+
+            // Simulate libghostty's initial_input → outer shell execs zmx
+            // attach, zmx spawns the inner shell via its daemon.
+            try pty.write(initial)
+            // zmx attach's first output is the VT clear (ESC [ 2J). That's
+            // our "inner shell is attached" signal.
+            _ = Self.readUntil(marker: "\u{001B}[2J", from: pty, deadline: 5)
+            // Drain anything buffered so the OSC 7 match is post-cd only.
+            Thread.sleep(forTimeInterval: 0.3)
+            _ = pty.readAvailable()
+
+            try pty.write("cd / && echo CD_DONE_MARK\n")
+            let output = Self.readUntil(marker: "CD_DONE_MARK", from: pty, deadline: 5)
+            // Give the precmd hook a moment to fire after the command.
+            Thread.sleep(forTimeInterval: 0.3)
+            let final = output + pty.readAvailable()
+
+            #expect(
+                final.contains("\u{001B}]7;"),
+                "expected OSC 7 from Ghostty zsh integration inside zmx after cd; got: \(final.suffix(600))"
+            )
+        }
+    }
+
+    /// Spawn an arbitrary executable with the given env on a fresh PTY
+    /// pair. Sibling of `spawnAttach`, but for executables other than
+    /// `zmx attach` (used to stage the outer shell in
+    /// `innerShellEmitsOsc7AfterCdWhenGhosttyIntegrationPresent`).
+    static func spawnShellWithEnv(
+        executable: String,
+        args: [String],
+        env: [String: String]
+    ) throws -> PtyAttach {
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        guard master >= 0,
+              grantpt(master) == 0,
+              unlockpt(master) == 0,
+              let slaveNamePtr = ptsname(master) else {
+            if master >= 0 { Darwin.close(master) }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let slaveName = String(cString: slaveNamePtr)
+        let flags = fcntl(master, F_GETFL)
+        _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
+        let slave = Darwin.open(slaveName, O_RDWR | O_NOCTTY)
+        guard slave >= 0 else {
+            Darwin.close(master)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let slaveHandle = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        process.environment = env
+        process.standardInput = slaveHandle
+        process.standardOutput = slaveHandle
+        process.standardError = slaveHandle
+        try process.run()
+        Darwin.close(slave)
+        return PtyAttach(process: process, masterFd: master)
+    }
+
+    /// Locate Ghostty's shell-integration root the same way
+    /// TerminalManager.pointAtGhosttyResourcesIfAvailable does — checks
+    /// `/Applications` then `~/Applications`. Returns nil on machines
+    /// without Ghostty.app.
+    static func locateGhosttyResourcesDir() -> String? {
+        let candidates = [
+            "/Applications/Ghostty.app/Contents/Resources/ghostty",
+            (NSHomeDirectory() as NSString)
+                .appendingPathComponent("Applications/Ghostty.app/Contents/Resources/ghostty"),
+        ]
+        return candidates.first { path in
+            FileManager.default.fileExists(atPath: "\(path)/shell-integration/zsh/.zshenv")
+        }
+    }
 }

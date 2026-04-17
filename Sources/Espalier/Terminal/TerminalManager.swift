@@ -337,8 +337,17 @@ final class TerminalManager: ObservableObject {
         // is nil; we hand it back to zmx as the inner process so the
         // attached session runs the user's real shell.
         let userShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/sh"
+        // Pass GHOSTTY_RESOURCES_DIR through so the launcher can re-inject
+        // ZDOTDIR for zsh users. Without this, Ghostty's shell integration
+        // never loads in the inner shell zmx spawns, and chpwd-driven OSC 7
+        // (the signal behind PWD-follow) goes silent.
+        let ghosttyResources = ProcessInfo.processInfo.environment["GHOSTTY_RESOURCES_DIR"]
         return (
-            launcher.attachInitialInput(sessionName: session, userShell: userShell),
+            launcher.attachInitialInput(
+                sessionName: session,
+                userShell: userShell,
+                ghosttyResourcesDir: ghosttyResources
+            ),
             launcher.zmxDir.path
         )
     }
