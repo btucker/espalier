@@ -209,6 +209,19 @@ struct EspalierApp: App {
         // wired; we can revisit with a dedicated, less-aggressive
         // visual if the need comes back.
 
+        // First prompt on a newly-ready pane → maybe type the user's
+        // default command. `maybeRunDefaultCommand` consults UserDefaults
+        // and the TerminalManager's first-pane / rehydration markers to
+        // decide; most of the time it's a no-op.
+        terminalManager.onShellReady = { [tm = terminalManager] terminalID in
+            MainActor.assumeIsolated {
+                Self.maybeRunDefaultCommand(
+                    terminalManager: tm,
+                    terminalID: terminalID
+                )
+            }
+        }
+
         try? services.socketServer.start()
         // SocketServer already dispatches onMessage to the main queue.
         let binding = $appState
@@ -654,6 +667,38 @@ struct EspalierApp: App {
                 }
                 return
             }
+        }
+    }
+
+    /// Called on the first `onShellReady` signal for a pane. Reads the
+    /// user's default-command preferences from UserDefaults, consults the
+    /// pure decision function in EspalierKit, and — if the decision is
+    /// `.type(command)` — types the command into the pane via
+    /// `SurfaceHandle.typeText` followed by `\r` to trigger execution.
+    @MainActor
+    fileprivate static func maybeRunDefaultCommand(
+        terminalManager: TerminalManager,
+        terminalID: TerminalID
+    ) {
+        let defaults = UserDefaults.standard
+        let command = defaults.string(forKey: "defaultCommand") ?? ""
+        // `@AppStorage` defaults apply only in the SwiftUI view; when
+        // read directly from UserDefaults the key returns nil on
+        // first run. Treat nil as `true` to match the SettingsView default.
+        let firstPaneOnly = defaults.object(forKey: "defaultCommandFirstPaneOnly") as? Bool ?? true
+
+        let decision = defaultCommandDecision(
+            defaultCommand: command,
+            firstPaneOnly: firstPaneOnly,
+            isFirstPane: terminalManager.isFirstPane(terminalID),
+            wasRehydrated: terminalManager.wasRehydrated(terminalID)
+        )
+
+        switch decision {
+        case .skip:
+            return
+        case .type(let trimmedCommand):
+            terminalManager.handle(for: terminalID)?.typeText(trimmedCommand + "\r")
         }
     }
 
