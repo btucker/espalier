@@ -91,6 +91,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+echo "→ ad-hoc codesign (inner → outer)"
+# Sign helpers first, then the main binary, then the bundle itself.
+# Apple's nesting rules require nested code to already be signed when
+# the outer container is signed; otherwise the outer signature does
+# not cover them and the runtime rejects the bundle. When we move to
+# Developer ID + notarization, this is the one block that changes
+# (real identity + --options runtime).
+codesign --force --sign - "$APP/Contents/Helpers/zmx"
+codesign --force --sign - "$APP/Contents/Helpers/espalier"
+codesign --force --sign - "$APP/Contents/MacOS/Espalier"
+codesign --force --sign - "$APP"
+
 echo "✓ Bundle at $APP"
 echo "  Run:  open '$APP'"
 echo "  CLI:  '$APP/Contents/Helpers/espalier' notify 'hello'"
