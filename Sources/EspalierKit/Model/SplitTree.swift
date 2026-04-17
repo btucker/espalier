@@ -135,6 +135,18 @@ public struct SplitTree: Codable, Sendable, Equatable {
         return SplitTree(root: root, zoomed: (zoomed == leaf) ? nil : leaf)
     }
 
+    /// Reset every internal split's ratio to 0.5. Clears zoom (matches
+    /// upstream Ghostty: equalize implies a tree-wide rearrangement).
+    public func equalizing() -> SplitTree {
+        SplitTree(root: root?.equalizing(), zoomed: nil)
+    }
+
+    /// Invoke `body` for every split in the tree (depth-first). Public so
+    /// tests and UI can iterate splits without re-implementing traversal.
+    public func forEachSplit(_ body: (Node.Split) -> Void) {
+        root?.forEachSplit(body)
+    }
+
     /// The "breadcrumb" position of `terminalID` inside this tree — enough
     /// information to reinsert the leaf next to its former neighbor after
     /// it's been removed (e.g. when a pane moves back to a worktree it
@@ -401,6 +413,31 @@ extension SplitTree.Node {
             if case .leaf(let id) = split.right, id == leaf { return split.ratio }
             // Recurse; only one branch contains the leaf, the other returns 0.
             return split.left.ratioOfSplit(containing: leaf) + split.right.ratioOfSplit(containing: leaf)
+        }
+    }
+
+    func equalizing() -> SplitTree.Node {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let s):
+            return .split(SplitTree.Node.Split(
+                direction: s.direction,
+                ratio: 0.5,
+                left: s.left.equalizing(),
+                right: s.right.equalizing()
+            ))
+        }
+    }
+
+    func forEachSplit(_ body: (SplitTree.Node.Split) -> Void) {
+        switch self {
+        case .leaf:
+            return
+        case .split(let s):
+            body(s)
+            s.left.forEachSplit(body)
+            s.right.forEachSplit(body)
         }
     }
 }
