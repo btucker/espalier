@@ -198,6 +198,16 @@ struct MainWindow: View {
                     }
 
                     let splitTree = appState.repos[repoIdx].worktrees[wtIdx].splitTree
+                    // Mark every leaf as a first-pane candidate *before*
+                    // createSurfaces — the first PWD event could arrive
+                    // immediately after the surface spawns, and
+                    // maybeRunDefaultCommand queries isFirstPane at that
+                    // time. In the common case there's exactly one leaf
+                    // (fresh open); marking all of them keeps this robust
+                    // against future layouts that seed multiple leaves.
+                    for leafID in splitTree.allLeaves {
+                        terminalManager.markFirstPane(leafID)
+                    }
                     _ = terminalManager.createSurfaces(for: splitTree, worktreePath: path)
 
                     appState.repos[repoIdx].worktrees[wtIdx].state = .running

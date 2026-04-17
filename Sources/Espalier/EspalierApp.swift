@@ -311,6 +311,16 @@ struct EspalierApp: App {
                         let id = TerminalID()
                         appState.repos[repoIdx].worktrees[wtIdx].splitTree = SplitTree(root: .leaf(id))
                     }
+                    // Mark every restored leaf as rehydrated *before*
+                    // surface creation so the first-PWD event (which
+                    // triggers onShellReady) finds wasRehydrated == true
+                    // and short-circuits command injection. Without this
+                    // guard, relaunching Espalier would type the default
+                    // command on top of whatever process is already
+                    // running inside the persisted zmx session.
+                    for leafID in appState.repos[repoIdx].worktrees[wtIdx].splitTree.allLeaves {
+                        terminalManager.markRehydrated(leafID)
+                    }
                     _ = terminalManager.createSurfaces(
                         for: appState.repos[repoIdx].worktrees[wtIdx].splitTree,
                         worktreePath: wt.path
