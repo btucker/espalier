@@ -131,6 +131,12 @@ struct EspalierApp: App {
         let zmxLauncher = ZmxLauncher(executable: zmxBinary, zmxDir: zmxDir)
         terminalManager.zmxLauncher = zmxLauncher
 
+        if !zmxLauncher.isAvailable {
+            DispatchQueue.main.async {
+                ZmxFallbackBanner.presentIfNeeded()
+            }
+        }
+
         terminalManager.initialize()
 
         // Route context-menu split requests through the same insertion code
