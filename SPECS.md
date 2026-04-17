@@ -500,13 +500,15 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **DIST-1.3** If the `ESPALIER_VERSION` environment variable is not set, then the build script shall use `0.0.0-dev` as the default version.
 
-**DIST-1.4** The build script shall ad-hoc codesign every Mach-O in the bundle in inner-to-outer order: `Contents/Helpers/zmx`, `Contents/Helpers/espalier`, `Contents/MacOS/Espalier`, then the bundle itself.
+**DIST-1.4** The build script shall ad-hoc codesign every Mach-O in the bundle in inner-to-outer order: `Contents/Helpers/zmx`, `Contents/Helpers/espalier`, `Contents/MacOS/Espalier`, then the bundle itself, and shall verify the resulting signature with `codesign --verify --strict`.
 
 ### 14.2 Release Automation
 
-**DIST-2.1** When a git tag matching `v*` is pushed to origin, the GitHub Actions workflow `.github/workflows/release.yml` shall build the app bundle in release configuration, verify codesigning, zip the bundle as `Espalier-<version>.zip`, attach the zip to a new GitHub release tagged `v<version>`, and push an updated cask file to the `btucker/homebrew-espalier` tap with the new version and sha256.
+**DIST-2.1** When a git tag matching `v*` is pushed to origin, the GitHub Actions workflow `.github/workflows/release.yml` shall build the app bundle in release configuration, verify codesigning, zip the bundle as `Espalier-<version>.zip`, ensure a GitHub release tagged `v<version>` has the zip attached, and ensure the `btucker/homebrew-espalier` cask reflects the new version and sha256.
 
 **DIST-2.2** If the pushed tag does not start with `v`, then the release workflow shall fail before building.
+
+**DIST-2.3** If a release for the pushed tag already exists, then the workflow shall re-upload the zip with `--clobber` and continue to the cask update step rather than failing.
 
 ### 14.3 Homebrew Cask
 
