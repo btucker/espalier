@@ -51,20 +51,18 @@ public struct GitHubPRFetcher: PRFetcher {
     }
 
     private func fetchOne(origin: HostingOrigin, branch: String, state: String) async throws -> RawPR? {
-        var args = [
+        let fields = state == "merged"
+            ? "number,title,url,state,headRefName,mergedAt"
+            : "number,title,url,state,headRefName"
+        let args = [
             "pr", "list",
             "--repo", origin.slug,
             "--head", branch,
             "--state", state,
             "--limit", "1",
-            "--json", "number,title,url,state,headRefName"
+            "--json", fields,
         ]
-        if state == "merged" {
-            if let idx = args.firstIndex(of: "number,title,url,state,headRefName") {
-                args[idx] = "number,title,url,state,headRefName,mergedAt"
-            }
-        }
-        let output = try await executor.run(command: "gh", args: args, at: NSHomeDirectory())
+        let output = try await executor.run(command: "gh", args: args, at: NSTemporaryDirectory())
         let data = Data(output.stdout.utf8)
         let prs = try JSONDecoder().decode([RawPR].self, from: data)
         return prs.first
@@ -76,13 +74,13 @@ public struct GitHubPRFetcher: PRFetcher {
             "--repo", origin.slug,
             "--json", "name,state,conclusion"
         ]
-        let output = try await executor.run(command: "gh", args: args, at: NSHomeDirectory())
+        let output = try await executor.run(command: "gh", args: args, at: NSTemporaryDirectory())
         let data = Data(output.stdout.utf8)
         let checks = try JSONDecoder().decode([RawCheck].self, from: data)
-        return Self.rollup(checks)
+        return Self.rollup(checks.map { ($0.state, $0.conclusion) })
     }
 
-    private static func rollup(_ checks: [RawCheck]) -> PRInfo.Checks {
+    static func rollup(_ checks: [(state: String, conclusion: String?)]) -> PRInfo.Checks {
         if checks.isEmpty { return .none }
         if checks.contains(where: { ($0.conclusion ?? "").uppercased() == "FAILURE" }) {
             return .failure

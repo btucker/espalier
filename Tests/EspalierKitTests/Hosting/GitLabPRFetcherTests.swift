@@ -26,11 +26,6 @@ struct GitLabPRFetcherTests {
             ],
             output: CLIOutput(stdout: loadFixture("glab-mr-opened"), stderr: "", exitCode: 0)
         )
-        fake.stub(
-            command: "glab",
-            args: ["ci", "get", "--repo", "foo/bar", "--pipeline-id", "9001", "-F", "json"],
-            output: CLIOutput(stdout: loadFixture("glab-pipeline-success"), stderr: "", exitCode: 0)
-        )
 
         let fetcher = GitLabPRFetcher(executor: fake, now: { Date() })
         let mr = try await fetcher.fetch(origin: origin, branch: branch)
@@ -72,33 +67,17 @@ struct GitLabPRFetcherTests {
         #expect(mr?.state == .merged)
         #expect(mr?.checks == PRInfo.Checks.none)
     }
+}
 
-    @Test func pipelineStatusMapping() async throws {
-        func tryStatus(_ fixture: String) async throws -> PRInfo.Checks? {
-            let fake = FakeCLIExecutor()
-            fake.stub(
-                command: "glab",
-                args: [
-                    "mr", "list",
-                    "--repo", "foo/bar",
-                    "--source-branch", branch,
-                    "--state", "opened",
-                    "--per-page", "1",
-                    "-F", "json"
-                ],
-                output: CLIOutput(stdout: loadFixture("glab-mr-opened"), stderr: "", exitCode: 0)
-            )
-            fake.stub(
-                command: "glab",
-                args: ["ci", "get", "--repo", "foo/bar", "--pipeline-id", "9001", "-F", "json"],
-                output: CLIOutput(stdout: loadFixture(fixture), stderr: "", exitCode: 0)
-            )
-            let fetcher = GitLabPRFetcher(executor: fake, now: { Date() })
-            return try await fetcher.fetch(origin: origin, branch: branch)?.checks
-        }
-
-        #expect(try await tryStatus("glab-pipeline-running") == .pending)
-        #expect(try await tryStatus("glab-pipeline-failed") == .failure)
-        #expect(try await tryStatus("glab-pipeline-success") == .success)
-    }
+@Suite("GitLabPRFetcher.mapStatus")
+struct GitLabPRFetcherMapStatusTests {
+    @Test func successMaps() { #expect(GitLabPRFetcher.mapStatus("success") == .success) }
+    @Test func failedMaps() { #expect(GitLabPRFetcher.mapStatus("failed") == .failure) }
+    @Test func canceledMaps() { #expect(GitLabPRFetcher.mapStatus("canceled") == .failure) }
+    @Test func runningMaps() { #expect(GitLabPRFetcher.mapStatus("running") == .pending) }
+    @Test func pendingMaps() { #expect(GitLabPRFetcher.mapStatus("pending") == .pending) }
+    @Test func preparingMaps() { #expect(GitLabPRFetcher.mapStatus("preparing") == .pending) }
+    @Test func scheduledMaps() { #expect(GitLabPRFetcher.mapStatus("scheduled") == .pending) }
+    @Test func unknownIsNone() { #expect(GitLabPRFetcher.mapStatus("something-new") == PRInfo.Checks.none) }
+    @Test func caseInsensitive() { #expect(GitLabPRFetcher.mapStatus("SUCCESS") == .success) }
 }

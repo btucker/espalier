@@ -96,70 +96,44 @@ struct GitHubPRFetcherTests {
         let pr = try await fetcher.fetch(origin: origin, branch: branch)
         #expect(pr == nil)
     }
+}
 
-    @Test func checksPendingRollup() async throws {
-        let fake = FakeCLIExecutor()
-        fake.stub(
-            command: "gh",
-            args: [
-                "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "open", "--limit", "1",
-                "--json", "number,title,url,state,headRefName"
-            ],
-            output: CLIOutput(stdout: loadFixture("gh-pr-open-passing"), stderr: "", exitCode: 0)
-        )
-        fake.stub(
-            command: "gh",
-            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
-            output: CLIOutput(stdout: loadFixture("gh-pr-checks-pending"), stderr: "", exitCode: 0)
-        )
-
-        let fetcher = GitHubPRFetcher(executor: fake, now: { Date() })
-        let pr = try await fetcher.fetch(origin: origin, branch: branch)
-        #expect(pr?.checks == .pending)
+@Suite("GitHubPRFetcher.rollup")
+struct GitHubPRFetcherRollupTests {
+    @Test func emptyIsNone() {
+        #expect(GitHubPRFetcher.rollup([]) == PRInfo.Checks.none)
     }
 
-    @Test func checksFailingRollup() async throws {
-        let fake = FakeCLIExecutor()
-        fake.stub(
-            command: "gh",
-            args: [
-                "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "open", "--limit", "1",
-                "--json", "number,title,url,state,headRefName"
-            ],
-            output: CLIOutput(stdout: loadFixture("gh-pr-open-passing"), stderr: "", exitCode: 0)
-        )
-        fake.stub(
-            command: "gh",
-            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
-            output: CLIOutput(stdout: loadFixture("gh-pr-checks-failing"), stderr: "", exitCode: 0)
-        )
-
-        let fetcher = GitHubPRFetcher(executor: fake, now: { Date() })
-        let pr = try await fetcher.fetch(origin: origin, branch: branch)
-        #expect(pr?.checks == .failure)
+    @Test func anyFailureWins() {
+        #expect(GitHubPRFetcher.rollup([
+            ("COMPLETED", "SUCCESS"),
+            ("COMPLETED", "FAILURE")
+        ]) == .failure)
     }
 
-    @Test func checksNoneRollup() async throws {
-        let fake = FakeCLIExecutor()
-        fake.stub(
-            command: "gh",
-            args: [
-                "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "open", "--limit", "1",
-                "--json", "number,title,url,state,headRefName"
-            ],
-            output: CLIOutput(stdout: loadFixture("gh-pr-open-passing"), stderr: "", exitCode: 0)
-        )
-        fake.stub(
-            command: "gh",
-            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
-            output: CLIOutput(stdout: loadFixture("gh-pr-checks-none"), stderr: "", exitCode: 0)
-        )
+    @Test func inProgressBeatsSuccess() {
+        #expect(GitHubPRFetcher.rollup([
+            ("COMPLETED", "SUCCESS"),
+            ("IN_PROGRESS", nil)
+        ]) == .pending)
+    }
 
-        let fetcher = GitHubPRFetcher(executor: fake, now: { Date() })
-        let pr = try await fetcher.fetch(origin: origin, branch: branch)
-        #expect(pr?.checks == PRInfo.Checks.none)
+    @Test func queuedIsPending() {
+        #expect(GitHubPRFetcher.rollup([("QUEUED", nil)]) == .pending)
+    }
+
+    @Test func allSuccessIsSuccess() {
+        #expect(GitHubPRFetcher.rollup([
+            ("COMPLETED", "SUCCESS"),
+            ("COMPLETED", "SUCCESS")
+        ]) == .success)
+    }
+
+    @Test func completedWithNullConclusionIsNone() {
+        // Neutral / skipped checks: COMPLETED but conclusion is null.
+        #expect(GitHubPRFetcher.rollup([
+            ("COMPLETED", "SUCCESS"),
+            ("COMPLETED", nil)
+        ]) == PRInfo.Checks.none)
     }
 }

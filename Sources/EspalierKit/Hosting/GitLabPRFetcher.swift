@@ -11,7 +11,7 @@ public struct GitLabPRFetcher: PRFetcher {
 
     public func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
         if let opened = try await fetchOne(origin: origin, branch: branch, state: "opened") {
-            let checks = try await fetchChecks(origin: origin, pipelineId: opened.head_pipeline?.id)
+            let checks = opened.head_pipeline.map { Self.mapStatus($0.status) } ?? .none
             return PRInfo(
                 number: opened.iid,
                 title: opened.title,
@@ -59,22 +59,13 @@ public struct GitLabPRFetcher: PRFetcher {
             "--per-page", "1",
             "-F", "json"
         ]
-        let output = try await executor.run(command: "glab", args: args, at: NSHomeDirectory())
+        let output = try await executor.run(command: "glab", args: args, at: NSTemporaryDirectory())
         let data = Data(output.stdout.utf8)
         let mrs = try JSONDecoder().decode([RawMR].self, from: data)
         return mrs.first
     }
 
-    private func fetchChecks(origin: HostingOrigin, pipelineId: Int?) async throws -> PRInfo.Checks {
-        guard let pipelineId else { return .none }
-        let args = ["ci", "get", "--repo", origin.slug, "--pipeline-id", String(pipelineId), "-F", "json"]
-        let output = try await executor.run(command: "glab", args: args, at: NSHomeDirectory())
-        let data = Data(output.stdout.utf8)
-        let pipeline = try JSONDecoder().decode(RawPipeline.self, from: data)
-        return Self.mapStatus(pipeline.status)
-    }
-
-    private static func mapStatus(_ status: String) -> PRInfo.Checks {
+    static func mapStatus(_ status: String) -> PRInfo.Checks {
         switch status.lowercased() {
         case "success": return .success
         case "failed", "canceled": return .failure
