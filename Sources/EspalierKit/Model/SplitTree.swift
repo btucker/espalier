@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 public enum SplitDirection: String, Codable, Sendable {
     case horizontal
@@ -167,6 +168,50 @@ public struct SplitTree: Codable, Sendable, Equatable {
     }
 }
 
+extension SplitTree {
+    public enum SplitTreeError: Error, Equatable {
+        case noMatchingAncestor
+    }
+
+    /// Resize the nearest ancestor split of `target` whose orientation matches
+    /// `direction`, by `pixels` against the given `ancestorBounds`.
+    ///
+    /// Ratio is clamped to [0.1, 0.9]; returned tree has `zoomed: nil`.
+    /// Throws `SplitTreeError.noMatchingAncestor` when no such ancestor
+    /// exists (matches upstream Ghostty's `BaseTerminalController.swift:715-717`).
+    public func resizing(
+        target: TerminalID,
+        direction: ResizeDirection,
+        pixels: UInt16,
+        ancestorBounds: CGRect
+    ) throws -> SplitTree {
+        guard let root else { throw SplitTreeError.noMatchingAncestor }
+        let orientation = direction.orientation
+        let axisSize = orientation == .horizontal ? ancestorBounds.width : ancestorBounds.height
+        guard axisSize > 0 else { throw SplitTreeError.noMatchingAncestor }
+        let delta = direction.sign * (Double(pixels) / Double(axisSize))
+        let newRoot = try root.resizingAncestor(
+            of: target,
+            orientation: orientation,
+            delta: delta
+        )
+        return SplitTree(root: newRoot, zoomed: nil)
+    }
+
+    /// The ratio of the innermost split containing `leaf`. Used by tests
+    /// and by the split-container view's resize call site.
+    public func ratioOfSplit(containing leaf: TerminalID) -> Double {
+        root?.ratioOfSplit(containing: leaf) ?? 0
+    }
+
+    /// The ratio of the outermost split (the root, if it's a split). Used
+    /// by tests. Returns 0 if the root is a leaf or nil.
+    public func ratioOfOutermostSplit() -> Double {
+        guard case let .split(s) = root else { return 0 }
+        return s.ratio
+    }
+}
+
 extension SplitTree.Node {
     public var leafCount: Int {
         switch self {
@@ -310,6 +355,52 @@ extension SplitTree.Node {
                 left: s.left.updatingRatio(for: target, ratio: ratio),
                 right: s.right.updatingRatio(for: target, ratio: ratio)
             ))
+        }
+    }
+
+    func resizingAncestor(
+        of leaf: TerminalID,
+        orientation: SplitDirection,
+        delta: Double
+    ) throws -> SplitTree.Node {
+        switch self {
+        case .leaf:
+            throw SplitTree.SplitTreeError.noMatchingAncestor
+        case .split(let split):
+            let leftContains = split.left.allLeaves.contains(leaf)
+            let rightContains = split.right.allLeaves.contains(leaf)
+            guard leftContains || rightContains else {
+                throw SplitTree.SplitTreeError.noMatchingAncestor
+            }
+
+            if split.direction == orientation {
+                // This is the nearest matching-orientation ancestor. Resize here.
+                let newRatio = min(0.9, max(0.1, split.ratio + delta))
+                return .split(split.withRatio(newRatio))
+            }
+
+            // Orientation doesn't match — recurse into the child that contains
+            // the leaf. If recursion throws (no matching ancestor found beneath),
+            // bubble the error up; caller sees noMatchingAncestor overall.
+            if leftContains {
+                let newLeft = try split.left.resizingAncestor(of: leaf, orientation: orientation, delta: delta)
+                return .split(SplitTree.Node.Split(direction: split.direction, ratio: split.ratio, left: newLeft, right: split.right))
+            } else {
+                let newRight = try split.right.resizingAncestor(of: leaf, orientation: orientation, delta: delta)
+                return .split(SplitTree.Node.Split(direction: split.direction, ratio: split.ratio, left: split.left, right: newRight))
+            }
+        }
+    }
+
+    func ratioOfSplit(containing leaf: TerminalID) -> Double {
+        switch self {
+        case .leaf:
+            return 0
+        case .split(let split):
+            if case .leaf(let id) = split.left, id == leaf { return split.ratio }
+            if case .leaf(let id) = split.right, id == leaf { return split.ratio }
+            // Recurse; only one branch contains the leaf, the other returns 0.
+            return split.left.ratioOfSplit(containing: leaf) + split.right.ratioOfSplit(containing: leaf)
         }
     }
 }
