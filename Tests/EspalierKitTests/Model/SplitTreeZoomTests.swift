@@ -65,4 +65,36 @@ struct SplitTreeZoomTests {
         let next = tree.removing(b)
         #expect(next.zoomed == a)
     }
+
+    @Test func togglingZoomOnSplitLeafZoomsThatLeaf() {
+        let a = TerminalID(); let b = TerminalID()
+        let tree = SplitTree(root: .leaf(a))
+            .inserting(b, at: a, direction: .horizontal)
+        let next = tree.togglingZoom(at: a)
+        #expect(next.zoomed == a)
+    }
+
+    @Test func togglingZoomOnCurrentlyZoomedLeafUnzooms() {
+        let a = TerminalID(); let b = TerminalID()
+        let tree = SplitTree(root: .leaf(a))
+            .inserting(b, at: a, direction: .horizontal)
+            .withZoom(a)
+        let next = tree.togglingZoom(at: a)
+        #expect(next.zoomed == nil)
+    }
+
+    @Test func togglingZoomOnLoneLeafIsNoOp() {
+        let a = TerminalID()
+        let tree = SplitTree(root: .leaf(a))
+        let next = tree.togglingZoom(at: a)
+        #expect(next.zoomed == nil)
+    }
+
+    @Test func togglingZoomOnUnknownLeafIsNoOp() {
+        let a = TerminalID(); let b = TerminalID(); let c = TerminalID()
+        let tree = SplitTree(root: .leaf(a))
+            .inserting(b, at: a, direction: .horizontal)
+        let next = tree.togglingZoom(at: c)
+        #expect(next.zoomed == nil)
+    }
 }

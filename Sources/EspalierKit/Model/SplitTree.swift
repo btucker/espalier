@@ -123,6 +123,17 @@ public struct SplitTree: Codable, Sendable, Equatable {
         SplitTree(root: root, zoomed: id)
     }
 
+    /// Toggle the zoomed state for `leaf`:
+    /// - If `leaf == zoomed`, unzooms (`zoomed: nil`).
+    /// - Else if the tree has more than one leaf AND contains `leaf`, zoom that leaf.
+    /// - Else (lone-leaf tree or unknown leaf), return self unchanged.
+    public func togglingZoom(at leaf: TerminalID) -> SplitTree {
+        guard allLeaves.contains(leaf), leafCount > 1 else {
+            return self
+        }
+        return SplitTree(root: root, zoomed: (zoomed == leaf) ? nil : leaf)
+    }
+
     /// The "breadcrumb" position of `terminalID` inside this tree — enough
     /// information to reinsert the leaf next to its former neighbor after
     /// it's been removed (e.g. when a pane moves back to a worktree it
