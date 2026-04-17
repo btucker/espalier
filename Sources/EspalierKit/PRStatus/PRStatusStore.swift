@@ -102,7 +102,7 @@ public final class PRStatusStore {
 
 extension PRStatusStore {
 
-    static func cadenceFor(
+    nonisolated static func cadenceFor(
         info: PRInfo?,
         isAbsent: Bool,
         failureStreak: Int
