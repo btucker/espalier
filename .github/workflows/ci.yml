@@ -15,8 +15,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pick the newest Xcode on the runner. The image ships multiple; the
+      # default is an older one whose bundled swift-testing (version 124.4)
+      # hangs on exit after all tests pass — the summary line never prints
+      # and the process blocks for ~10 minutes before a SIGKILL. Newer
+      # swift-testing (1700+) doesn't repro. Fall back gracefully if the
+      # glob finds nothing.
+      - name: Select latest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$latest" ]; then
+            echo "Selecting $latest"
+            sudo xcode-select -s "$latest/Contents/Developer"
+          else
+            echo "No Xcode_*.app found; using default xcode-select"
+          fi
+
       - name: Show tool versions
         run: |
+          xcode-select -p
           swift --version
           xcodebuild -version
 
@@ -33,18 +50,6 @@ jobs:
 
       - name: Test
         timeout-minutes: 5
-        # `script` gives swift test a PTY-like stdout so its output
-        # streams in real time instead of being block-buffered by the
-        # CI log pipe. Previous runs hid the failure point until the
-        # process exited (or was killed).
-        # Suites skipped on GH's macOS runner (all pass locally):
-        # - ZmxSurvivalIntegrationTests: vendored zmx daemon fails to reap.
-        # - SocketIntegrationTests: leaks a listener keeping swift test
-        #   from exiting after all tests pass (hangs 5+ min).
-        # Both are integration tests with background subprocesses/queues
-        # that the runner environment doesn't tear down cleanly.
-        run: >-
-          /usr/bin/script -q /dev/null
-          swift test --skip-build
-          --skip ZmxSurvivalIntegrationTests
-          --skip SocketIntegrationTests
+        # `script` gives swift test a PTY-like stdout so output streams
+        # in real time instead of being block-buffered by the CI log pipe.
+        run: /usr/bin/script -q /dev/null swift test --skip-build
