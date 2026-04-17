@@ -52,3 +52,35 @@ struct GitOriginHostParseTests {
         #expect(GitOriginHost.parse(remoteURL: "git://example.com/foo/bar.git") == nil)
     }
 }
+
+@Suite("GitOriginHost.detect")
+struct GitOriginHostDetectTests {
+    @Test func detectsGitHubOrigin() async throws {
+        let fake = FakeCLIExecutor()
+        fake.stub(
+            command: "git",
+            args: ["remote", "get-url", "origin"],
+            output: CLIOutput(stdout: "git@github.com:btucker/espalier.git\n", stderr: "", exitCode: 0)
+        )
+        GitRunner.configure(executor: fake)
+        defer { GitRunner.resetForTests() }
+
+        let origin = try await GitOriginHost.detect(repoPath: "/tmp/repo")
+        #expect(origin?.provider == .github)
+        #expect(origin?.slug == "btucker/espalier")
+    }
+
+    @Test func returnsNilWhenRemoteMissing() async throws {
+        let fake = FakeCLIExecutor()
+        fake.stub(
+            command: "git",
+            args: ["remote", "get-url", "origin"],
+            error: .nonZeroExit(command: "git", exitCode: 128, stderr: "no such remote")
+        )
+        GitRunner.configure(executor: fake)
+        defer { GitRunner.resetForTests() }
+
+        let origin = try await GitOriginHost.detect(repoPath: "/tmp/repo")
+        #expect(origin == nil)
+    }
+}

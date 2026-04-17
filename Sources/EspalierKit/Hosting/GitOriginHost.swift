@@ -65,3 +65,17 @@ public enum GitOriginHost {
         return HostingOrigin(provider: provider, host: host, owner: owner, repo: repo)
     }
 }
+
+extension GitOriginHost {
+    /// Resolves the repo's `origin` remote URL and parses it.
+    /// Returns nil if there's no origin remote or the URL is unparseable.
+    public static func detect(repoPath: String) async throws -> HostingOrigin? {
+        let output: String
+        do {
+            output = try await GitRunner.run(args: ["remote", "get-url", "origin"], at: repoPath)
+        } catch CLIError.nonZeroExit {
+            return nil
+        }
+        return parse(remoteURL: output)
+    }
+}
