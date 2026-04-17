@@ -47,6 +47,8 @@ final class SurfaceHandle {
         app: ghostty_app_t,
         worktreePath: String,
         socketPath: String,
+        zmxCommand: String? = nil,
+        zmxDir: String? = nil,
         terminalManager: TerminalManager? = nil
     ) {
         self.terminalID = terminalID
@@ -75,10 +77,25 @@ final class SurfaceHandle {
         let sockKey = strdup("ESPALIER_SOCK")
         let sockVal = strdup(socketPath)
 
+        // Optional: when ZmxLauncher is available, this is the full
+        // `zmx attach <session> $SHELL` invocation that libghostty will
+        // spawn instead of the default $SHELL. Nil means "fall back to
+        // libghostty's default shell spawn" (the pre-zmx behavior).
+        let cmdCStr: UnsafeMutablePointer<CChar>? = zmxCommand.flatMap { strdup($0) }
+
+        let zmxDirKey: UnsafeMutablePointer<CChar>? = zmxDir.flatMap { _ in strdup("ZMX_DIR") }
+        let zmxDirVal: UnsafeMutablePointer<CChar>? = zmxDir.flatMap { strdup($0) }
+        let envCount = zmxDir == nil ? 1 : 2
+
         // env_vars needs a stable pointer during ghostty_surface_new; libghostty
         // copies the contents before returning.
-        let envVarsPtr = UnsafeMutablePointer<ghostty_env_var_s>.allocate(capacity: 1)
+        let envVarsPtr = UnsafeMutablePointer<ghostty_env_var_s>.allocate(capacity: envCount)
         envVarsPtr.initialize(to: ghostty_env_var_s(key: sockKey, value: sockVal))
+        if let zmxDirKey, let zmxDirVal {
+            envVarsPtr.advanced(by: 1).initialize(
+                to: ghostty_env_var_s(key: zmxDirKey, value: zmxDirVal)
+            )
+        }
 
         var config = ghostty_surface_config_new()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -86,17 +103,23 @@ final class SurfaceHandle {
         config.userdata = userdataPtr
         config.scale_factor = Double(NSScreen.main?.backingScaleFactor ?? 2.0)
         config.working_directory = UnsafePointer(cwdCStr)
+        if let cmdCStr {
+            config.command = UnsafePointer(cmdCStr)
+        }
         config.env_vars = envVarsPtr
-        config.env_var_count = 1
+        config.env_var_count = envCount
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
 
         guard let newSurface = ghostty_surface_new(app, &config) else {
             // Free everything we allocated, then fail. `self` is not yet fully initialized.
-            envVarsPtr.deinitialize(count: 1)
+            envVarsPtr.deinitialize(count: envCount)
             envVarsPtr.deallocate()
             free(cwdCStr)
             free(sockKey)
             free(sockVal)
+            if let cmdCStr { free(cmdCStr) }
+            if let zmxDirKey { free(zmxDirKey) }
+            if let zmxDirVal { free(zmxDirVal) }
             Unmanaged<SurfaceUserdataBox>.fromOpaque(userdataPtr).release()
             fatalError("ghostty_surface_new returned null")
         }
@@ -117,11 +140,14 @@ final class SurfaceHandle {
         // dictionary by terminalID.
 
         // Free the C strings now that libghostty has copied them internally.
-        envVarsPtr.deinitialize(count: 1)
+        envVarsPtr.deinitialize(count: envCount)
         envVarsPtr.deallocate()
         free(cwdCStr)
         free(sockKey)
         free(sockVal)
+        if let cmdCStr { free(cmdCStr) }
+        if let zmxDirKey { free(zmxDirKey) }
+        if let zmxDirVal { free(zmxDirVal) }
     }
 
     deinit {

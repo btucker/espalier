@@ -119,6 +119,24 @@ struct EspalierApp: App {
     }
 
     private func startup() {
+        let zmxBinary = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/zmx")
+        let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let zmxDir = appSupport
+            .appendingPathComponent("Espalier", isDirectory: true)
+            .appendingPathComponent("zmx", isDirectory: true)
+        try? FileManager.default.createDirectory(at: zmxDir, withIntermediateDirectories: true)
+        let zmxLauncher = ZmxLauncher(executable: zmxBinary, zmxDir: zmxDir)
+        terminalManager.zmxLauncher = zmxLauncher
+
+        if !zmxLauncher.isAvailable {
+            DispatchQueue.main.async {
+                ZmxFallbackBanner.presentIfNeeded()
+            }
+        }
+
         terminalManager.initialize()
 
         // Route context-menu split requests through the same insertion code

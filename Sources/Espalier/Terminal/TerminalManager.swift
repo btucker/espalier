@@ -36,6 +36,12 @@ final class TerminalManager: ObservableObject {
     private var surfaces: [TerminalID: SurfaceHandle] = [:]
     private var wakeupObserver: NSObjectProtocol?
 
+    /// Set by `EspalierApp` at startup. When non-nil and `isAvailable`,
+    /// every new surface spawns `zmx attach <session> $SHELL` so the
+    /// session survives Espalier quits. When nil or unavailable, surfaces
+    /// fall back to libghostty's default $SHELL spawn.
+    var zmxLauncher: ZmxLauncher?
+
     /// Theme colors pulled from the ghostty config (background, foreground).
     /// Emitted post-`initialize()` once the config is read; defaults to
     /// `.fallback` before that so views have something to render with.
@@ -177,11 +183,14 @@ final class TerminalManager: ObservableObject {
 
         var created: [TerminalID: SurfaceHandle] = [:]
         for terminalID in splitTree.allLeaves where surfaces[terminalID] == nil {
+            let (zmxCommand, zmxDir) = resolveZmxSpawn(for: terminalID)
             let handle = SurfaceHandle(
                 terminalID: terminalID,
                 app: app,
                 worktreePath: worktreePath,
                 socketPath: socketPath,
+                zmxCommand: zmxCommand,
+                zmxDir: zmxDir,
                 terminalManager: self
             )
             surfaces[terminalID] = handle
@@ -200,11 +209,14 @@ final class TerminalManager: ObservableObject {
             return existing
         }
 
+        let (zmxCommand, zmxDir) = resolveZmxSpawn(for: terminalID)
         let handle = SurfaceHandle(
             terminalID: terminalID,
             app: app,
             worktreePath: worktreePath,
             socketPath: socketPath,
+            zmxCommand: zmxCommand,
+            zmxDir: zmxDir,
             terminalManager: self
         )
         surfaces[terminalID] = handle
@@ -240,6 +252,7 @@ final class TerminalManager: ObservableObject {
             surfaces[id]?.requestClose()
             surfaces.removeValue(forKey: id)
             titles.removeValue(forKey: id)
+            killZmxSession(for: id)
         }
     }
 
@@ -247,6 +260,31 @@ final class TerminalManager: ObservableObject {
         surfaces[terminalID]?.requestClose()
         surfaces.removeValue(forKey: terminalID)
         titles.removeValue(forKey: terminalID)
+        killZmxSession(for: terminalID)
+    }
+
+    /// Resolve the per-surface zmx spawn parameters for a terminal pane.
+    /// Returns (nil, nil) when no launcher is configured or the binary is
+    /// missing — in which case `SurfaceHandle` falls back to libghostty's
+    /// default `$SHELL` spawn (existing pre-zmx behavior).
+    private func resolveZmxSpawn(for terminalID: TerminalID) -> (command: String?, dir: String?) {
+        guard let launcher = zmxLauncher, launcher.isAvailable else {
+            return (nil, nil)
+        }
+        let session = launcher.sessionName(for: terminalID.id)
+        return (launcher.attachCommand(sessionName: session), launcher.zmxDir.path)
+    }
+
+    /// Fire-off the `zmx kill` for a terminal's session. Dispatched off
+    /// the main thread because subprocess wait can take tens of ms; we
+    /// don't want to block UI. Result is intentionally ignored — kill of
+    /// an already-gone session is the success outcome.
+    private func killZmxSession(for terminalID: TerminalID) {
+        guard let launcher = zmxLauncher, launcher.isAvailable else { return }
+        let name = launcher.sessionName(for: terminalID.id)
+        DispatchQueue.global(qos: .utility).async {
+            launcher.kill(sessionName: name)
+        }
     }
 
     /// If `GHOSTTY_RESOURCES_DIR` isn't already set and Ghostty.app is
