@@ -589,3 +589,35 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 ### 15.7 Cross-references to §13
 
 The web access path uses Phase 1's session-naming and sandbox requirements unchanged. See §13.2 (session naming), §13.3 (`ZMX_DIR` sandbox), §13.4 (lifecycle mapping), and §13.6 (pass-through guarantees).
+
+## 16. Keyboard Shortcuts
+
+**KBD-1.1** When the user presses a chord bound in their Ghostty config
+to an apprt action Espalier supports, the application shall dispatch
+that action.
+
+**KBD-1.2** When the user's Ghostty config omits a binding for an action,
+the corresponding Espalier menu item shall render without a shortcut hint
+but remain clickable.
+
+**KBD-2.1** When the user presses `toggle_split_zoom` on a focused pane
+inside a split tree, the application shall render only that pane and
+keep all surfaces alive at their current size.
+
+**KBD-2.2** When the user presses `toggle_split_zoom` on a lone pane
+(tree has no siblings), the application shall no-op.
+
+**KBD-2.3** When the user presses a `goto_split:*` chord while a pane is
+zoomed and `split-preserve-zoom` does not include `navigation`, the
+application shall unzoom before navigating.
+
+**KBD-3.1** When the user presses a `resize_split:<direction>` chord,
+the application shall walk up from the focused leaf to the nearest
+split ancestor with matching orientation and adjust its ratio by
+`amount` pixels, clamped to [0.1, 0.9].
+
+**KBD-3.2** When no matching-orientation ancestor exists, the
+application shall log at debug and no-op.
+
+**KBD-4.1** When `reload_config` fires, the application shall rebuild
+its Ghostty-config-derived menu shortcuts without requiring a restart.
