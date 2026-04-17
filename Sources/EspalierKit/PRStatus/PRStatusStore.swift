@@ -129,8 +129,13 @@ extension PRStatusStore {
             base = .zero
         }
         if failureStreak == 0 { return base }
+        // A fetch failed before we learned whether a PR exists (unknown
+        // state, base == 0). Floor at 60s so the back-off has something to
+        // multiply — otherwise the poller would retry every tick against a
+        // broken CLI (e.g. `gh` not installed).
+        let floored: Duration = base == .zero ? .seconds(60) : base
         let multiplier = 1 << min(failureStreak, 5)
-        let multiplied = base * Int(multiplier)
+        let multiplied = floored * Int(multiplier)
         let cap: Duration = .seconds(30 * 60)
         return multiplied > cap ? cap : multiplied
     }

@@ -50,4 +50,18 @@ struct PRStatusStoreCadenceTests {
         let d = PRStatusStore.cadenceFor(info: info, isAbsent: false, failureStreak: 20)
         #expect(d == .seconds(30 * 60))
     }
+
+    /// When a fetch fails before the store knows whether a PR exists (e.g.
+    /// `gh` not installed), the worktree stays `info: nil, isAbsent: false`
+    /// but its failureStreak grows. The cadence must NOT be zero in that
+    /// state — otherwise the poller hammers a broken CLI every tick.
+    @Test func unknownWithFailureStreakBacksOff() {
+        let d1 = PRStatusStore.cadenceFor(info: nil, isAbsent: false, failureStreak: 1)
+        #expect(d1 >= .seconds(60))
+        let d3 = PRStatusStore.cadenceFor(info: nil, isAbsent: false, failureStreak: 3)
+        #expect(d3 >= .seconds(60))
+        // And eventually caps like any other back-off path.
+        let dMany = PRStatusStore.cadenceFor(info: nil, isAbsent: false, failureStreak: 20)
+        #expect(dMany == .seconds(30 * 60))
+    }
 }
