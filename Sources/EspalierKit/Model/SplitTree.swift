@@ -8,8 +8,27 @@ public enum SplitDirection: String, Codable, Sendable {
 public struct SplitTree: Codable, Sendable, Equatable {
     public let root: Node?
 
-    public init(root: Node?) {
+    /// The terminal ID of the pane currently in "zoomed" state, if any.
+    ///
+    /// When a pane is zoomed, only it is rendered and visible; all sibling
+    /// panes are hidden but remain alive in the tree. The surfaces are
+    /// not torn down during zoom/unzoom — SwiftUI simply chooses which to
+    /// mount.
+    ///
+    /// **Invariants** (ported from upstream Ghostty `SplitTree.swift:9-11`):
+    /// - `inserting(newLeaf:at:direction:)` always returns with `zoomed: nil`.
+    ///   Splitting from a zoomed state unzooms.
+    /// - `removing(target:)` returns with `zoomed = (zoomed == target) ? nil : zoomed`.
+    ///   Closing the zoomed pane auto-unzooms; closing a sibling preserves zoom.
+    /// - `resizing(...)` (a future task) always returns with `zoomed: nil`.
+    ///
+    /// These invariants are enforced by Tasks 2 and 3 (mutation implementations).
+    /// This task adds the field and documents the invariants only.
+    public let zoomed: TerminalID?
+
+    public init(root: Node?, zoomed: TerminalID? = nil) {
         self.root = root
+        self.zoomed = zoomed
     }
 
     public indirect enum Node: Codable, Sendable, Equatable {
@@ -62,7 +81,7 @@ public struct SplitTree: Codable, Sendable, Equatable {
 
     public func inserting(_ newLeaf: TerminalID, at target: TerminalID, direction: SplitDirection) -> SplitTree {
         guard let root else { return self }
-        return SplitTree(root: root.inserting(newLeaf, at: target, direction: direction))
+        return SplitTree(root: root.inserting(newLeaf, at: target, direction: direction), zoomed: nil)
     }
 
     /// Like `inserting`, but the new leaf becomes the *left/top* child rather
@@ -70,17 +89,18 @@ public struct SplitTree: Codable, Sendable, Equatable {
     /// context menu — same split, opposite placement.
     public func insertingBefore(_ newLeaf: TerminalID, at target: TerminalID, direction: SplitDirection) -> SplitTree {
         guard let root else { return self }
-        return SplitTree(root: root.insertingBefore(newLeaf, at: target, direction: direction))
+        return SplitTree(root: root.insertingBefore(newLeaf, at: target, direction: direction), zoomed: nil)
     }
 
     public func removing(_ target: TerminalID) -> SplitTree {
         guard let root else { return self }
-        return SplitTree(root: root.removing(target))
+        let newZoomed = (zoomed == target) ? nil : zoomed
+        return SplitTree(root: root.removing(target), zoomed: newZoomed)
     }
 
     public func updatingRatio(for target: TerminalID, ratio: Double) -> SplitTree {
         guard let root else { return self }
-        return SplitTree(root: root.updatingRatio(for: target, ratio: ratio))
+        return SplitTree(root: root.updatingRatio(for: target, ratio: ratio), zoomed: zoomed)
     }
 
     /// Update the ratio of the split whose *left subtree* has `leftAnchor`
@@ -94,7 +114,7 @@ public struct SplitTree: Codable, Sendable, Equatable {
         ratio: Double
     ) -> SplitTree {
         guard let root else { return self }
-        return SplitTree(root: root.updatingRatio(leftAnchor: leftAnchor, direction: direction, ratio: ratio))
+        return SplitTree(root: root.updatingRatio(leftAnchor: leftAnchor, direction: direction, ratio: ratio), zoomed: zoomed)
     }
 
     /// The "breadcrumb" position of `terminalID` inside this tree — enough
