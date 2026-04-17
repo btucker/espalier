@@ -11,6 +11,7 @@ public final class PRStatusStore {
 
     @ObservationIgnored private let executor: CLIExecutor
     @ObservationIgnored private let fetcherFor: (HostingProvider) -> PRFetcher?
+    @ObservationIgnored private let detectHost: @Sendable (String) async -> HostingOrigin?
     @ObservationIgnored private var hostByRepo: [String: HostingOrigin?] = [:]
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var lastFetch: [String: Date] = [:]
@@ -21,7 +22,8 @@ public final class PRStatusStore {
 
     public init(
         executor: CLIExecutor = CLIRunner(),
-        fetcherFor: ((HostingProvider) -> PRFetcher?)? = nil
+        fetcherFor: ((HostingProvider) -> PRFetcher?)? = nil,
+        detectHost: (@Sendable (String) async -> HostingOrigin?)? = nil
     ) {
         self.executor = executor
         if let fetcherFor {
@@ -34,6 +36,13 @@ public final class PRStatusStore {
                 case .gitlab: return GitLabPRFetcher(executor: cap)
                 case .unsupported: return nil
                 }
+            }
+        }
+        if let detectHost {
+            self.detectHost = detectHost
+        } else {
+            self.detectHost = { repoPath in
+                (try? await GitOriginHost.detect(repoPath: repoPath)) ?? nil
             }
         }
     }
@@ -70,7 +79,7 @@ public final class PRStatusStore {
         if let cached = hostByRepo[repoPath] {
             origin = cached
         } else {
-            origin = (try? await GitOriginHost.detect(repoPath: repoPath)) ?? nil
+            origin = await detectHost(repoPath)
             hostByRepo[repoPath] = origin
         }
         guard let origin, origin.provider != .unsupported,
