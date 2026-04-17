@@ -41,3 +41,72 @@ extension NotificationMessage: Codable {
         }
     }
 }
+
+/// Wire-level representation of a four-way pane split direction. Mirrors
+/// the app-layer `PaneSplit` enum, but lives in EspalierKit so the CLI can
+/// encode/decode it without importing app-layer code.
+public enum PaneSplitWire: String, Codable, Sendable {
+    case right, left, up, down
+}
+
+/// One row in the response to a `listPanes` request. `id` is the 1-based
+/// pane number within the worktree's split tree (see design spec). `title`
+/// is the pane's OSC-0/OSC-2-reported title if any, otherwise nil.
+public struct PaneInfo: Codable, Sendable, Equatable {
+    public let id: Int
+    public let title: String?
+    public let focused: Bool
+
+    public init(id: Int, title: String?, focused: Bool) {
+        self.id = id
+        self.title = title
+        self.focused = focused
+    }
+}
+
+/// Reply sent from the app back to the CLI after a request-style
+/// `NotificationMessage`. `ok` covers successful fire-and-forget commands;
+/// `error` carries a human-readable message printed to the CLI's stderr;
+/// `paneList` is the response to `listPanes`.
+public enum ResponseMessage: Sendable, Equatable {
+    case ok
+    case error(String)
+    case paneList([PaneInfo])
+}
+
+extension ResponseMessage: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, message, panes
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .ok:
+            try container.encode("ok", forKey: .type)
+        case .error(let message):
+            try container.encode("error", forKey: .type)
+            try container.encode(message, forKey: .message)
+        case .paneList(let panes):
+            try container.encode("pane_list", forKey: .type)
+            try container.encode(panes, forKey: .panes)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "ok":
+            self = .ok
+        case "error":
+            let msg = try container.decode(String.self, forKey: .message)
+            self = .error(msg)
+        case "pane_list":
+            let panes = try container.decode([PaneInfo].self, forKey: .panes)
+            self = .paneList(panes)
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: [CodingKeys.type], debugDescription: "Unknown response type: \(type)"))
+        }
+    }
+}
