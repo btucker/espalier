@@ -4,18 +4,18 @@ import Foundation
 
 @Suite("Pane Message Types")
 struct PaneMessageTests {
-    @Test func paneSplitWireEncodesAsString() throws {
+    @Test func paneSplitEncodesAsString() throws {
         let encoder = JSONEncoder()
-        #expect(String(data: try encoder.encode(PaneSplitWire.right), encoding: .utf8) == "\"right\"")
-        #expect(String(data: try encoder.encode(PaneSplitWire.left), encoding: .utf8) == "\"left\"")
-        #expect(String(data: try encoder.encode(PaneSplitWire.up), encoding: .utf8) == "\"up\"")
-        #expect(String(data: try encoder.encode(PaneSplitWire.down), encoding: .utf8) == "\"down\"")
+        #expect(String(data: try encoder.encode(PaneSplit.right), encoding: .utf8) == "\"right\"")
+        #expect(String(data: try encoder.encode(PaneSplit.left), encoding: .utf8) == "\"left\"")
+        #expect(String(data: try encoder.encode(PaneSplit.up), encoding: .utf8) == "\"up\"")
+        #expect(String(data: try encoder.encode(PaneSplit.down), encoding: .utf8) == "\"down\"")
     }
 
-    @Test func paneSplitWireDecodesFromString() throws {
+    @Test func paneSplitDecodesFromString() throws {
         let decoder = JSONDecoder()
-        #expect(try decoder.decode(PaneSplitWire.self, from: "\"right\"".data(using: .utf8)!) == .right)
-        #expect(try decoder.decode(PaneSplitWire.self, from: "\"down\"".data(using: .utf8)!) == .down)
+        #expect(try decoder.decode(PaneSplit.self, from: "\"right\"".data(using: .utf8)!) == .right)
+        #expect(try decoder.decode(PaneSplit.self, from: "\"down\"".data(using: .utf8)!) == .down)
     }
 
     @Test func paneInfoRoundTrip() throws {

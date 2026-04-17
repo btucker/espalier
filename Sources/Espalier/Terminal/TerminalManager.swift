@@ -3,15 +3,6 @@ import GhosttyKit
 import EspalierKit
 @preconcurrency import UserNotifications
 
-/// Four-way pane split request — carries enough information for the host to
-/// pick both the `SplitDirection` (horizontal/vertical) and the placement
-/// (new pane before or after the target). The context menu emits these;
-/// `EspalierApp` translates them into `SplitTree.inserting(_:…)` /
-/// `insertingBefore(_:…)` calls.
-enum PaneSplit {
-    case right, left, down, up
-}
-
 /// Compound key identifying "this terminal's most recent position inside
 /// this worktree." Used by `TerminalManager` to remember where a pane was
 /// so it can be restored if the pane returns.
