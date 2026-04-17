@@ -8,11 +8,13 @@ import EspalierKit
 final class AppServices {
     let socketServer: SocketServer
     let worktreeMonitor: WorktreeMonitor
+    let statsStore: WorktreeStatsStore
     var worktreeMonitorBridge: WorktreeMonitorBridge?
 
     init(socketPath: String) {
         self.socketServer = SocketServer(socketPath: socketPath)
         self.worktreeMonitor = WorktreeMonitor()
+        self.statsStore = WorktreeStatsStore()
     }
 }
 
@@ -202,7 +204,10 @@ struct EspalierApp: App {
             }
         }
 
-        let bridge = WorktreeMonitorBridge(appState: $appState)
+        let bridge = WorktreeMonitorBridge(
+            appState: $appState,
+            statsStore: services.statsStore
+        )
         services.worktreeMonitorBridge = bridge
         services.worktreeMonitor.delegate = bridge
         for repo in appState.repos {
@@ -214,6 +219,11 @@ struct EspalierApp: App {
         }
 
         reconcileOnLaunch()
+        for repo in appState.repos {
+            for wt in repo.worktrees where wt.state != .stale {
+                services.statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
+            }
+        }
         restoreRunningWorktrees()
     }
 
@@ -685,13 +695,21 @@ struct EspalierApp: App {
 @MainActor
 final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     let appState: Binding<AppState>
+    let statsStore: WorktreeStatsStore
 
-    init(appState: Binding<AppState>) {
+    init(appState: Binding<AppState>, statsStore: WorktreeStatsStore) {
         self.appState = appState
+        self.statsStore = statsStore
     }
 
+    /// Called when `.git/worktrees/` changes (new worktree added, existing
+    /// one removed externally). After reconciling appState, refresh stats
+    /// for every non-stale worktree in the repo — new worktrees need their
+    /// initial stats, removed ones will be marked stale (and stats cleared
+    /// by `worktreeMonitorDidDetectDeletion`).
     nonisolated func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             guard let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
@@ -711,11 +729,17 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
                 }
             }
+
+            // Refresh stats for all non-stale worktrees in this repo.
+            for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                store.refresh(worktreePath: wt.path, repoPath: repoPath)
+            }
         }
     }
 
     nonisolated func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
@@ -724,11 +748,13 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     }
                 }
             }
+            store.clear(worktreePath: worktreePath)
         }
     }
 
     nonisolated func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
@@ -737,6 +763,8 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     if binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path == worktreePath,
                        let match = discovered.first(where: { $0.path == worktreePath }) {
                         binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+                        // HEAD moved — recompute stats for this worktree.
+                        store.refresh(worktreePath: worktreePath, repoPath: repoPath)
                     }
                 }
             }
