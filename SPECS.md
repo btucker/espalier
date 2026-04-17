@@ -64,15 +64,19 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 2.2 Attention Overlay
 
-**STATE-2.1** A worktree entry in any state may additionally have an attention overlay.
+**STATE-2.1** A worktree entry in any state may additionally have a worktree-scoped attention overlay, and each of its panes may additionally have a pane-scoped attention overlay keyed by pane. Worktree-scoped overlays are driven by the CLI (`ATTN-1.x`); pane-scoped overlays are driven by per-pane shell-integration events (`NOTIF-2.x`).
 
-**STATE-2.2** While a worktree entry has an attention overlay and one or more pane rows are visible beneath it, the sidebar shall replace each pane row's title text with the attention text rendered in a red capsule. Non-running worktrees (no pane rows) display no attention indicator.
+**STATE-2.2** While a pane row has a pane-scoped attention overlay, the sidebar shall replace *that pane's* title text with the overlay's text rendered in a red capsule. Sibling pane rows are unaffected.
 
-**STATE-2.3** When the user clicks a worktree entry that has an attention overlay, the application shall clear the attention overlay.
+**STATE-2.3** While a worktree entry has a worktree-scoped attention overlay, the sidebar shall render its text in a red capsule on every pane row beneath the worktree that does not already have a pane-scoped overlay. Non-running worktrees (no pane rows) display no attention indicator.
 
-**STATE-2.4** When the CLI sends a clear message for a worktree, the application shall clear the attention overlay.
+**STATE-2.4** When the user clicks a worktree entry that has any attention overlay (worktree-scoped or pane-scoped on any of its panes), the application shall clear all attention overlays on that worktree.
 
-**STATE-2.5** When an attention overlay was set with an auto-clear duration, the application shall clear the attention overlay after that duration elapses.
+**STATE-2.5** When the CLI sends a clear message for a worktree, the application shall clear the worktree-scoped attention overlay. Pane-scoped overlays are not affected by CLI clear messages; they auto-clear on their own timers.
+
+**STATE-2.6** When an attention overlay was set with an auto-clear duration, the application shall clear that overlay after the duration elapses. Pane-scoped overlay timers are independent per pane.
+
+**STATE-2.7** When a pane is removed from a worktree (user close, shell exit, or migration to a different worktree via `PWD-x.x`), the application shall drop that pane's pane-scoped attention entry from the source worktree.
 
 ## 3. Terminal Lifecycle
 
@@ -356,11 +360,11 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 9.2 Attention Badge Auto-Population
 
-**NOTIF-2.1** When libghostty fires `COMMAND_FINISHED` with a zero exit code, the application shall set the owning worktree's attention overlay to a checkmark indicator that auto-clears after 3 seconds.
+**NOTIF-2.1** When libghostty fires `COMMAND_FINISHED` with a zero exit code on a pane, the application shall set *that pane's* pane-scoped attention overlay to a checkmark indicator that auto-clears after 3 seconds. Sibling panes in the same worktree are unaffected.
 
-**NOTIF-2.2** When libghostty fires `COMMAND_FINISHED` with a non-zero exit code, the application shall set the owning worktree's attention overlay to an error indicator that auto-clears after 8 seconds.
+**NOTIF-2.2** When libghostty fires `COMMAND_FINISHED` with a non-zero exit code on a pane, the application shall set *that pane's* pane-scoped attention overlay to an error indicator that auto-clears after 8 seconds. Sibling panes in the same worktree are unaffected.
 
-**NOTIF-2.3** Auto-populated attention badges from shell-integration events shall share the existing clearing semantics defined in STATE-2.x; a subsequent event on the same worktree replaces the previous badge.
+**NOTIF-2.3** Auto-populated attention overlays from shell-integration events shall share the clearing semantics defined in STATE-2.x; a subsequent event on the same pane replaces that pane's previous overlay without affecting sibling panes' overlays.
 
 ## 10. Shell Integration Configuration
 

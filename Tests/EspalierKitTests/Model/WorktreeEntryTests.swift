@@ -47,6 +47,68 @@ struct WorktreeEntryTests {
         #expect(attn.clearAfter == 10)
     }
 
+    // MARK: paneAttention
+    //
+    // Per-pane attention badges are distinct from the worktree-level
+    // `attention` slot. Shell-integration events (command-finished) are
+    // emitted by a specific pane and must land on that pane's row only;
+    // CLI `espalier notify` is worktree-targeted and stays on the
+    // worktree-level slot. Pane rows render pane-level when present and
+    // fall back to worktree-level otherwise — so both code paths keep
+    // working without stepping on each other.
+
+    @Test func paneAttentionDefaultsToEmpty() {
+        let entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        #expect(entry.paneAttention.isEmpty)
+    }
+
+    @Test func settingOnePaneDoesNotAffectOtherPanesOrWorktreeSlot() {
+        // The reported bug in plain model form: two panes in one
+        // worktree, a command-finished ping lands on pane A, and pane B
+        // plus the worktree-level `attention` slot must stay untouched.
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let paneA = TerminalID()
+        let paneB = TerminalID()
+        entry.paneAttention[paneA] = Attention(text: "✓", timestamp: Date(), clearAfter: 3)
+        #expect(entry.paneAttention[paneA]?.text == "✓")
+        #expect(entry.paneAttention[paneB] == nil)
+        #expect(entry.attention == nil)
+    }
+
+    @Test func paneAttentionCodableRoundTrip() throws {
+        // Per-pane attention is ephemeral (auto-clears in 3–8s) but we
+        // round-trip through Codable anyway so it travels with the rest
+        // of AppState's persisted shape without special-casing.
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let paneA = TerminalID()
+        entry.paneAttention[paneA] = Attention(text: "!", timestamp: Date(), clearAfter: 8)
+
+        let data = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(WorktreeEntry.self, from: data)
+        #expect(decoded.paneAttention[paneA]?.text == "!")
+    }
+
+    @Test func decodesLegacyStateWithoutPaneAttentionField() throws {
+        // Existing users have WorktreeEntry blobs on disk from pre-fix
+        // releases that don't have the `paneAttention` key. Decode must
+        // tolerate the missing field rather than wiping the whole saved
+        // tree — we default it to empty and move on.
+        let legacyJSON = """
+        {
+          "id": "\(UUID().uuidString)",
+          "path": "/tmp/worktree",
+          "branch": "main",
+          "state": "closed",
+          "splitTree": {"root": null}
+        }
+        """
+        let data = Data(legacyJSON.utf8)
+        let decoded = try JSONDecoder().decode(WorktreeEntry.self, from: data)
+        #expect(decoded.paneAttention.isEmpty)
+        #expect(decoded.attention == nil)
+        #expect(decoded.path == "/tmp/worktree")
+    }
+
     @Test func splitTreeDefaultsToNil() {
         let entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
         #expect(entry.splitTree.root == nil)

@@ -244,7 +244,13 @@ struct MainWindow: View {
         for repoIdx in appState.repos.indices {
             for wtIdx in appState.repos[repoIdx].worktrees.indices {
                 if appState.repos[repoIdx].worktrees[wtIdx].path == path {
+                    // Clicking a worktree dismisses both levels of
+                    // attention — worktree-level (CLI notify) and any
+                    // outstanding per-pane badges from shell integration
+                    // — so the user sees a clean slate once they're
+                    // looking at the worktree.
                     appState.repos[repoIdx].worktrees[wtIdx].attention = nil
+                    appState.repos[repoIdx].worktrees[wtIdx].paneAttention.removeAll()
                 }
             }
         }

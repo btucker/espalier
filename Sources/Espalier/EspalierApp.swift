@@ -665,9 +665,14 @@ struct EspalierApp: App {
         }
     }
 
-    /// Find the worktree that owns `terminalID` and set its attention
-    /// badge. No-op if the terminal isn't in any worktree (e.g., because
-    /// it was just destroyed). Auto-clears after `clearAfter` seconds.
+    /// Find the worktree that owns `terminalID` and set the attention
+    /// badge on *that specific pane*. The shell-integration event that
+    /// drives this callback (`COMMAND_FINISHED`) is emitted by one
+    /// concrete pane, so the badge belongs on its row and nobody else's —
+    /// writing to the worktree-level `attention` slot would light up
+    /// every sibling pane in the sidebar. No-op if the terminal isn't
+    /// in any worktree (e.g., it was just destroyed). Auto-clears after
+    /// `clearAfter` seconds.
     @MainActor
     fileprivate static func setAttentionForTerminal(
         appState: Binding<AppState>,
@@ -679,17 +684,19 @@ struct EspalierApp: App {
             for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
                 if appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
                     .splitTree.allLeaves.contains(terminalID) {
-                    appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].attention = Attention(
-                        text: text,
-                        timestamp: Date(),
-                        clearAfter: clearAfter
-                    )
+                    appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
+                        .paneAttention[terminalID] = Attention(
+                            text: text,
+                            timestamp: Date(),
+                            clearAfter: clearAfter
+                        )
                     let path = appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].path
                     DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) {
                         for ri in appState.wrappedValue.repos.indices {
                             for wi in appState.wrappedValue.repos[ri].worktrees.indices {
                                 if appState.wrappedValue.repos[ri].worktrees[wi].path == path {
-                                    appState.wrappedValue.repos[ri].worktrees[wi].attention = nil
+                                    appState.wrappedValue.repos[ri].worktrees[wi]
+                                        .paneAttention[terminalID] = nil
                                 }
                             }
                         }
@@ -765,6 +772,11 @@ struct EspalierApp: App {
         // panes live there anymore.
         let sourceTree = sourceWt.splitTree.removing(terminalID)
         appState.wrappedValue.repos[currentRepoIdx].worktrees[currentWorktreeIdx].splitTree = sourceTree
+        // Drop any pane-scoped attention badge attached to the moving
+        // pane. The ping was tied to the source-worktree context; the
+        // target worktree has its own separate attention state.
+        appState.wrappedValue.repos[currentRepoIdx].worktrees[currentWorktreeIdx]
+            .paneAttention[terminalID] = nil
         if sourceTree.root == nil {
             appState.wrappedValue.repos[currentRepoIdx].worktrees[currentWorktreeIdx].state = .closed
             appState.wrappedValue.repos[currentRepoIdx].worktrees[currentWorktreeIdx].focusedTerminalID = nil
@@ -845,6 +857,10 @@ struct EspalierApp: App {
                 terminalManager.destroySurface(terminalID: targetID)
                 let newTree = wt.splitTree.removing(targetID)
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = newTree
+                // Drop any lingering per-pane attention so a destroyed
+                // terminal doesn't leak a badge entry into the model.
+                appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
+                    .paneAttention[targetID] = nil
 
                 if newTree.root == nil {
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
