@@ -30,6 +30,7 @@ struct MainWindow: View {
                 onAddRepo: addRepository,
                 onAddPath: addPath,
                 onStopWorktree: stopWorktreeWithConfirmation,
+                onDeleteWorktree: deleteWorktreeWithConfirmation,
                 onAddWorktree: addWorktree
             )
             .navigationSplitViewColumnWidth(
@@ -323,6 +324,58 @@ struct MainWindow: View {
             alert.alertStyle = .warning
             alert.runModal()
         }
+    }
+
+    /// Prompts for confirmation, tears down any running terminals, and
+    /// shells to `git worktree remove`. The branch the worktree had
+    /// checked out is left intact — that's the contract the confirmation
+    /// dialog promises the user. On success, the entry is removed from
+    /// `appState` synchronously; the FSEvents watcher will also fire
+    /// `worktreeMonitorDidDetectDeletion` shortly after, but its update
+    /// is idempotent so the eventual callback is harmless.
+    private func deleteWorktreeWithConfirmation(_ worktreePath: String) {
+        guard let repoIdx = appState.repos.firstIndex(where: { repo in
+            repo.worktrees.contains { $0.path == worktreePath }
+        }) else { return }
+        guard let wtIdx = appState.repos[repoIdx].worktrees.firstIndex(where: {
+            $0.path == worktreePath
+        }) else { return }
+
+        let wt = appState.repos[repoIdx].worktrees[wtIdx]
+        let repoPath = appState.repos[repoIdx].path
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Worktree?"
+        alert.informativeText = "This will delete the worktree but not the branch."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete Worktree")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Run git first so a refusal (e.g. dirty worktree) leaves the
+        // running terminals intact — tearing them down before we know
+        // whether the delete will succeed would leave the user with a
+        // visible worktree and dead panes.
+        do {
+            try GitWorktreeRemove.remove(repoPath: repoPath, worktreePath: worktreePath)
+        } catch GitWorktreeRemove.Error.gitFailed(_, let stderr) {
+            let errorAlert = NSAlert()
+            errorAlert.messageText = "Could not delete worktree"
+            errorAlert.informativeText = stderr.isEmpty ? "git worktree remove failed" : stderr
+            errorAlert.alertStyle = .warning
+            errorAlert.runModal()
+            return
+        } catch {
+            return
+        }
+
+        if appState.selectedWorktreePath == worktreePath {
+            appState.selectedWorktreePath = nil
+        }
+        if wt.state == .running {
+            terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
+        }
+        appState.repos[repoIdx].worktrees.removeAll { $0.path == worktreePath }
     }
 
     private func stopWorktreeWithConfirmation(_ worktreePath: String) {
