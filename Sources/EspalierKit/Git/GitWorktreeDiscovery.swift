@@ -34,12 +34,12 @@ public enum GitWorktreeDiscovery {
         return results
     }
 
-    public static func discover(repoPath: String) throws -> [DiscoveredWorktree] {
+    public static func discover(repoPath: String) async throws -> [DiscoveredWorktree] {
         do {
-            let output = try GitRunner.run(args: ["worktree", "list", "--porcelain"], at: repoPath)
+            let output = try await GitRunner.run(args: ["worktree", "list", "--porcelain"], at: repoPath)
             return parsePorcelain(output)
-        } catch GitRunner.Error.gitFailed(let status) {
-            throw GitDiscoveryError.gitFailed(terminationStatus: status)
+        } catch let CLIError.nonZeroExit(_, code, _) {
+            throw GitDiscoveryError.gitFailed(terminationStatus: code)
         }
     }
 }

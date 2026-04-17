@@ -53,7 +53,7 @@ struct GitWorktreeDiscoveryTests {
         #expect(entries[0].branch == "(bare)")
     }
 
-    @Test func discoverFromRealRepo() throws {
+    @Test func discoverFromRealRepo() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-discover-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -81,7 +81,7 @@ struct GitWorktreeDiscoveryTests {
         try process.run()
         process.waitUntilExit()
 
-        let entries = try GitWorktreeDiscovery.discover(repoPath: repoDir.path)
+        let entries = try await GitWorktreeDiscovery.discover(repoPath: repoDir.path)
         #expect(entries.count == 2)
         // Note: default branch may be 'main' or 'master' depending on git config
         #expect(entries[1].branch == "feature")
