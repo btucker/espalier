@@ -91,14 +91,14 @@ struct PaneAdd: ParsableCommand {
     var command: String?
 
     func validate() throws {
-        guard PaneSplitWire(rawValue: direction) != nil else {
+        guard PaneSplit(rawValue: direction) != nil else {
             throw ValidationError("--direction must be one of: right, left, up, down")
         }
     }
 
     func run() throws {
         let worktreePath = try CLIEnv.resolveWorktree()
-        let dir = PaneSplitWire(rawValue: direction)!
+        let dir = PaneSplit(rawValue: direction)!
         let response = try CLIEnv.sendRequest(.addPane(path: worktreePath, direction: dir, command: command))
         try CLIEnv.expectOk(response)
     }

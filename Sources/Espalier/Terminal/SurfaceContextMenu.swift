@@ -1,4 +1,5 @@
 import AppKit
+import EspalierKit
 import GhosttyKit
 
 // MARK: - Context Menu

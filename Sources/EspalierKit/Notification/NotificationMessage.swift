@@ -4,7 +4,7 @@ public enum NotificationMessage: Sendable {
     case notify(path: String, text: String, clearAfter: TimeInterval? = nil)
     case clear(path: String)
     case listPanes(path: String)
-    case addPane(path: String, direction: PaneSplitWire, command: String?)
+    case addPane(path: String, direction: PaneSplit, command: String?)
     case closePane(path: String, index: Int)
 }
 
@@ -56,7 +56,7 @@ extension NotificationMessage: Codable {
             self = .listPanes(path: path)
         case "add_pane":
             let path = try container.decode(String.self, forKey: .path)
-            let direction = try container.decode(PaneSplitWire.self, forKey: .direction)
+            let direction = try container.decode(PaneSplit.self, forKey: .direction)
             let command = try container.decodeIfPresent(String.self, forKey: .command)
             self = .addPane(path: path, direction: direction, command: command)
         case "close_pane":
@@ -67,13 +67,6 @@ extension NotificationMessage: Codable {
             throw DecodingError.dataCorrupted(.init(codingPath: [CodingKeys.type], debugDescription: "Unknown message type: \(type)"))
         }
     }
-}
-
-/// Wire-level representation of a four-way pane split direction. Mirrors
-/// the app-layer `PaneSplit` enum, but lives in EspalierKit so the CLI can
-/// encode/decode it without importing app-layer code.
-public enum PaneSplitWire: String, Codable, Sendable {
-    case right, left, up, down
 }
 
 /// One row in the response to a `listPanes` request. `id` is the 1-based

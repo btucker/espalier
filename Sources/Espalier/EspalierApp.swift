@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import EspalierKit
-import GhosttyKit
 
 /// Holds long-lived non-SwiftUI services for the app. Retained for the lifetime of
 /// `EspalierApp` so weak delegates (e.g. `WorktreeMonitor.delegate`) stay alive.
@@ -469,7 +468,7 @@ struct EspalierApp: App {
     @MainActor
     private static func addPane(
         path: String,
-        direction: PaneSplitWire,
+        direction: PaneSplit,
         command: String?,
         appState: Binding<AppState>,
         terminalManager: TerminalManager
@@ -483,23 +482,16 @@ struct EspalierApp: App {
         guard let targetID = wt.focusedTerminalID ?? wt.splitTree.allLeaves.first else {
             return .error("no panes to split")
         }
-        let split: PaneSplit
-        switch direction {
-        case .right: split = .right
-        case .left:  split = .left
-        case .up:    split = .up
-        case .down:  split = .down
-        }
         guard let newID = splitPane(
             appState: appState,
             terminalManager: terminalManager,
             targetID: targetID,
-            split: split
+            split: direction
         ) else {
             return .error("split failed")
         }
         if let command, !command.isEmpty {
-            typeCommand(command, into: newID, terminalManager: terminalManager)
+            terminalManager.handle(for: newID)?.typeText(command + "\r")
         }
         return .ok
     }
@@ -519,32 +511,6 @@ struct EspalierApp: App {
         }
         closePane(appState: appState, terminalManager: terminalManager, targetID: targetID)
         return .ok
-    }
-
-    /// Type `text` followed by a newline into the surface owned by
-    /// `terminalID`. Used by `pane add --command`.
-    ///
-    /// Forwarded via `ghostty_surface_text`, the same API libghostty uses
-    /// for its paste action. Timing: if the shell hasn't drawn its prompt
-    /// yet, the first characters can get eaten — in practice on macOS
-    /// with zsh this is reliable, but if flake appears later, the
-    /// alternative is wiring libghostty's `command` config field at
-    /// surface creation.
-    @MainActor
-    private static func typeCommand(
-        _ text: String,
-        into terminalID: TerminalID,
-        terminalManager: TerminalManager
-    ) {
-        guard let handle = terminalManager.handle(for: terminalID) else { return }
-        let toSend = text + "\n"
-        toSend.withCString { cstr in
-            ghostty_surface_text(
-                handle.surface,
-                cstr,
-                UInt(toSend.lengthOfBytes(using: .utf8))
-            )
-        }
     }
 
     private func splitFocusedPane(direction: SplitDirection) {
@@ -977,8 +943,10 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                 let existing = binding.wrappedValue.repos[repoIdx].worktrees
                 let existingPaths = Set(existing.map(\.path))
                 let discoveredPaths = Set(discovered.map(\.path))
+                let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
+                let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }
 
-                for d in discovered where !existingPaths.contains(d.path) {
+                for d in newlyAdded {
                     let entry = WorktreeEntry(path: d.path, branch: d.branch)
                     binding.wrappedValue.repos[repoIdx].worktrees.append(entry)
                 }
@@ -990,19 +958,24 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     }
                 }
 
-                // Register FS watches for every known worktree in this repo.
-                // watchWorktreePath / watchHeadRef are idempotent, but this
-                // catches newly-discovered worktrees (from external CLI
-                // `git worktree add`) that otherwise wouldn't get HEAD
-                // tracking until the app restarted.
+                // watchWorktreePath / watchHeadRef are idempotent, so registering
+                // for the whole repo is cheap; this is how newly-discovered
+                // worktrees (external `git worktree add`) start getting HEAD
+                // tracking without an app restart.
                 for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
                     monitor.watchWorktreePath(wt.path)
                     monitor.watchHeadRef(worktreePath: wt.path, repoPath: repoPath)
                 }
 
-                // Refresh stats for all non-stale worktrees in this repo.
-                for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
-                    store.refresh(worktreePath: wt.path, repoPath: repoPath)
+                // Existing worktrees' stats are driven by their own HEAD
+                // callbacks and the 60s poll (DIVERGE-4.2, DIVERGE-4.3), so a
+                // `.git/worktrees/` directory tick only needs to seed stats
+                // for new entries and drop stats for newly-stale ones.
+                for d in newlyAdded {
+                    store.refresh(worktreePath: d.path, repoPath: repoPath)
+                }
+                for wt in newlyStale {
+                    store.clear(worktreePath: wt.path)
                 }
             }
         }
@@ -1031,25 +1004,19 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
         // Branch changes can fire in bursts (rebase, interactive checkout),
         // making this the more common hang trigger in practice.
         Task.detached {
-            let repoPaths = await MainActor.run { binding.wrappedValue.repos.map(\.path) }
-            let discoveredByRepo: [String: [DiscoveredWorktree]] = repoPaths.reduce(into: [:]) { acc, repoPath in
-                if let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) {
-                    acc[repoPath] = discovered
-                }
+            let owningRepo: String? = await MainActor.run {
+                binding.wrappedValue.repos.first(where: { repo in
+                    repo.worktrees.contains(where: { $0.path == worktreePath })
+                })?.path
             }
+            guard let repoPath = owningRepo,
+                  let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath),
+                  let match = discovered.first(where: { $0.path == worktreePath }) else { return }
             await MainActor.run {
-                for repoIdx in binding.wrappedValue.repos.indices {
-                    let repoPath = binding.wrappedValue.repos[repoIdx].path
-                    guard let discovered = discoveredByRepo[repoPath] else { continue }
-                    for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                        if binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path == worktreePath,
-                           let match = discovered.first(where: { $0.path == worktreePath }) {
-                            binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
-                            // HEAD moved — recompute stats for this worktree.
-                            store.refresh(worktreePath: worktreePath, repoPath: repoPath)
-                        }
-                    }
-                }
+                guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }),
+                      let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
+                binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+                store.refresh(worktreePath: worktreePath, repoPath: repoPath)
             }
         }
     }
