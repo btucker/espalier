@@ -353,6 +353,15 @@ struct EspalierApp: App {
                     }
                 }
             }
+        case .listPanes:
+            // TODO: implement listPanes
+            break
+        case .addPane:
+            // TODO: implement addPane
+            break
+        case .closePane:
+            // TODO: implement closePane
+            break
         }
     }
 
