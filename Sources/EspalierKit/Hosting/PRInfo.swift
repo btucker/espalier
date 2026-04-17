@@ -37,4 +37,15 @@ public struct PRInfo: Codable, Sendable, Equatable, Identifiable {
         self.checks = checks
         self.fetchedAt = fetchedAt
     }
+
+    /// `fetchedAt` is excluded from equality so change-guards on the
+    /// observable store don't trigger re-renders every poll when the
+    /// semantic PR state hasn't changed.
+    public static func == (lhs: PRInfo, rhs: PRInfo) -> Bool {
+        lhs.number == rhs.number &&
+        lhs.title == rhs.title &&
+        lhs.url == rhs.url &&
+        lhs.state == rhs.state &&
+        lhs.checks == rhs.checks
+    }
 }

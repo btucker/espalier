@@ -48,21 +48,13 @@ struct BreadcrumbBar: View {
         .background(theme.background)
     }
 
-    @ViewBuilder
     private func worktreeLabel(_ name: String) -> some View {
-        if isHomeCheckout {
-            Text("root")
-                .italic()
-                .foregroundColor(theme.foreground)
-                .help(worktreePath ?? "")
-                .overlay(underline, alignment: .bottom)
-        } else {
-            Text(name)
-                .foregroundColor(theme.foreground)
-                .fontWeight(.medium)
-                .help(worktreePath ?? "")
-                .overlay(underline, alignment: .bottom)
-        }
+        Text(isHomeCheckout ? "root" : name)
+            .italic(isHomeCheckout)
+            .fontWeight(isHomeCheckout ? .regular : .medium)
+            .foregroundColor(theme.foreground)
+            .help(worktreePath ?? "")
+            .overlay(underline, alignment: .bottom)
     }
 
     private var underline: some View {

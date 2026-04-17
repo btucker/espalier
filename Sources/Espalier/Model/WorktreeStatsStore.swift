@@ -142,22 +142,20 @@ public final class WorktreeStatsStore {
         inFlight.remove(worktreePath)
         defaultBranchByRepo[repoPath] = result.defaultBranch
         if let s = result.stats {
-            stats[worktreePath] = s
-        } else {
+            if stats[worktreePath] != s {
+                stats[worktreePath] = s
+            }
+        } else if stats[worktreePath] != nil {
             stats.removeValue(forKey: worktreePath)
         }
     }
 
-    /// Per-repo fetch cadence. Base is 5 minutes; each consecutive failure
-    /// doubles the interval (capped at 30 minutes) so a flapping remote
-    /// doesn't burn cycles. Mirrors `PRStatusStore.cadenceFor`.
     nonisolated static func repoFetchCadence(failureStreak: Int) -> Duration {
-        let base: Duration = .seconds(5 * 60)
-        if failureStreak == 0 { return base }
-        let multiplier = 1 << min(failureStreak, 5)
-        let multiplied = base * Int(multiplier)
-        let cap: Duration = .seconds(30 * 60)
-        return multiplied > cap ? cap : multiplied
+        ExponentialBackoff.scale(
+            base: .seconds(5 * 60),
+            streak: failureStreak,
+            cap: .seconds(30 * 60)
+        )
     }
 
     private func pollTick(repos: [RepoEntry]) async {
@@ -186,9 +184,6 @@ public final class WorktreeStatsStore {
     }
 
     private func performRepoFetch(repoPath: String, worktreePaths: [String]) async {
-        // `performRepoFetch` is MainActor-isolated (inherited from the class),
-        // and `defer` runs after the last `await` resumes on the same actor,
-        // so we can mutate `inFlightRepos` synchronously from the defer.
         defer { self.inFlightRepos.remove(repoPath) }
 
         let defaultBranchResult: String?

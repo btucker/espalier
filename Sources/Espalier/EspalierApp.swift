@@ -269,7 +269,8 @@ struct EspalierApp: App {
 
         let bridge = WorktreeMonitorBridge(
             appState: $appState,
-            statsStore: services.statsStore
+            statsStore: services.statsStore,
+            prStatusStore: services.prStatusStore
         )
         services.worktreeMonitorBridge = bridge
         services.worktreeMonitor.delegate = bridge
@@ -931,10 +932,16 @@ struct EspalierApp: App {
 final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     let appState: Binding<AppState>
     let statsStore: WorktreeStatsStore
+    let prStatusStore: PRStatusStore
 
-    init(appState: Binding<AppState>, statsStore: WorktreeStatsStore) {
+    init(
+        appState: Binding<AppState>,
+        statsStore: WorktreeStatsStore,
+        prStatusStore: PRStatusStore
+    ) {
         self.appState = appState
         self.statsStore = statsStore
+        self.prStatusStore = prStatusStore
     }
 
     /// Called when `.git/worktrees/` changes (new worktree added, existing
@@ -996,6 +1003,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
         let store = statsStore
+        let prStore = prStatusStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
@@ -1005,6 +1013,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                 }
             }
             store.clear(worktreePath: worktreePath)
+            prStore.clear(worktreePath: worktreePath)
         }
     }
 

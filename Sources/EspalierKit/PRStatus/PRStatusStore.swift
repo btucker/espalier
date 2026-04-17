@@ -74,7 +74,6 @@ public final class PRStatusStore {
     private func performFetch(worktreePath: String, repoPath: String, branch: String) async {
         defer { inFlight.remove(worktreePath) }
 
-        // Resolve host (cached per repo).
         let origin: HostingOrigin?
         if let cached = hostByRepo[repoPath] {
             origin = cached
@@ -84,7 +83,7 @@ public final class PRStatusStore {
         }
         guard let origin, origin.provider != .unsupported,
               let fetcher = fetcherFor(origin.provider) else {
-            absent.insert(worktreePath)
+            markAbsent(worktreePath)
             lastFetch[worktreePath] = Date()
             return
         }
@@ -94,17 +93,31 @@ public final class PRStatusStore {
             lastFetch[worktreePath] = Date()
             failureStreak[worktreePath] = 0
             if let pr {
-                infos[worktreePath] = pr
-                absent.remove(worktreePath)
+                if infos[worktreePath] != pr {
+                    infos[worktreePath] = pr
+                }
+                if absent.contains(worktreePath) {
+                    absent.remove(worktreePath)
+                }
             } else {
-                infos.removeValue(forKey: worktreePath)
-                absent.insert(worktreePath)
+                if infos[worktreePath] != nil {
+                    infos.removeValue(forKey: worktreePath)
+                }
+                markAbsent(worktreePath)
             }
         } catch {
             logger.info("PR fetch failed for \(worktreePath): \(String(describing: error))")
             failureStreak[worktreePath, default: 0] += 1
             lastFetch[worktreePath] = Date()
-            infos.removeValue(forKey: worktreePath)
+            if infos[worktreePath] != nil {
+                infos.removeValue(forKey: worktreePath)
+            }
+        }
+    }
+
+    private func markAbsent(_ worktreePath: String) {
+        if !absent.contains(worktreePath) {
+            absent.insert(worktreePath)
         }
     }
 }
@@ -128,16 +141,15 @@ extension PRStatusStore {
         } else {
             base = .zero
         }
-        if failureStreak == 0 { return base }
-        // A fetch failed before we learned whether a PR exists (unknown
-        // state, base == 0). Floor at 60s so the back-off has something to
-        // multiply — otherwise the poller would retry every tick against a
-        // broken CLI (e.g. `gh` not installed).
-        let floored: Duration = base == .zero ? .seconds(60) : base
-        let multiplier = 1 << min(failureStreak, 5)
-        let multiplied = floored * Int(multiplier)
-        let cap: Duration = .seconds(30 * 60)
-        return multiplied > cap ? cap : multiplied
+        // Floor the unknown-state base at 60s so a failing fetch has
+        // something to multiply — otherwise the poller retries every tick
+        // against a broken CLI (e.g. `gh` not installed).
+        return ExponentialBackoff.scale(
+            base: base,
+            streak: failureStreak,
+            cap: .seconds(30 * 60),
+            floor: .seconds(60)
+        )
     }
 
     func cadence(for worktreePath: String) -> Duration {
