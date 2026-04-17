@@ -2,41 +2,29 @@ import Testing
 import Foundation
 @testable import EspalierKit
 
-@Suite("WebServer — integration (requires zmx on PATH)")
+@Suite("WebServer — integration (requires vendored zmx)")
 struct WebServerIntegrationTests {
 
-    private static func requireZmx() throws -> URL {
-        let which = Process()
-        which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        which.arguments = ["zmx"]
-        let pipe = Pipe()
-        which.standardOutput = pipe
-        try which.run()
-        which.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        try #require(!path.isEmpty, "zmx binary not on PATH; skipping integration")
-        return URL(fileURLWithPath: path)
-    }
-
+    /// Allocate an isolated ZMX_DIR under `/tmp` (see
+    /// `ZmxSurvivalIntegrationTests.withScopedZmxDir` for why `/tmp` rather
+    /// than `NSTemporaryDirectory()` — the 104-byte Unix-socket path limit).
     private static func scopedZmxDir() throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("espalier-web-it-\(UUID().uuidString)", isDirectory: true)
+        let dir = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("zmx-web-it-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     @Test func wsEchoRoundTrip() async throws {
-        let zmx = try Self.requireZmx()
+        let zmx = try #require(
+            ZmxSurvivalIntegrationTests.vendoredZmx(),
+            "zmx binary not vendored — run scripts/bump-zmx.sh"
+        )
         let zmxDir = try Self.scopedZmxDir()
         defer { try? FileManager.default.removeItem(at: zmxDir) }
 
-        var assets: [String: WebStaticResources.Asset] = [:]
-        for p in ["/", "/xterm.min.js", "/xterm.min.css", "/xterm-addon-fit.min.js"] {
-            assets[p] = try WebStaticResources.asset(for: p)
-        }
         let server = WebServer(
-            config: WebServer.Config(port: 0, allowedPaths: assets, zmxExecutable: zmx, zmxDir: zmxDir),
+            config: WebServer.Config(port: 0, zmxExecutable: zmx, zmxDir: zmxDir),
             auth: WebServer.AuthPolicy(isAllowed: { _ in true }),
             bindAddresses: ["127.0.0.1"]
         )
@@ -70,11 +58,8 @@ struct WebServerIntegrationTests {
 
         wsTask.cancel(with: .goingAway, reason: nil)
 
-        let kill = Process()
-        kill.executableURL = zmx
-        kill.arguments = ["kill", "--force", sessionName]
-        kill.environment = ["ZMX_DIR": zmxDir.path]
-        try? kill.run()
-        kill.waitUntilExit()
+        // Best-effort clean up the session.
+        let launcher = ZmxLauncher(executable: zmx, zmxDir: zmxDir)
+        launcher.kill(sessionName: sessionName)
     }
 }

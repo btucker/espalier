@@ -5,23 +5,17 @@ import Foundation
 @Suite("WebServer — auth gate")
 struct WebServerAuthTests {
 
-    private func resources() throws -> [String: WebStaticResources.Asset] {
-        var out: [String: WebStaticResources.Asset] = [:]
-        for path in ["/", "/xterm.min.js", "/xterm.min.css", "/xterm-addon-fit.min.js"] {
-            out[path] = try WebStaticResources.asset(for: path)
-        }
-        return out
-    }
-
-    @Test func deniedRequestReturns403() async throws {
-        let config = WebServer.Config(
-            port: 0,  // ephemeral
-            allowedPaths: try resources(),
+    private static func makeConfig(port: Int = 0) -> WebServer.Config {
+        WebServer.Config(
+            port: port,
             zmxExecutable: URL(fileURLWithPath: "/dev/null"),
             zmxDir: URL(fileURLWithPath: "/tmp")
         )
+    }
+
+    @Test func deniedRequestReturns403() async throws {
         let server = WebServer(
-            config: config,
+            config: Self.makeConfig(),
             auth: WebServer.AuthPolicy(isAllowed: { _ in false }),
             bindAddresses: ["127.0.0.1"]
         )
@@ -36,14 +30,8 @@ struct WebServerAuthTests {
     }
 
     @Test func allowedRequestServesHTML() async throws {
-        let config = WebServer.Config(
-            port: 0,
-            allowedPaths: try resources(),
-            zmxExecutable: URL(fileURLWithPath: "/dev/null"),
-            zmxDir: URL(fileURLWithPath: "/tmp")
-        )
         let server = WebServer(
-            config: config,
+            config: Self.makeConfig(),
             auth: WebServer.AuthPolicy(isAllowed: { _ in true }),
             bindAddresses: ["127.0.0.1"]
         )

@@ -19,12 +19,10 @@ public final class WebServer {
 
     public struct Config {
         public let port: Int
-        public let allowedPaths: [String: WebStaticResources.Asset]
         public let zmxExecutable: URL
         public let zmxDir: URL
-        public init(port: Int, allowedPaths: [String: WebStaticResources.Asset], zmxExecutable: URL, zmxDir: URL) {
+        public init(port: Int, zmxExecutable: URL, zmxDir: URL) {
             self.port = port
-            self.allowedPaths = allowedPaths
             self.zmxExecutable = zmxExecutable
             self.zmxDir = zmxDir
         }

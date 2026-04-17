@@ -218,11 +218,7 @@ struct SidebarView: View {
     }
 
     /// Per-pane right-click menu (LAYOUT-2.7 surface). Today its only entry
-    /// is "Copy web URL", gated on the WebServer actually listening — we
-    /// don't surface a disabled-looking stub when the feature is off. The
-    /// session-name derivation must match ZmxLauncher.sessionName(for:)
-    /// exactly: changing it orphans daemons (ZMX-2.2) and breaks the URL's
-    /// attach from the browser.
+    /// is "Copy web URL", gated on the WebServer actually listening.
     @ViewBuilder
     private func paneContextMenu(terminalID: TerminalID) -> some View {
         if case let .listening(addresses, port) = webController.status,
@@ -230,9 +226,8 @@ struct SidebarView: View {
                from: addresses.filter { $0 != "127.0.0.1" }
            ) {
             Button("Copy web URL") {
-                let sessionName = Self.sessionName(for: terminalID.id)
                 let url = WebURLComposer.url(
-                    session: sessionName,
+                    session: ZmxLauncher.sessionName(for: terminalID.id),
                     host: host,
                     port: port
                 )
@@ -240,17 +235,6 @@ struct SidebarView: View {
                 NSPasteboard.general.setString(url, forType: .string)
             }
         }
-    }
-
-    /// Mirror of `ZmxLauncher.sessionName(for:)` — kept inline here because
-    /// the sidebar doesn't hold a ZmxLauncher reference and we'd rather not
-    /// thread one through just for URL composition. Must stay byte-for-byte
-    /// identical to the launcher's mapping.
-    private static func sessionName(for paneID: UUID) -> String {
-        let hex = paneID.uuidString
-            .replacingOccurrences(of: "-", with: "")
-            .lowercased()
-        return "espalier-\(hex.prefix(8))"
     }
 
     private func stopWorktree(_ worktree: WorktreeEntry, in repo: RepoEntry) {

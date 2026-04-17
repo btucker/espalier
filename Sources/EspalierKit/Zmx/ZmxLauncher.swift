@@ -49,13 +49,16 @@ public final class ZmxLauncher: Sendable {
     /// Returns `"espalier-" + first-8-hex-of-uuid`. 32 bits of namespace
     /// uniqueness within a single user's `ZMX_DIR` is ample for the
     /// expected concurrent-pane count (dozens, not millions).
-    public func sessionName(for paneID: UUID) -> String {
-        // UUID's hex string is upper-case with dashes; we want lowercase
-        // and just the first 8 chars (the leading 4 bytes).
+    public static func sessionName(for paneID: UUID) -> String {
         let hex = paneID.uuidString
             .replacingOccurrences(of: "-", with: "")
             .lowercased()
         return "espalier-\(hex.prefix(8))"
+    }
+
+    /// Instance overload for callers that already hold a launcher.
+    public func sessionName(for paneID: UUID) -> String {
+        ZmxLauncher.sessionName(for: paneID)
     }
 
     /// The single-string command to hand to `ghostty_surface_config_s.command`.
@@ -98,6 +101,13 @@ public final class ZmxLauncher: Sendable {
         "exec \(shellQuote(executable.path))"
             + " attach \(shellQuote(sessionName))"
             + " \(shellQuote(userShell))\n"
+    }
+
+    /// Argv form of the attach invocation, for callers that spawn `zmx attach`
+    /// directly (not via a shell) — e.g. `WebSession` through `PtyProcess`.
+    /// No shell quoting because there's no shell in the pipeline.
+    public func attachArgv(sessionName: String) -> [String] {
+        [executable.path, "attach", sessionName, "$SHELL"]
     }
 
     /// Env additions that should accompany every zmx invocation Espalier

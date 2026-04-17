@@ -16,12 +16,10 @@ public final class WebSession {
         public let zmxExecutable: URL
         public let zmxDir: URL
         public let sessionName: String
-        public let baseEnv: [String: String]
-        public init(zmxExecutable: URL, zmxDir: URL, sessionName: String, baseEnv: [String: String] = ProcessInfo.processInfo.environment) {
+        public init(zmxExecutable: URL, zmxDir: URL, sessionName: String) {
             self.zmxExecutable = zmxExecutable
             self.zmxDir = zmxDir
             self.sessionName = sessionName
-            self.baseEnv = baseEnv
         }
     }
 
@@ -56,12 +54,14 @@ public final class WebSession {
         defer { stateLock.unlock() }
         guard spawned == nil else { throw Error.alreadyStarted }
 
-        var env = config.baseEnv
-        env["ZMX_DIR"] = config.zmxDir.path
-
-        let argv = [config.zmxExecutable.path, "attach", config.sessionName, "$SHELL"]
+        let launcher = ZmxLauncher(executable: config.zmxExecutable, zmxDir: config.zmxDir)
+        let env = ProcessInfo.processInfo.environment
+            .merging(launcher.envAdditions()) { _, new in new }
         do {
-            spawned = try PtyProcess.spawn(argv: argv, env: env)
+            spawned = try PtyProcess.spawn(
+                argv: launcher.attachArgv(sessionName: config.sessionName),
+                env: env
+            )
         } catch {
             throw Error.spawnFailed(error)
         }
@@ -91,6 +91,11 @@ public final class WebSession {
         if isClosed { stateLock.unlock(); return }
         isClosed = true
         let spawned = self.spawned
+        // Drop callback references under the lock so a reader-thread EOF that
+        // races with close() can't re-enter the channel after the caller has
+        // already handled the close path.
+        onPTYData = nil
+        onExit = nil
         stateLock.unlock()
 
         if let spawned {
@@ -115,13 +120,26 @@ public final class WebSession {
             while true {
                 let n = buf.withUnsafeMutableBufferPointer { Darwin.read(fd, $0.baseAddress, $0.count) }
                 if n <= 0 { break }
-                let chunk = Data(buf[0..<n])
-                self?.onPTYData?(chunk)
+                self?.dispatchPTYData(Data(buf[0..<n]))
             }
-            self?.onExit?()
+            self?.dispatchExit()
         }
         thread.name = "WebSession.reader(\(config.sessionName))"
         thread.start()
         readerThread = thread
+    }
+
+    private func dispatchPTYData(_ data: Data) {
+        stateLock.lock()
+        let cb = onPTYData
+        stateLock.unlock()
+        cb?(data)
+    }
+
+    private func dispatchExit() {
+        stateLock.lock()
+        let cb = onExit
+        stateLock.unlock()
+        cb?()
     }
 }

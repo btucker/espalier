@@ -49,10 +49,6 @@ final class WebServerController: ObservableObject {
             let tailscaleStatus = try runBlocking { try await api.status() }
             var bind = tailscaleStatus.tailscaleIPs
             bind.append("127.0.0.1")
-            var assets: [String: WebStaticResources.Asset] = [:]
-            for p in ["/", "/xterm.min.js", "/xterm.min.css", "/xterm-addon-fit.min.js"] {
-                assets[p] = try WebStaticResources.asset(for: p)
-            }
             let ownerLogin = tailscaleStatus.loginName
             let auth = WebServer.AuthPolicy { peerIP in
                 guard let api = try? TailscaleLocalAPI.autoDetected() else { return false }
@@ -60,8 +56,7 @@ final class WebServerController: ObservableObject {
                 return whois.loginName == ownerLogin
             }
             let s = WebServer(
-                config: .init(port: settings.port, allowedPaths: assets,
-                              zmxExecutable: zmxExecutable, zmxDir: zmxDir),
+                config: .init(port: settings.port, zmxExecutable: zmxExecutable, zmxDir: zmxDir),
                 auth: auth,
                 bindAddresses: bind
             )
