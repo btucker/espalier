@@ -99,3 +99,104 @@ public final class PRStatusStore {
         }
     }
 }
+
+extension PRStatusStore {
+
+    static func cadenceFor(
+        info: PRInfo?,
+        isAbsent: Bool,
+        failureStreak: Int
+    ) -> Duration {
+        let base: Duration
+        if let info {
+            switch (info.state, info.checks) {
+            case (.open, .pending): base = .seconds(25)
+            case (.open, _):        base = .seconds(5 * 60)
+            case (.merged, _):      base = .seconds(15 * 60)
+            }
+        } else if isAbsent {
+            base = .seconds(15 * 60)
+        } else {
+            base = .zero
+        }
+        if failureStreak == 0 { return base }
+        let multiplier = 1 << min(failureStreak, 5)
+        let multiplied = base * Int(multiplier)
+        let cap: Duration = .seconds(30 * 60)
+        return multiplied > cap ? cap : multiplied
+    }
+
+    func cadence(for worktreePath: String) -> Duration {
+        Self.cadenceFor(
+            info: infos[worktreePath],
+            isAbsent: absent.contains(worktreePath),
+            failureStreak: failureStreak[worktreePath] ?? 0
+        )
+    }
+
+    public func start(
+        ticker: PollingTickerLike,
+        getRepos: @escaping @MainActor () -> [RepoEntry]
+    ) {
+        stop()
+        self.getRepos = getRepos
+        self.ticker = ticker
+        ticker.start { [weak self] in
+            await self?.tick()
+        }
+    }
+
+    public func stop() {
+        ticker?.stop()
+        ticker = nil
+    }
+
+    public func pulse() {
+        ticker?.pulse()
+    }
+
+    private func tick() async {
+        let repos = getRepos()
+        let now = Date()
+
+        struct Candidate { let path, repoPath, branch: String }
+        var candidates: [Candidate] = []
+
+        for repo in repos {
+            if let cached = hostByRepo[repo.path] {
+                // Only poll when we have a cached, supported origin.
+                guard let origin = cached, origin.provider != .unsupported else { continue }
+                _ = origin
+            }
+            for wt in repo.worktrees where wt.state != .stale {
+                if inFlight.contains(wt.path) { continue }
+                let interval = cadence(for: wt.path)
+                let last = lastFetch[wt.path]
+                if let last, now.timeIntervalSince(last) < Double(interval.components.seconds) {
+                    continue
+                }
+                candidates.append(Candidate(path: wt.path, repoPath: repo.path, branch: wt.branch))
+            }
+        }
+
+        let maxParallel = 4
+        await withTaskGroup(of: Void.self) { group in
+            var inflight = 0
+            for c in candidates {
+                if inflight >= maxParallel {
+                    await group.next()
+                    inflight -= 1
+                }
+                inFlight.insert(c.path)
+                group.addTask { [weak self] in
+                    await self?.performFetch(
+                        worktreePath: c.path,
+                        repoPath: c.repoPath,
+                        branch: c.branch
+                    )
+                }
+                inflight += 1
+            }
+        }
+    }
+}
