@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import EspalierKit
 
@@ -15,6 +16,7 @@ struct SidebarView: View {
     let onAddRepo: () -> Void
     let onAddPath: (String) -> Void
     let onStopWorktree: (String) -> Void
+    let onDeleteWorktree: (String) -> Void
     /// Called when the user submits the add-worktree sheet. Returns nil
     /// on success, or a user-visible error string (typically git's
     /// stderr) on failure so the sheet can display it inline.
@@ -182,6 +184,12 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func worktreeContextMenu(_ worktree: WorktreeEntry, repo: RepoEntry) -> some View {
+        if worktree.state != .stale {
+            Button("Open Worktree in Finder...") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: worktree.path))
+            }
+            Divider()
+        }
         if worktree.state == .running {
             Button("Stop") {
                 stopWorktree(worktree, in: repo)
@@ -190,6 +198,13 @@ struct SidebarView: View {
         if worktree.state == .stale {
             Button("Dismiss") {
                 dismissWorktree(worktree, in: repo)
+            }
+        }
+        // git refuses to remove the main checkout, so hiding the item
+        // there avoids a guaranteed error path.
+        if worktree.path != repo.path && worktree.state != .stale {
+            Button("Delete Worktree") {
+                onDeleteWorktree(worktree.path)
             }
         }
     }

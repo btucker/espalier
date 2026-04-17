@@ -36,6 +36,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **LAYOUT-2.11** The sidebar shall display the active worktree row and all its pane rows inside a single unified highlighted block; within that block, the focused pane's row shall additionally be emphasized via text weight and color (no secondary background).
 
+**LAYOUT-2.12** While a worktree entry is not in the stale state, its context menu shall include an "Open Worktree in Finder..." action that opens the worktree's filesystem path in the system file browser via `NSWorkspace.shared.open`.
+
 ### 1.3 Adding Repositories
 
 **LAYOUT-3.1** When the user clicks "Add Repository", the application shall present a standard macOS open panel for selecting a directory.
@@ -194,6 +196,20 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 **GIT-3.5** When a worktree's HEAD reference changes, the application shall update the entry's branch label in the sidebar.
 
 **GIT-3.6** While a worktree entry is in the stale state, the context menu shall include a "Dismiss" action that removes the entry from the sidebar.
+
+### 4.4 Deleting a Worktree
+
+**GIT-4.1** While a worktree entry is not in the stale state and is not the repository's main checkout, the context menu shall include a "Delete Worktree" action.
+
+**GIT-4.2** When the user triggers "Delete Worktree", the application shall display a confirmation dialog whose informative text explicitly states "This will delete the worktree but not the branch."
+
+**GIT-4.3** When the user confirms "Delete Worktree", the application shall run `git worktree remove <path>` in the repository, leaving the worktree's branch ref untouched.
+
+**GIT-4.4** If `git worktree remove` fails (e.g., the worktree contains uncommitted changes), then the application shall surface git's stderr in an error alert and shall leave the worktree entry and any running terminal surfaces intact.
+
+**GIT-4.5** When `git worktree remove` succeeds on a worktree in the running state, the application shall tear down all terminal surfaces in the worktree's split tree.
+
+**GIT-4.6** When `git worktree remove` succeeds, the application shall remove the worktree entry from the sidebar, and if that worktree was the selected worktree the application shall clear the selected-worktree state so the terminal content area shows the "no worktree selected" placeholder.
 
 ## 5. Attention Notification System
 
