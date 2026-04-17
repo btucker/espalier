@@ -142,18 +142,18 @@ struct GitWorktreeStatsComputeTests {
         return (root, clone)
     }
 
-    @Test func returnsZerosAtParity() throws {
+    @Test func returnsZerosAtParity() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )
         #expect(stats == WorktreeStats(ahead: 0, behind: 0, insertions: 0, deletions: 0))
     }
 
-    @Test func countsAheadAndLineChanges() throws {
+    @Test func countsAheadAndLineChanges() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -165,7 +165,7 @@ struct GitWorktreeStatsComputeTests {
             git add file.txt && git commit -m 'add epsilon/zeta, tweak alpha'
             """, at: clone)
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )
@@ -177,7 +177,7 @@ struct GitWorktreeStatsComputeTests {
         #expect(stats.deletions == 1)
     }
 
-    @Test func countsBehindWhenOriginAdvances() throws {
+    @Test func countsBehindWhenOriginAdvances() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -191,7 +191,7 @@ struct GitWorktreeStatsComputeTests {
             """, at: other)
         try shell("git fetch origin", at: clone)
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )
@@ -199,25 +199,25 @@ struct GitWorktreeStatsComputeTests {
         #expect(stats.behind == 1)
     }
 
-    @Test func throwsWhenWorktreeMissing() throws {
+    @Test func throwsWhenWorktreeMissing() async throws {
         let bogus = "/nonexistent-espalier-path-\(UUID().uuidString)"
-        #expect(throws: Error.self) {
-            try GitWorktreeStats.compute(worktreePath: bogus, defaultBranchRef: "origin/main")
+        await #expect(throws: Error.self) {
+            try await GitWorktreeStats.compute(worktreePath: bogus, defaultBranchRef: "origin/main")
         }
     }
 
-    @Test func cleanWorktreeReportsNoUncommittedChanges() throws {
+    @Test func cleanWorktreeReportsNoUncommittedChanges() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )
         #expect(stats.hasUncommittedChanges == false)
     }
 
-    @Test func modifiedTrackedFileMarksDirty() throws {
+    @Test func modifiedTrackedFileMarksDirty() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -227,7 +227,7 @@ struct GitWorktreeStatsComputeTests {
             at: clone
         )
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )
@@ -236,14 +236,14 @@ struct GitWorktreeStatsComputeTests {
         #expect(stats.hasUncommittedChanges == true)
     }
 
-    @Test func untrackedFileMarksDirty() throws {
+    @Test func untrackedFileMarksDirty() async throws {
         let (root, clone) = try makeClonedRepo()
         defer { try? FileManager.default.removeItem(at: root) }
 
         // Untracked files also count as uncommitted work per spec intent.
         try shell("printf 'scratch' > newfile.txt", at: clone)
 
-        let stats = try GitWorktreeStats.compute(
+        let stats = try await GitWorktreeStats.compute(
             worktreePath: clone.path,
             defaultBranchRef: "origin/main"
         )

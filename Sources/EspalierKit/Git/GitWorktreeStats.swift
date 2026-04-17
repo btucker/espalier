@@ -85,16 +85,16 @@ public enum GitWorktreeStats {
     public static func compute(
         worktreePath: String,
         defaultBranchRef: String
-    ) throws -> WorktreeStats {
+    ) async throws -> WorktreeStats {
         let range = "\(defaultBranchRef)...HEAD"
 
         let revListOutput: String
         do {
-            revListOutput = try GitRunner.run(
+            revListOutput = try await GitRunner.run(
                 args: ["rev-list", "--left-right", "--count", range],
                 at: worktreePath
             )
-        } catch GitRunner.Error.gitFailed(let status) {
+        } catch let CLIError.nonZeroExit(_, status, _) {
             throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
         }
 
@@ -104,22 +104,22 @@ public enum GitWorktreeStats {
 
         let diffOutput: String
         do {
-            diffOutput = try GitRunner.run(
+            diffOutput = try await GitRunner.run(
                 args: ["diff", "--shortstat", range],
                 at: worktreePath
             )
-        } catch GitRunner.Error.gitFailed(let status) {
+        } catch let CLIError.nonZeroExit(_, status, _) {
             throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
         }
         let diff = parseShortStat(diffOutput)
 
         let statusOutput: String
         do {
-            statusOutput = try GitRunner.run(
+            statusOutput = try await GitRunner.run(
                 args: ["status", "--porcelain"],
                 at: worktreePath
             )
-        } catch GitRunner.Error.gitFailed(let status) {
+        } catch let CLIError.nonZeroExit(_, status, _) {
             throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
         }
         let dirty = !statusOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
