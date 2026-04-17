@@ -55,8 +55,10 @@ public final class WebSession {
         guard spawned == nil else { throw Error.alreadyStarted }
 
         let launcher = ZmxLauncher(executable: config.zmxExecutable, zmxDir: config.zmxDir)
-        let env = ProcessInfo.processInfo.environment
-            .merging(launcher.envAdditions()) { _, new in new }
+        // subprocessEnv strips ZMX_SESSION in addition to setting ZMX_DIR —
+        // see ZmxLauncher for why that matters (an inherited ZMX_SESSION
+        // silently overrides the positional session arg).
+        let env = launcher.subprocessEnv(from: ProcessInfo.processInfo.environment)
         do {
             spawned = try PtyProcess.spawn(
                 argv: launcher.attachArgv(sessionName: config.sessionName),
