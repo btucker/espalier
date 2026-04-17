@@ -368,7 +368,57 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **CONFIG-2.4** If no Ghostty.app installation is found, shell integration features (OSC 7 auto-reporting, OSC 133 prompt marks, `COMMAND_FINISHED`, and `PROGRESS_REPORT`) shall silently be unavailable rather than surfacing an error; spawned shells shall still function.
 
-## 11. Technology Constraints
+## 11. Worktree Divergence Indicator
+
+### 11.1 Display
+
+**DIVERGE-1.1** Each worktree entry in the sidebar shall display a fixed-width leading gutter for divergence information. The gutter shall reserve its width regardless of whether it has content, so row contents align vertically across sibling worktrees.
+
+**DIVERGE-1.2** The gutter shall display a first line containing zero, one, or both of the following, separated by a single space when both are present:
+- `↑<N>` when the worktree's HEAD has N commits not reachable from the origin default branch (ahead),
+- `↓<N>` when the origin default branch has N commits not reachable from the worktree's HEAD (behind).
+
+**DIVERGE-1.3** The gutter shall display a second line containing zero, one, or both of the following, separated by a single space when both are present:
+- `+<I>` when the diff between the origin default branch and HEAD introduces I insertion lines on HEAD,
+- `-<D>` when the diff between the origin default branch and HEAD introduces D deletion lines on HEAD.
+
+**DIVERGE-1.4** When the worktree's ahead count, behind count, insertion count, and deletion count are all zero, the gutter shall render no text while still reserving its fixed width.
+
+**DIVERGE-1.5** When the repository has no `origin` remote or the origin default branch cannot be resolved, the gutter shall render no text for every worktree in that repository.
+
+**DIVERGE-1.6** While a worktree is in the stale state, the gutter shall render no text.
+
+### 11.2 Origin Default Branch Resolution
+
+**DIVERGE-2.1** The application shall resolve each repository's origin default branch by running `git symbolic-ref --short refs/remotes/origin/HEAD`, yielding a value of the form `origin/<branch>`.
+
+**DIVERGE-2.2** If `refs/remotes/origin/HEAD` is not set, the application shall probe the refs `origin/main`, `origin/master`, and `origin/develop` in that order via `git show-ref --verify` and use the first that exists.
+
+**DIVERGE-2.3** The application shall not perform any network operations to resolve the origin default branch.
+
+**DIVERGE-2.4** The application shall cache the resolved origin default branch per repository for the duration of the session.
+
+### 11.3 Computation
+
+**DIVERGE-3.1** The application shall compute ahead and behind commit counts by running `git rev-list --left-right --count <origin-default-ref>...HEAD` in the worktree directory, interpreting the left count as behind and the right count as ahead.
+
+**DIVERGE-3.2** The application shall compute insertion and deletion line counts by running `git diff --shortstat <origin-default-ref>...HEAD` in the worktree directory.
+
+**DIVERGE-3.3** All git computation for divergence indicators shall run off the main thread and shall not block the UI.
+
+**DIVERGE-3.4** Divergence counts shall be held in memory only and shall not be written to `state.json`.
+
+### 11.4 Refresh Triggers
+
+**DIVERGE-4.1** When a repository is added to the sidebar, the application shall compute divergence counts for each of its worktrees.
+
+**DIVERGE-4.2** When a worktree's HEAD reference changes, the application shall recompute that worktree's divergence counts.
+
+**DIVERGE-4.3** The application shall poll every 60 seconds to recompute divergence counts for all worktrees across all repositories, to catch changes to the origin default branch that occur outside the current worktree (e.g., after `git fetch` runs in another terminal).
+
+**DIVERGE-4.4** While a divergence computation is in flight for a particular worktree, duplicate refresh requests for the same worktree shall be dropped.
+
+## 12. Technology Constraints
 
 **TECH-1** The application shall be built in Swift using SwiftUI for app chrome and AppKit for terminal view hosting.
 
