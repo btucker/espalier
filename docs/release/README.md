@@ -51,6 +51,16 @@ git push
 The `version "0.0.0"` and zero-filled `sha256` are placeholders; the
 release workflow rewrites both on the first real release.
 
+### Keeping the cask in sync
+
+The release workflow only rewrites the `version` and `sha256` lines in
+the tap's `Casks/espalier.rb` — every other stanza (`url`, `app`,
+`binary`, `zap`, `caveats`, etc.) is the copy you bootstrapped above.
+If you change any of those stanzas in this repo's
+`docs/release/Casks/espalier.rb`, you must manually re-sync that change
+into the tap repo. The workflow will not propagate it on the next
+release.
+
 ## Cutting a release
 
 Once setup is complete:
