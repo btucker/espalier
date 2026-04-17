@@ -16,6 +16,10 @@ cd "$REPO"
 
 CONFIGURATION="${CONFIGURATION:-debug}"
 ESPALIER_VERSION="${ESPALIER_VERSION:-0.0.0-dev}"
+if [[ ! "$ESPALIER_VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+  echo "ESPALIER_VERSION must match [A-Za-z0-9._+-]+ (got '$ESPALIER_VERSION')" >&2
+  exit 1
+fi
 
 echo "→ ESPALIER_VERSION=$ESPALIER_VERSION"
 echo "→ swift build --configuration $CONFIGURATION"
@@ -47,6 +51,9 @@ echo "→ build + copy app icon"
 "$SCRIPT_DIR/build-icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 
 echo "→ write Info.plist"
+# NOTE: heredoc is unquoted so $ESPALIER_VERSION expands.
+# Any other $ or backticks added below will also expand — keep
+# this body to literal XML plus that single substitution.
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
