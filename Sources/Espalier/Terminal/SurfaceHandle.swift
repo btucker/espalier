@@ -195,6 +195,24 @@ final class SurfaceHandle {
         ghostty_surface_needs_confirm_quit(surface)
     }
 
+    /// Programmatically inject text into the surface's PTY, as if the user
+    /// had typed it. Routed through libghostty's `ghostty_surface_text`,
+    /// which writes raw UTF-8 bytes directly into the PTY. Passing
+    /// `"claude\r"` behaves identically to typing "claude" and pressing
+    /// Return — it enters shell history, supports ↑ recall, and its
+    /// child process lives and dies inside the surrounding shell.
+    /// (Regular key events flow through `ghostty_surface_key` via
+    /// `sendKeyEvent` instead; `ghostty_surface_text` is the text-input
+    /// sibling used for non-key-event writes.)
+    func typeText(_ text: String) {
+        guard let data = text.data(using: .utf8) else { return }
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            let ptr = base.assumingMemoryBound(to: CChar.self)
+            ghostty_surface_text(surface, ptr, UInt(raw.count))
+        }
+    }
+
     func requestClose() {
         ghostty_surface_request_close(surface)
     }
