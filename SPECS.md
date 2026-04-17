@@ -54,17 +54,17 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **STATE-1.1** Each worktree entry shall have one of three states: closed, running, or stale.
 
-**STATE-1.2** While a worktree entry is in the closed state, the sidebar shall display a hollow dot indicator (○) next to it.
+**STATE-1.2** While a worktree entry is in the closed state, the sidebar shall display its type icon (house for the main checkout, branch for linked worktrees) in a dimmed foreground color.
 
-**STATE-1.3** While a worktree entry is in the running state, the sidebar shall display a green dot indicator (●) next to it.
+**STATE-1.3** While a worktree entry is in the running state, the sidebar shall display its type icon tinted green.
 
-**STATE-1.4** While a worktree entry is in the stale state, the sidebar shall display a warning icon (⚠), strikethrough text, and grayed-out appearance.
+**STATE-1.4** While a worktree entry is in the stale state, the sidebar shall display its type icon tinted yellow, with strikethrough text and grayed-out appearance on the label.
 
 ### 2.2 Attention Overlay
 
 **STATE-2.1** A worktree entry in any state may additionally have an attention overlay.
 
-**STATE-2.2** While a worktree entry has an attention overlay, the sidebar shall display a red badge showing the attention text.
+**STATE-2.2** While a worktree entry has an attention overlay and one or more pane rows are visible beneath it, the sidebar shall replace each pane row's title text with the attention text rendered in a red capsule. Non-running worktrees (no pane rows) display no attention indicator.
 
 **STATE-2.3** When the user clicks a worktree entry that has an attention overlay, the application shall clear the attention overlay.
 
@@ -344,9 +344,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **NOTIF-2.2** When libghostty fires `COMMAND_FINISHED` with a non-zero exit code, the application shall set the owning worktree's attention overlay to an error indicator that auto-clears after 8 seconds.
 
-**NOTIF-2.3** When libghostty fires `PROGRESS_REPORT` with a percentage, the application shall set the owning worktree's attention overlay to that percentage. Indeterminate, paused, and error states shall be displayed with distinct short labels.
-
-**NOTIF-2.4** Auto-populated attention badges from shell-integration events shall share the existing clearing semantics defined in STATE-2.x; a subsequent event on the same worktree replaces the previous badge.
+**NOTIF-2.3** Auto-populated attention badges from shell-integration events shall share the existing clearing semantics defined in STATE-2.x; a subsequent event on the same worktree replaces the previous badge.
 
 ## 10. Shell Integration Configuration
 
@@ -368,7 +366,61 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **CONFIG-2.4** If no Ghostty.app installation is found, shell integration features (OSC 7 auto-reporting, OSC 133 prompt marks, `COMMAND_FINISHED`, and `PROGRESS_REPORT`) shall silently be unavailable rather than surfacing an error; spawned shells shall still function.
 
-## 11. Technology Constraints
+## 11. Worktree Divergence Indicator
+
+### 11.1 Display
+
+**DIVERGE-1.1** Each worktree entry in the sidebar shall display a trailing-aligned divergence indicator, placed to the left of the attention badge (or at the trailing edge when no attention badge is present).
+
+**DIVERGE-1.2** The indicator shall display zero, one, or both of the following on a single line, separated by a single space when both are present:
+- `↑<N>` when the worktree's HEAD has N commits not reachable from the base ref (ahead). Additionally, when the worktree has uncommitted changes, a `+` shall be appended, yielding `↑<N>+`. When N is zero, the ahead segment shall be rendered (as `↑0+`) only if uncommitted changes exist; otherwise the ahead segment shall be omitted.
+- `↓<N>` when the base ref has N commits not reachable from the worktree's HEAD (behind). Omitted when N is zero.
+
+**DIVERGE-1.3** On hover, the indicator shall surface a system tooltip containing the insertion/deletion line counts in the form `+<I> -<D> lines` (with zero sides omitted), optionally suffixed with `, uncommitted changes` when the worktree has uncommitted changes. When there are neither line changes nor uncommitted changes, no tooltip is shown.
+
+**DIVERGE-1.4** When the worktree's ahead count, behind count, insertion count, and deletion count are all zero and there are no uncommitted changes, the indicator shall render no text.
+
+**DIVERGE-1.5** When the repository has no `origin` remote or the default branch name cannot be resolved, the indicator shall render no text for any worktree in that repository.
+
+**DIVERGE-1.6** While a worktree is in the stale state, the indicator shall render no text.
+
+### 11.2 Origin Default Branch Resolution
+
+**DIVERGE-2.1** The application shall resolve each repository's default branch name by running `git symbolic-ref --short refs/remotes/origin/HEAD` and stripping the `origin/` prefix from the result.
+
+**DIVERGE-2.2** If `refs/remotes/origin/HEAD` is not set, the application shall probe the refs `origin/main`, `origin/master`, and `origin/develop` in that order via `git show-ref --verify` and use the matching branch name.
+
+**DIVERGE-2.3** The application shall not perform any network operations to resolve the default branch name.
+
+**DIVERGE-2.4** The application shall cache the resolved default branch name per repository for the duration of the session.
+
+### 11.3 Computation
+
+**DIVERGE-3.0** The base ref for divergence computation shall depend on the worktree's role in the repository:
+- For the main checkout (the worktree whose path equals the repository's path), the base ref shall be `origin/<name>`, where `<name>` is the resolved default branch name. This surfaces unpushed work on the main checkout.
+- For linked worktrees (every other worktree), the base ref shall be the local `<name>` branch. This shows how far a feature branch has diverged from the point it was branched off rather than double-counting commits already on local main.
+
+**DIVERGE-3.1** The application shall compute ahead and behind commit counts by running `git rev-list --left-right --count <base-ref>...HEAD` in the worktree directory, interpreting the left count as behind and the right count as ahead. `<base-ref>` is determined per DIVERGE-3.0.
+
+**DIVERGE-3.2** The application shall compute insertion and deletion line counts by running `git diff --shortstat <base-ref>...HEAD` in the worktree directory, with `<base-ref>` per DIVERGE-3.0.
+
+**DIVERGE-3.3** The application shall detect uncommitted changes in each worktree by running `git status --porcelain` and treating any non-empty output (including modified, staged, deleted, or untracked entries) as "has uncommitted changes".
+
+**DIVERGE-3.4** All git computation for divergence indicators shall run off the main thread and shall not block the UI.
+
+**DIVERGE-3.5** Divergence counts and the uncommitted-changes flag shall be held in memory only and shall not be written to `state.json`.
+
+### 11.4 Refresh Triggers
+
+**DIVERGE-4.1** When a repository is added to the sidebar, the application shall compute divergence counts for each of its worktrees.
+
+**DIVERGE-4.2** When a worktree's HEAD reference changes, the application shall recompute that worktree's divergence counts.
+
+**DIVERGE-4.3** The application shall poll every 60 seconds to recompute divergence counts for all worktrees across all repositories, to catch changes to the origin default branch that occur outside the current worktree (e.g., after `git fetch` runs in another terminal).
+
+**DIVERGE-4.4** While a divergence computation is in flight for a particular worktree, duplicate refresh requests for the same worktree shall be dropped.
+
+## 12. Technology Constraints
 
 **TECH-1** The application shall be built in Swift using SwiftUI for app chrome and AppKit for terminal view hosting.
 

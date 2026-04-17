@@ -9,11 +9,18 @@ struct SidebarView: View {
     /// truth for per-pane labels.
     @ObservedObject var terminalManager: TerminalManager
     let theme: GhosttyTheme
+    let statsStore: WorktreeStatsStore
     let onSelect: (String) -> Void
     let onSelectPane: (String, TerminalID) -> Void
     let onAddRepo: () -> Void
     let onAddPath: (String) -> Void
     let onStopWorktree: (String) -> Void
+    /// Called when the user submits the add-worktree sheet. Returns nil
+    /// on success, or a user-visible error string (typically git's
+    /// stderr) on failure so the sheet can display it inline.
+    let onAddWorktree: (RepoEntry, String, String) async -> String?
+
+    @State private var addingWorktreeTo: RepoEntry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +51,17 @@ struct SidebarView: View {
             handleDrop(providers)
         }
         .publishSidebarWidth()
+        .sheet(item: $addingWorktreeTo) { repo in
+            AddWorktreeSheet(
+                repoDisplayName: repo.displayName,
+                onSubmit: { worktreeName, branchName in
+                    let err = await onAddWorktree(repo, worktreeName, branchName)
+                    if err == nil { addingWorktreeTo = nil }
+                    return err
+                },
+                onCancel: { addingWorktreeTo = nil }
+            )
+        }
     }
 
     @ViewBuilder
@@ -60,15 +78,37 @@ struct SidebarView: View {
         ) {
             ForEach(repo.worktrees) { worktree in
                 worktreeBlock(worktree, repo: repo)
+                    // Outdent the worktree rows so each row's state
+                    // indicator lines up under the parent repo's folder
+                    // icon rather than sitting further right than the
+                    // repo's disclosure label. -20pt counters the
+                    // DisclosureGroup child indent minus the leading
+                    // width of the icon column on the repo header.
+                    .listRowInsets(EdgeInsets(top: 0, leading: -20, bottom: 0, trailing: 0))
             }
         } label: {
-            Label {
+            // No leading glyph — the top level is always projects, so
+            // a folder icon would be tautological noise. The disclosure
+            // arrow and semibold weight carry the "expandable heading"
+            // cues on their own. Trailing "+" opens the add-worktree
+            // sheet; .buttonStyle(.plain) keeps its tap from toggling
+            // the enclosing disclosure.
+            HStack(spacing: 6) {
                 Text(repo.displayName)
                     .foregroundColor(theme.foreground)
                     .fontWeight(.semibold)
-            } icon: {
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(theme.foreground.opacity(0.85))
+                Spacer()
+                Button {
+                    addingWorktreeTo = repo
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.foreground.opacity(0.6))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Add worktree to \(repo.displayName)")
             }
         }
     }
@@ -92,7 +132,12 @@ struct SidebarView: View {
                     isActive: isActive,
                     displayName: label(for: worktree, in: repo),
                     isMainCheckout: worktree.path == repo.path,
-                    theme: theme
+                    theme: theme,
+                    stats: statsStore.stats[worktree.path],
+                    baseRef: statsStore.baseRef(
+                        worktreePath: worktree.path,
+                        repoPath: repo.path
+                    )
                 )
             }
             .buttonStyle(.plain)
@@ -110,7 +155,8 @@ struct SidebarView: View {
                             isActiveWorktree: isActive,
                             isFocusedPane: isActive
                                 && worktree.focusedTerminalID == terminalID,
-                            theme: theme
+                            theme: theme,
+                            attentionText: worktree.attention?.text
                         )
                     }
                     .buttonStyle(.plain)

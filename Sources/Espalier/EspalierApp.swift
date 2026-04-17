@@ -8,11 +8,14 @@ import EspalierKit
 final class AppServices {
     let socketServer: SocketServer
     let worktreeMonitor: WorktreeMonitor
+    let statsStore: WorktreeStatsStore
     var worktreeMonitorBridge: WorktreeMonitorBridge?
+    var statsPollTimer: Timer?
 
     init(socketPath: String) {
         self.socketServer = SocketServer(socketPath: socketPath)
         self.worktreeMonitor = WorktreeMonitor()
+        self.statsStore = WorktreeStatsStore()
     }
 }
 
@@ -33,7 +36,12 @@ struct EspalierApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainWindow(appState: $appState, terminalManager: terminalManager)
+            MainWindow(
+                appState: $appState,
+                terminalManager: terminalManager,
+                statsStore: services.statsStore,
+                worktreeMonitor: services.worktreeMonitor
+            )
                 .onAppear { startup() }
                 .onChange(of: appState) { _, newState in
                     try? newState.save(to: AppState.defaultDirectory)
@@ -172,25 +180,12 @@ struct EspalierApp: App {
                 )
             }
         }
-        terminalManager.onProgressReport = { [appState = $appState] terminalID, report in
-            MainActor.assumeIsolated {
-                let text: String
-                switch report {
-                case .error:         text = "err"
-                case .indeterminate: text = "…"
-                case .paused:        text = "||"
-                case .percent(let p): text = "\(p)%"
-                }
-                // Progress reports refresh live — clearAfter is longer so
-                // they don't flicker away between updates.
-                Self.setAttentionForTerminal(
-                    appState: appState,
-                    terminalID: terminalID,
-                    text: text,
-                    clearAfter: 10
-                )
-            }
-        }
+        // PROGRESS_REPORT intentionally unhandled — shell-integration
+        // progress pings (OSC 9;4 from tools emitting indeterminate or
+        // percent status) were too loud relative to the urgency they
+        // convey. The underlying plumbing in TerminalManager stays
+        // wired; we can revisit with a dedicated, less-aggressive
+        // visual if the need comes back.
 
         try? services.socketServer.start()
         // SocketServer already dispatches onMessage to the main queue.
@@ -202,7 +197,10 @@ struct EspalierApp: App {
             }
         }
 
-        let bridge = WorktreeMonitorBridge(appState: $appState)
+        let bridge = WorktreeMonitorBridge(
+            appState: $appState,
+            statsStore: services.statsStore
+        )
         services.worktreeMonitorBridge = bridge
         services.worktreeMonitor.delegate = bridge
         for repo in appState.repos {
@@ -214,6 +212,30 @@ struct EspalierApp: App {
         }
 
         reconcileOnLaunch()
+        for repo in appState.repos {
+            for wt in repo.worktrees where wt.state != .stale {
+                services.statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
+            }
+        }
+
+        // 60s poll catches origin/<default> drift from external `git fetch`
+        // invocations — WorktreeMonitor's HEAD watcher only fires when this
+        // worktree's HEAD moves, not when the remote ref does.
+        let statsBinding = $appState
+        let statsStore = services.statsStore
+        services.statsPollTimer = Timer.scheduledTimer(
+            withTimeInterval: 60,
+            repeats: true
+        ) { _ in
+            MainActor.assumeIsolated {
+                for repo in statsBinding.wrappedValue.repos {
+                    for wt in repo.worktrees where wt.state != .stale {
+                        statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
+                    }
+                }
+            }
+        }
+
         restoreRunningWorktrees()
     }
 
@@ -685,13 +707,21 @@ struct EspalierApp: App {
 @MainActor
 final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     let appState: Binding<AppState>
+    let statsStore: WorktreeStatsStore
 
-    init(appState: Binding<AppState>) {
+    init(appState: Binding<AppState>, statsStore: WorktreeStatsStore) {
         self.appState = appState
+        self.statsStore = statsStore
     }
 
+    /// Called when `.git/worktrees/` changes (new worktree added, existing
+    /// one removed externally). After reconciling appState, refresh stats
+    /// for every non-stale worktree in the repo — new worktrees need their
+    /// initial stats, removed ones will be marked stale (and stats cleared
+    /// by `worktreeMonitorDidDetectDeletion`).
     nonisolated func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             guard let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
@@ -711,11 +741,27 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
                 }
             }
+
+            // Register FS watches for every known worktree in this repo.
+            // watchWorktreePath / watchHeadRef are idempotent, but this
+            // catches newly-discovered worktrees (from external CLI
+            // `git worktree add`) that otherwise wouldn't get HEAD
+            // tracking until the app restarted.
+            for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                monitor.watchWorktreePath(wt.path)
+                monitor.watchHeadRef(worktreePath: wt.path, repoPath: repoPath)
+            }
+
+            // Refresh stats for all non-stale worktrees in this repo.
+            for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                store.refresh(worktreePath: wt.path, repoPath: repoPath)
+            }
         }
     }
 
     nonisolated func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
@@ -724,11 +770,13 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     }
                 }
             }
+            store.clear(worktreePath: worktreePath)
         }
     }
 
     nonisolated func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
+        let store = statsStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
@@ -737,6 +785,8 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                     if binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path == worktreePath,
                        let match = discovered.first(where: { $0.path == worktreePath }) {
                         binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+                        // HEAD moved — recompute stats for this worktree.
+                        store.refresh(worktreePath: worktreePath, repoPath: repoPath)
                     }
                 }
             }

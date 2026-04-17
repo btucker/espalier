@@ -18,6 +18,12 @@ struct PaneTitleRow: View {
     /// bolder `↳` glyph so the user can see "typing goes here".
     let isFocusedPane: Bool
     let theme: GhosttyTheme
+    /// When non-nil, the pane title text is replaced by this string
+    /// rendered inside a red capsule — an attention ping from the CLI
+    /// `espalier notify` path. Cleared automatically when the worktree
+    /// (or any pane in it) gains focus, returning the row to showing
+    /// the shell-provided title.
+    let attentionText: String?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -25,16 +31,35 @@ struct PaneTitleRow: View {
                 .font(.caption)
                 .fontWeight(isFocusedPane ? .bold : .regular)
                 .foregroundColor(theme.foreground.opacity(arrowOpacity))
-            Text(title.isEmpty ? "shell" : title)
-                .font(.caption)
-                .fontWeight(isFocusedPane ? .semibold : .regular)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundColor(theme.foreground.opacity(titleOpacity))
+            if let attentionText {
+                Text(attentionText)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .clipShape(Capsule())
+            } else {
+                Text(title.isEmpty ? "shell" : title)
+                    .font(.caption)
+                    .fontWeight(isFocusedPane ? .semibold : .regular)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundColor(theme.foreground.opacity(titleOpacity))
+            }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
-        .padding(.leading, 28)
+        // Place the `↳` glyph's vertical stroke directly under the center
+        // of the worktree row's house/branch icon above. The worktree
+        // row's leading padding is 8pt + 12pt icon = icon center at 14pt.
+        // The `↳` character's vertical stroke sits at its own left edge,
+        // so a 14pt leading padding drops that stroke onto the icon's
+        // vertical centerline.
+        .padding(.leading, 14)
         .padding(.trailing, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -73,14 +98,25 @@ struct WorktreeRow: View {
     /// Theme snapshot for foreground/dim text colors, so the sidebar
     /// matches ghostty's palette rather than fighting it.
     let theme: GhosttyTheme
+    /// Divergence stats for this worktree, or nil when unresolved (no
+    /// origin remote, stale, not yet computed).
+    let stats: WorktreeStats?
+    /// The base ref the divergence stats were measured against. Used in
+    /// the tooltip so the user knows what the numbers mean (e.g.
+    /// `"origin/main"` for the main checkout, `"main"` for a linked
+    /// worktree). Nil when the default branch isn't resolvable.
+    let baseRef: String?
 
     var body: some View {
         HStack(spacing: 6) {
-            stateIndicator
             typeIcon
             branchLabel
             Spacer()
-            attentionBadge
+            WorktreeRowGutter(
+                stats: entry.state == .stale ? nil : stats,
+                baseRef: baseRef,
+                theme: theme
+            )
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
@@ -89,32 +125,22 @@ struct WorktreeRow: View {
     }
 
     /// `house` for the repo's main checkout, `arrow.triangle.branch` for
-    /// linked worktrees. Gives Andy an at-a-glance way to distinguish
-    /// "the canonical source" from "an ephemeral branch workspace"
-    /// without reading labels.
+    /// linked worktrees. The icon's color encodes the worktree's running
+    /// state: dim foreground when closed, green when running, yellow when
+    /// stale. Two signals in one glyph.
     @ViewBuilder
     private var typeIcon: some View {
         Image(systemName: isMainCheckout ? "house" : "arrow.triangle.branch")
             .font(.system(size: 10))
-            .foregroundColor(theme.foreground.opacity(0.6))
+            .foregroundColor(typeIconColor)
             .frame(width: 12)
     }
 
-    @ViewBuilder
-    private var stateIndicator: some View {
+    private var typeIconColor: Color {
         switch entry.state {
-        case .closed:
-            Circle()
-                .strokeBorder(theme.foreground.opacity(0.5), lineWidth: 1)
-                .frame(width: 8, height: 8)
-        case .running:
-            Circle()
-                .fill(Color.green)
-                .frame(width: 8, height: 8)
-        case .stale:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10))
-                .foregroundColor(.yellow)
+        case .closed: return theme.foreground.opacity(0.6)
+        case .running: return .green
+        case .stale: return .yellow
         }
     }
 
@@ -147,17 +173,4 @@ struct WorktreeRow: View {
         }
     }
 
-    @ViewBuilder
-    private var attentionBadge: some View {
-        if let attention = entry.attention {
-            Text(attention.text)
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Color.red)
-                .foregroundColor(.white)
-                .clipShape(Capsule())
-        }
-    }
 }
