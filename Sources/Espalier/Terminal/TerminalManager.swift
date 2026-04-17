@@ -183,16 +183,7 @@ final class TerminalManager: ObservableObject {
 
         var created: [TerminalID: SurfaceHandle] = [:]
         for terminalID in splitTree.allLeaves where surfaces[terminalID] == nil {
-            let zmxCommand: String?
-            let zmxDir: String?
-            if let launcher = zmxLauncher, launcher.isAvailable {
-                let session = launcher.sessionName(for: terminalID.id)
-                zmxCommand = launcher.attachCommand(sessionName: session)
-                zmxDir = launcher.zmxDir.path
-            } else {
-                zmxCommand = nil
-                zmxDir = nil
-            }
+            let (zmxCommand, zmxDir) = resolveZmxSpawn(for: terminalID)
             let handle = SurfaceHandle(
                 terminalID: terminalID,
                 app: app,
@@ -218,16 +209,7 @@ final class TerminalManager: ObservableObject {
             return existing
         }
 
-        let zmxCommand: String?
-        let zmxDir: String?
-        if let launcher = zmxLauncher, launcher.isAvailable {
-            let session = launcher.sessionName(for: terminalID.id)
-            zmxCommand = launcher.attachCommand(sessionName: session)
-            zmxDir = launcher.zmxDir.path
-        } else {
-            zmxCommand = nil
-            zmxDir = nil
-        }
+        let (zmxCommand, zmxDir) = resolveZmxSpawn(for: terminalID)
         let handle = SurfaceHandle(
             terminalID: terminalID,
             app: app,
@@ -279,6 +261,18 @@ final class TerminalManager: ObservableObject {
         surfaces.removeValue(forKey: terminalID)
         titles.removeValue(forKey: terminalID)
         killZmxSession(for: terminalID)
+    }
+
+    /// Resolve the per-surface zmx spawn parameters for a terminal pane.
+    /// Returns (nil, nil) when no launcher is configured or the binary is
+    /// missing — in which case `SurfaceHandle` falls back to libghostty's
+    /// default `$SHELL` spawn (existing pre-zmx behavior).
+    private func resolveZmxSpawn(for terminalID: TerminalID) -> (command: String?, dir: String?) {
+        guard let launcher = zmxLauncher, launcher.isAvailable else {
+            return (nil, nil)
+        }
+        let session = launcher.sessionName(for: terminalID.id)
+        return (launcher.attachCommand(sessionName: session), launcher.zmxDir.path)
     }
 
     /// Fire-off the `zmx kill` for a terminal's session. Dispatched off
