@@ -92,6 +92,11 @@ jobs:
           set -euo pipefail
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/btucker/homebrew-espalier.git" tap
           cd tap
+          # Pull-rebase before editing in case a manual cask edit landed
+          # between our clone and our push (e.g., a maintainer syncing
+          # caveats from docs/release/Casks/espalier.rb in the source repo).
+          # No-op when there's nothing new.
+          git pull --rebase origin main
           # Rewrite version + sha256 in place. Two seds (not one) so the
           # failure mode is obvious if either field's literal text drifts
           # in the cask.

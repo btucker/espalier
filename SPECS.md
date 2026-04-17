@@ -510,6 +510,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **DIST-2.3** If a release for the pushed tag already exists, then the workflow shall re-upload the zip with `--clobber` and continue to the cask update step rather than failing.
 
+**DIST-2.4** The release zip shall be produced with `ditto -c -k --keepParent` (not `zip`) so that codesign-relevant extended attributes survive — `zip` strips them and installs fail with opaque "damaged" errors after reboot.
+
 ### 14.3 Homebrew Cask
 
 **DIST-3.1** The Homebrew tap `btucker/homebrew-espalier` shall expose a cask `espalier` that downloads the release zip, installs `Espalier.app` to `/Applications`, and symlinks `Espalier.app/Contents/Helpers/espalier` onto the user's PATH as `espalier`.
