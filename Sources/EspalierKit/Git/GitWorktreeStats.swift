@@ -7,16 +7,28 @@ public struct WorktreeStats: Equatable, Sendable {
     public let behind: Int
     public let insertions: Int
     public let deletions: Int
+    /// True when the worktree has modified, staged, deleted, or untracked
+    /// files. Surfaced inline as a `+` suffix on the ahead count so the
+    /// user can distinguish "clean branch, 2 commits ahead" from
+    /// "2 commits ahead plus work in progress" at a glance.
+    public let hasUncommittedChanges: Bool
 
-    public init(ahead: Int, behind: Int, insertions: Int, deletions: Int) {
+    public init(
+        ahead: Int,
+        behind: Int,
+        insertions: Int,
+        deletions: Int,
+        hasUncommittedChanges: Bool = false
+    ) {
         self.ahead = ahead
         self.behind = behind
         self.insertions = insertions
         self.deletions = deletions
+        self.hasUncommittedChanges = hasUncommittedChanges
     }
 
     public var isEmpty: Bool {
-        ahead == 0 && behind == 0 && insertions == 0 && deletions == 0
+        ahead == 0 && behind == 0 && insertions == 0 && deletions == 0 && !hasUncommittedChanges
     }
 }
 
@@ -65,8 +77,11 @@ public enum GitWorktreeStats {
     }
 
     /// Computes divergence stats for a worktree vs. an origin default branch ref.
-    /// Runs two local git commands synchronously — callers should invoke this
-    /// off the main thread. Throws if git fails to launch or exits non-zero.
+    /// Runs three local git commands synchronously — callers should invoke
+    /// this off the main thread. Throws if git fails to launch or exits
+    /// non-zero on rev-list/diff. Uncommitted-changes detection uses
+    /// `git status --porcelain`: any output (modified, staged, deleted,
+    /// untracked) counts as dirty.
     public static func compute(
         worktreePath: String,
         defaultBranchRef: String
@@ -98,11 +113,23 @@ public enum GitWorktreeStats {
         }
         let diff = parseShortStat(diffOutput)
 
+        let statusOutput: String
+        do {
+            statusOutput = try GitRunner.run(
+                args: ["status", "--porcelain"],
+                at: worktreePath
+            )
+        } catch GitRunner.Error.gitFailed(let status) {
+            throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
+        }
+        let dirty = !statusOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
         return WorktreeStats(
             ahead: counts.ahead,
             behind: counts.behind,
             insertions: diff.insertions,
-            deletions: diff.deletions
+            deletions: diff.deletions,
+            hasUncommittedChanges: dirty
         )
     }
 }

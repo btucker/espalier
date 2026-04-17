@@ -372,41 +372,45 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 11.1 Display
 
-**DIVERGE-1.1** Each worktree entry in the sidebar shall display a fixed-width leading gutter for divergence information. The gutter shall reserve its width regardless of whether it has content, so row contents align vertically across sibling worktrees.
+**DIVERGE-1.1** Each worktree entry in the sidebar shall display a trailing-aligned divergence indicator, placed to the left of the attention badge (or at the trailing edge when no attention badge is present).
 
-**DIVERGE-1.2** The gutter shall display a first line containing zero, one, or both of the following, separated by a single space when both are present:
-- `↑<N>` when the worktree's HEAD has N commits not reachable from the origin default branch (ahead),
-- `↓<N>` when the origin default branch has N commits not reachable from the worktree's HEAD (behind).
+**DIVERGE-1.2** The indicator shall display zero, one, or both of the following on a single line, separated by a single space when both are present:
+- `↑<N>` when the worktree's HEAD has N commits not reachable from the base ref (ahead). Additionally, when the worktree has uncommitted changes, a `+` shall be appended, yielding `↑<N>+`. When N is zero, the ahead segment shall be rendered (as `↑0+`) only if uncommitted changes exist; otherwise the ahead segment shall be omitted.
+- `↓<N>` when the base ref has N commits not reachable from the worktree's HEAD (behind). Omitted when N is zero.
 
-**DIVERGE-1.3** The gutter shall display a second line containing zero, one, or both of the following, separated by a single space when both are present:
-- `+<I>` when the diff between the origin default branch and HEAD introduces I insertion lines on HEAD,
-- `-<D>` when the diff between the origin default branch and HEAD introduces D deletion lines on HEAD.
+**DIVERGE-1.3** On hover, the indicator shall surface a system tooltip containing the insertion/deletion line counts in the form `+<I> -<D> lines` (with zero sides omitted), optionally suffixed with `, uncommitted changes` when the worktree has uncommitted changes. When there are neither line changes nor uncommitted changes, no tooltip is shown.
 
-**DIVERGE-1.4** When the worktree's ahead count, behind count, insertion count, and deletion count are all zero, the gutter shall render no text while still reserving its fixed width.
+**DIVERGE-1.4** When the worktree's ahead count, behind count, insertion count, and deletion count are all zero and there are no uncommitted changes, the indicator shall render no text.
 
-**DIVERGE-1.5** When the repository has no `origin` remote or the origin default branch cannot be resolved, the gutter shall render no text for every worktree in that repository.
+**DIVERGE-1.5** When the repository has no `origin` remote or the default branch name cannot be resolved, the indicator shall render no text for any worktree in that repository.
 
-**DIVERGE-1.6** While a worktree is in the stale state, the gutter shall render no text.
+**DIVERGE-1.6** While a worktree is in the stale state, the indicator shall render no text.
 
 ### 11.2 Origin Default Branch Resolution
 
-**DIVERGE-2.1** The application shall resolve each repository's origin default branch by running `git symbolic-ref --short refs/remotes/origin/HEAD`, yielding a value of the form `origin/<branch>`.
+**DIVERGE-2.1** The application shall resolve each repository's default branch name by running `git symbolic-ref --short refs/remotes/origin/HEAD` and stripping the `origin/` prefix from the result.
 
-**DIVERGE-2.2** If `refs/remotes/origin/HEAD` is not set, the application shall probe the refs `origin/main`, `origin/master`, and `origin/develop` in that order via `git show-ref --verify` and use the first that exists.
+**DIVERGE-2.2** If `refs/remotes/origin/HEAD` is not set, the application shall probe the refs `origin/main`, `origin/master`, and `origin/develop` in that order via `git show-ref --verify` and use the matching branch name.
 
-**DIVERGE-2.3** The application shall not perform any network operations to resolve the origin default branch.
+**DIVERGE-2.3** The application shall not perform any network operations to resolve the default branch name.
 
-**DIVERGE-2.4** The application shall cache the resolved origin default branch per repository for the duration of the session.
+**DIVERGE-2.4** The application shall cache the resolved default branch name per repository for the duration of the session.
 
 ### 11.3 Computation
 
-**DIVERGE-3.1** The application shall compute ahead and behind commit counts by running `git rev-list --left-right --count <origin-default-ref>...HEAD` in the worktree directory, interpreting the left count as behind and the right count as ahead.
+**DIVERGE-3.0** The base ref for divergence computation shall depend on the worktree's role in the repository:
+- For the main checkout (the worktree whose path equals the repository's path), the base ref shall be `origin/<name>`, where `<name>` is the resolved default branch name. This surfaces unpushed work on the main checkout.
+- For linked worktrees (every other worktree), the base ref shall be the local `<name>` branch. This shows how far a feature branch has diverged from the point it was branched off rather than double-counting commits already on local main.
 
-**DIVERGE-3.2** The application shall compute insertion and deletion line counts by running `git diff --shortstat <origin-default-ref>...HEAD` in the worktree directory.
+**DIVERGE-3.1** The application shall compute ahead and behind commit counts by running `git rev-list --left-right --count <base-ref>...HEAD` in the worktree directory, interpreting the left count as behind and the right count as ahead. `<base-ref>` is determined per DIVERGE-3.0.
 
-**DIVERGE-3.3** All git computation for divergence indicators shall run off the main thread and shall not block the UI.
+**DIVERGE-3.2** The application shall compute insertion and deletion line counts by running `git diff --shortstat <base-ref>...HEAD` in the worktree directory, with `<base-ref>` per DIVERGE-3.0.
 
-**DIVERGE-3.4** Divergence counts shall be held in memory only and shall not be written to `state.json`.
+**DIVERGE-3.3** The application shall detect uncommitted changes in each worktree by running `git status --porcelain` and treating any non-empty output (including modified, staged, deleted, or untracked entries) as "has uncommitted changes".
+
+**DIVERGE-3.4** All git computation for divergence indicators shall run off the main thread and shall not block the UI.
+
+**DIVERGE-3.5** Divergence counts and the uncommitted-changes flag shall be held in memory only and shall not be written to `state.json`.
 
 ### 11.4 Refresh Triggers
 

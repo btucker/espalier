@@ -61,11 +61,13 @@ struct SidebarView: View {
         ) {
             ForEach(repo.worktrees) { worktree in
                 worktreeBlock(worktree, repo: repo)
-                    // Zero out List's default row insets so the divergence
-                    // gutter can sit flush against the sidebar's leading
-                    // edge (DIVERGE-1.1). The row's own trailing padding
-                    // still keeps content off the right edge.
-                    .listRowInsets(EdgeInsets())
+                    // Outdent the worktree rows so each row's state
+                    // indicator lines up under the parent repo's folder
+                    // icon rather than sitting further right than the
+                    // repo's disclosure label. -20pt counters the
+                    // DisclosureGroup child indent minus the leading
+                    // width of the icon column on the repo header.
+                    .listRowInsets(EdgeInsets(top: 0, leading: -20, bottom: 0, trailing: 0))
             }
         } label: {
             Label {
@@ -99,7 +101,11 @@ struct SidebarView: View {
                     displayName: label(for: worktree, in: repo),
                     isMainCheckout: worktree.path == repo.path,
                     theme: theme,
-                    stats: statsStore.stats[worktree.path]
+                    stats: statsStore.stats[worktree.path],
+                    baseRef: statsStore.baseRef(
+                        worktreePath: worktree.path,
+                        repoPath: repo.path
+                    )
                 )
             }
             .buttonStyle(.plain)

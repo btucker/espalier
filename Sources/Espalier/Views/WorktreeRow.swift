@@ -76,26 +76,27 @@ struct WorktreeRow: View {
     /// Divergence stats for this worktree, or nil when unresolved (no
     /// origin remote, stale, not yet computed).
     let stats: WorktreeStats?
+    /// The base ref the divergence stats were measured against. Used in
+    /// the tooltip so the user knows what the numbers mean (e.g.
+    /// `"origin/main"` for the main checkout, `"main"` for a linked
+    /// worktree). Nil when the default branch isn't resolvable.
+    let baseRef: String?
 
     var body: some View {
         HStack(spacing: 6) {
-            // Stale worktrees get no gutter content per DIVERGE-1.6, but
-            // the width stays reserved for vertical alignment.
-            WorktreeRowGutter(
-                stats: entry.state == .stale ? nil : stats,
-                theme: theme
-            )
             stateIndicator
             typeIcon
             branchLabel
             Spacer()
+            WorktreeRowGutter(
+                stats: entry.state == .stale ? nil : stats,
+                baseRef: baseRef,
+                theme: theme
+            )
             attentionBadge
         }
         .padding(.vertical, 4)
-        // Asymmetric: no leading padding so the divergence gutter sits flush
-        // against the sidebar's leading edge (DIVERGE-1.1); trailing padding
-        // keeps the attention badge and branch text off the scrollbar.
-        .padding(.trailing, 8)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }

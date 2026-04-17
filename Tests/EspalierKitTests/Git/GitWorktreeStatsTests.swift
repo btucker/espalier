@@ -205,4 +205,48 @@ struct GitWorktreeStatsComputeTests {
             try GitWorktreeStats.compute(worktreePath: bogus, defaultBranchRef: "origin/main")
         }
     }
+
+    @Test func cleanWorktreeReportsNoUncommittedChanges() throws {
+        let (root, clone) = try makeClonedRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let stats = try GitWorktreeStats.compute(
+            worktreePath: clone.path,
+            defaultBranchRef: "origin/main"
+        )
+        #expect(stats.hasUncommittedChanges == false)
+    }
+
+    @Test func modifiedTrackedFileMarksDirty() throws {
+        let (root, clone) = try makeClonedRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Modify file.txt without committing.
+        try shell(
+            "printf 'alpha\\nbeta\\ngamma\\ndelta\\n' > file.txt",
+            at: clone
+        )
+
+        let stats = try GitWorktreeStats.compute(
+            worktreePath: clone.path,
+            defaultBranchRef: "origin/main"
+        )
+        #expect(stats.ahead == 0)
+        #expect(stats.behind == 0)
+        #expect(stats.hasUncommittedChanges == true)
+    }
+
+    @Test func untrackedFileMarksDirty() throws {
+        let (root, clone) = try makeClonedRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Untracked files also count as uncommitted work per spec intent.
+        try shell("printf 'scratch' > newfile.txt", at: clone)
+
+        let stats = try GitWorktreeStats.compute(
+            worktreePath: clone.path,
+            defaultBranchRef: "origin/main"
+        )
+        #expect(stats.hasUncommittedChanges == true)
+    }
 }

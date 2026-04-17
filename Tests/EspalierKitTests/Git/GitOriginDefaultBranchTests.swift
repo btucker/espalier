@@ -63,7 +63,7 @@ struct GitOriginDefaultBranchTests {
         try shell("git clone \(upstream.path) \(clone.path)", at: root)
 
         let result = try GitOriginDefaultBranch.resolve(repoPath: clone.path)
-        #expect(result == "origin/main")
+        #expect(result == "main")
     }
 
     @Test func fallsBackToProbingMainWhenSymbolicRefMissing() throws {
@@ -88,7 +88,7 @@ struct GitOriginDefaultBranchTests {
         try shell("git remote set-head origin --delete", at: clone)
 
         let result = try GitOriginDefaultBranch.resolve(repoPath: clone.path)
-        #expect(result == "origin/main")
+        #expect(result == "main")
     }
 
     @Test func fallsBackToMasterIfNoMain() throws {
@@ -111,6 +111,6 @@ struct GitOriginDefaultBranchTests {
         try shell("git remote set-head origin --delete", at: clone)
 
         let result = try GitOriginDefaultBranch.resolve(repoPath: clone.path)
-        #expect(result == "origin/master")
+        #expect(result == "master")
     }
 }
