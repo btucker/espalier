@@ -26,12 +26,12 @@ public enum GitWorktreeAdd {
         worktreePath: String,
         branchName: String,
         startPoint: String?
-    ) throws {
+    ) async throws {
         var args: [String] = ["worktree", "add", "-b", branchName, worktreePath]
         if let startPoint, !startPoint.isEmpty {
             args.append(startPoint)
         }
-        let result = try GitRunner.captureAll(args: args, at: repoPath)
+        let result = try await GitRunner.captureAll(args: args, at: repoPath)
         guard result.exitCode == 0 else {
             throw Error.gitFailed(
                 exitCode: result.exitCode,
