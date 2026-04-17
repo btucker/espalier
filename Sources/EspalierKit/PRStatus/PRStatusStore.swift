@@ -172,10 +172,11 @@ extension PRStatusStore {
         var candidates: [Candidate] = []
 
         for repo in repos {
-            if let cached = hostByRepo[repo.path] {
-                // Only poll when we have a cached, supported origin.
-                guard let origin = cached, origin.provider != .unsupported else { continue }
-                _ = origin
+            // If host resolution already concluded "no origin" or "unsupported",
+            // skip. Uncached repos fall through — performFetch resolves on first run.
+            if let cached = hostByRepo[repo.path],
+               cached == nil || cached?.provider == .unsupported {
+                continue
             }
             for wt in repo.worktrees where wt.state != .stale {
                 if inFlight.contains(wt.path) { continue }
