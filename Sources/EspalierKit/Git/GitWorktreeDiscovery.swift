@@ -38,12 +38,12 @@ public enum GitWorktreeDiscovery {
         do {
             let output = try await GitRunner.run(args: ["worktree", "list", "--porcelain"], at: repoPath)
             return parsePorcelain(output)
-        } catch let CLIError.nonZeroExit(_, code, _) {
-            throw GitDiscoveryError.gitFailed(terminationStatus: code)
+        } catch let err as CLIError {
+            throw GitDiscoveryError.gitFailed(err)
         }
     }
 }
 
 public enum GitDiscoveryError: Error {
-    case gitFailed(terminationStatus: Int32)
+    case gitFailed(CLIError)
 }

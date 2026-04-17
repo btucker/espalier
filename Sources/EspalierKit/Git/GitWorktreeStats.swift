@@ -77,11 +77,11 @@ public enum GitWorktreeStats {
     }
 
     /// Computes divergence stats for a worktree vs. an origin default branch ref.
-    /// Runs three local git commands synchronously — callers should invoke
-    /// this off the main thread. Throws if git fails to launch or exits
-    /// non-zero on rev-list/diff. Uncommitted-changes detection uses
-    /// `git status --porcelain`: any output (modified, staged, deleted,
-    /// untracked) counts as dirty.
+    /// Runs three local git commands in sequence; each is awaited so callers
+    /// yield rather than block. Throws if git fails to launch or exits non-zero
+    /// on rev-list/diff. Uncommitted-changes detection uses `git status
+    /// --porcelain`: any output (modified, staged, deleted, untracked) counts
+    /// as dirty.
     public static func compute(
         worktreePath: String,
         defaultBranchRef: String
@@ -94,8 +94,8 @@ public enum GitWorktreeStats {
                 args: ["rev-list", "--left-right", "--count", range],
                 at: worktreePath
             )
-        } catch let CLIError.nonZeroExit(_, status, _) {
-            throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
+        } catch let err as CLIError {
+            throw GitWorktreeStatsError.gitFailed(err)
         }
 
         guard let counts = parseRevListCounts(revListOutput) else {
@@ -108,8 +108,8 @@ public enum GitWorktreeStats {
                 args: ["diff", "--shortstat", range],
                 at: worktreePath
             )
-        } catch let CLIError.nonZeroExit(_, status, _) {
-            throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
+        } catch let err as CLIError {
+            throw GitWorktreeStatsError.gitFailed(err)
         }
         let diff = parseShortStat(diffOutput)
 
@@ -119,8 +119,8 @@ public enum GitWorktreeStats {
                 args: ["status", "--porcelain"],
                 at: worktreePath
             )
-        } catch let CLIError.nonZeroExit(_, status, _) {
-            throw GitWorktreeStatsError.gitFailed(terminationStatus: status)
+        } catch let err as CLIError {
+            throw GitWorktreeStatsError.gitFailed(err)
         }
         let dirty = !statusOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -135,6 +135,6 @@ public enum GitWorktreeStats {
 }
 
 public enum GitWorktreeStatsError: Swift.Error, Equatable {
-    case gitFailed(terminationStatus: Int32)
+    case gitFailed(CLIError)
     case unparseableRevList(String)
 }

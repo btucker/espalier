@@ -254,7 +254,7 @@ struct MainWindow: View {
     /// checkout happens to have checked out right now). Returns nil on
     /// success or the stderr message on failure, for the sheet to display.
     ///
-    /// On success, discovers the new worktree synchronously, registers
+    /// On success, discovers the new worktree inline, registers
     /// its FSEvents watches, kicks its divergence stats, and selects
     /// it. The existing `.git/worktrees/` watcher will also fire
     /// `worktreeMonitorDidDetectChange` asynchronously — that path is

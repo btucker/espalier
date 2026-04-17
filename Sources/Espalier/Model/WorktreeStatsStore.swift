@@ -4,9 +4,10 @@ import EspalierKit
 
 /// Session-scoped, @MainActor-observed store of per-worktree divergence stats.
 ///
-/// Not persisted. All git work runs on a background Task.detached; publishing
-/// back to `stats` happens on the MainActor. Concurrent refresh requests for
-/// the same worktree path are deduplicated (DIVERGE-4.4).
+/// Not persisted. Git work is kicked on a child `Task` inherited from the
+/// MainActor; the async CLI calls yield rather than block. Publishing back
+/// to `stats` happens on the MainActor. Concurrent refresh requests for the
+/// same worktree path are deduplicated (DIVERGE-4.4).
 @MainActor
 @Observable
 public final class WorktreeStatsStore {
@@ -37,13 +38,11 @@ public final class WorktreeStatsStore {
                 repoPath: repoPath,
                 cachedDefault: cached
             )
-            await MainActor.run {
-                self.apply(
-                    worktreePath: worktreePath,
-                    repoPath: repoPath,
-                    result: computed
-                )
-            }
+            self.apply(
+                worktreePath: worktreePath,
+                repoPath: repoPath,
+                result: computed
+            )
         }
     }
 

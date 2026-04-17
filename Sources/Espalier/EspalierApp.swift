@@ -280,11 +280,6 @@ struct EspalierApp: App {
         }
 
         reconcileOnLaunch()
-        for repo in appState.repos {
-            for wt in repo.worktrees where wt.state != .stale {
-                services.statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
-            }
-        }
 
         // 60s poll catches origin/<default> drift from external `git fetch`
         // invocations — WorktreeMonitor's HEAD watcher only fires when this
@@ -309,6 +304,7 @@ struct EspalierApp: App {
 
     private func reconcileOnLaunch() {
         let binding = $appState
+        let statsStore = services.statsStore
         Task {
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
@@ -335,6 +331,15 @@ struct EspalierApp: App {
                     }) {
                         binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
                     }
+                }
+
+                // Kick initial stats refresh for this repo's non-stale
+                // worktrees, after reconciliation has populated new entries
+                // and marked externally-deleted ones stale. This preserves
+                // the pre-migration "reconcile, then refresh" ordering
+                // without blocking startup.
+                for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                    statsStore.refresh(worktreePath: wt.path, repoPath: repoPath)
                 }
             }
         }
