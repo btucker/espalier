@@ -555,6 +555,79 @@ final class TerminalManager: ObservableObject {
             }
             onProgressReport?(id, translated)
 
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            guard let id = terminalID(from: target) else { return }
+            let split: PaneSplit
+            switch action.action.new_split {
+            case GHOSTTY_SPLIT_DIRECTION_RIGHT: split = .right
+            case GHOSTTY_SPLIT_DIRECTION_LEFT:  split = .left
+            case GHOSTTY_SPLIT_DIRECTION_UP:    split = .up
+            case GHOSTTY_SPLIT_DIRECTION_DOWN:  split = .down
+            default: return
+            }
+            onSplitRequest?(id, split)
+
+        case GHOSTTY_ACTION_CLOSE_TAB:
+            // Ghostty reuses close_tab for close_surface in single-pane
+            // contexts; Espalier treats pane close the same way.
+            guard let id = terminalID(from: target) else { return }
+            onCloseRequest?(id)
+
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            guard let id = terminalID(from: target) else { return }
+            let gotoDir = action.action.goto_split
+            switch gotoDir {
+            case GHOSTTY_GOTO_SPLIT_LEFT:   onGotoSplit?(id, .left)
+            case GHOSTTY_GOTO_SPLIT_RIGHT:  onGotoSplit?(id, .right)
+            case GHOSTTY_GOTO_SPLIT_UP:     onGotoSplit?(id, .up)
+            case GHOSTTY_GOTO_SPLIT_DOWN:   onGotoSplit?(id, .down)
+            case GHOSTTY_GOTO_SPLIT_NEXT:     onGotoSplitOrder?(id, true)
+            case GHOSTTY_GOTO_SPLIT_PREVIOUS: onGotoSplitOrder?(id, false)
+            default: return
+            }
+
+        case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+            guard let id = terminalID(from: target) else { return }
+            onToggleZoom?(id)
+
+        case GHOSTTY_ACTION_RESIZE_SPLIT:
+            guard let id = terminalID(from: target) else { return }
+            let r = action.action.resize_split
+            let direction: ResizeDirection
+            switch r.direction {
+            case GHOSTTY_RESIZE_SPLIT_UP:    direction = .up
+            case GHOSTTY_RESIZE_SPLIT_DOWN:  direction = .down
+            case GHOSTTY_RESIZE_SPLIT_LEFT:  direction = .left
+            case GHOSTTY_RESIZE_SPLIT_RIGHT: direction = .right
+            default: return
+            }
+            onResizeSplit?(id, direction, r.amount)
+
+        case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+            guard let id = terminalID(from: target) else { return }
+            onEqualizeSplits?(id)
+
+        case GHOSTTY_ACTION_RELOAD_CONFIG:
+            onReloadConfig?()
+
+        // Silent no-ops for Ghostty concepts Espalier doesn't model. Listed
+        // explicitly (rather than falling into default) so future maintainers
+        // know we considered them.
+        case GHOSTTY_ACTION_NEW_TAB,
+             GHOSTTY_ACTION_MOVE_TAB,
+             GHOSTTY_ACTION_GOTO_TAB,
+             GHOSTTY_ACTION_NEW_WINDOW,
+             GHOSTTY_ACTION_CLOSE_ALL_WINDOWS,
+             GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
+             GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
+             GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW,
+             GHOSTTY_ACTION_TOGGLE_FULLSCREEN,
+             GHOSTTY_ACTION_TOGGLE_MAXIMIZE,
+             GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS,
+             GHOSTTY_ACTION_CHECK_FOR_UPDATES,
+             GHOSTTY_ACTION_OPEN_CONFIG:
+            break
+
         default:
             break
         }
