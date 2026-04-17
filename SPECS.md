@@ -28,6 +28,14 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **LAYOUT-2.7** When the user right-clicks a sidebar entry, the application shall display a context menu with actions appropriate to the entry's current state.
 
+**LAYOUT-2.8** While a worktree is in the running state, the sidebar shall display one indented child row per terminal pane beneath the worktree entry, each labeled by that pane's current title.
+
+**LAYOUT-2.9** If a terminal pane has no program-set title, then the pane's row shall display the fallback label "shell".
+
+**LAYOUT-2.10** When the user clicks a pane row, the application shall select that pane's worktree and focus that specific pane.
+
+**LAYOUT-2.11** The sidebar shall display the active worktree row and all its pane rows inside a single unified highlighted block; within that block, the focused pane's row shall additionally be emphasized via text weight and color (no secondary background).
+
 ### 1.3 Adding Repositories
 
 **LAYOUT-3.1** When the user clicks "Add Repository", the application shall present a standard macOS open panel for selecting a directory.
@@ -94,11 +102,19 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **TERM-4.2** When the user drags a divider, the application shall resize the adjacent panes proportionally.
 
+**TERM-4.3** When the user drags a divider to a new ratio, the application shall persist the new ratio in the worktree's split tree so that the layout survives app restarts.
+
+**TERM-4.4** When a pane is removed from the split tree, the application shall forward the new layout size to libghostty so remaining panes reflow to fill the vacated space.
+
 ### 3.5 Closing a Pane
 
 **TERM-5.1** When the user closes a terminal pane, the application shall remove it from the split tree and allow the sibling pane to fill the vacated space.
 
 **TERM-5.2** When the user closes the last terminal pane in a worktree, the application shall transition the worktree entry to the closed state.
+
+**TERM-5.3** When a terminal pane's child process exits, the application shall automatically remove the pane from the split tree and free its surface without requiring user action.
+
+**TERM-5.4** When an auto-closed pane was the last pane in its worktree, the application shall transition the worktree entry to the closed state, matching the user-initiated close behavior.
 
 ### 3.6 Stopping a Worktree
 
@@ -113,6 +129,10 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 **TERM-7.2** The application shall support keyboard navigation between panes using directional shortcuts (e.g., Cmd+Opt+Arrow).
 
 **TERM-7.3** When the user navigates between panes via keyboard, the application shall use the split tree's spatial layout to determine the target pane.
+
+**TERM-7.4** When the application launches with a selected running worktree, the application shall automatically promote that worktree's focused pane to the window's first responder so the user can begin typing without first clicking inside a terminal.
+
+**TERM-7.5** When the user selects a worktree or pane row in the sidebar, the application shall promote the target pane's `NSView` to the window's first responder so subsequent keystrokes route to that pane without an intermediate click.
 
 ### 3.8 Context Menu
 
@@ -246,7 +266,109 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **PERSIST-4.1** The application shall not persist shell scrollback, terminal screen buffer content, or the specific processes that were running.
 
-## 7. Technology Constraints
+## 7. PWD-Aware Pane Routing
+
+### 7.1 Detection
+
+**PWD-1.1** When a terminal shell reports a new working directory via OSC 7, the application shall evaluate whether the pane belongs under a different worktree in the sidebar.
+
+**PWD-1.2** The application shall select the destination worktree as the one whose filesystem path is the longest prefix of the reported PWD across all repos. If no worktree path is a prefix of the PWD, the pane shall remain in its current worktree.
+
+### 7.2 Reassignment
+
+**PWD-2.1** When the destination worktree differs from the current worktree, the application shall remove the pane from the source worktree's split tree and insert it into the destination worktree's split tree.
+
+**PWD-2.2** When a reassignment leaves the source worktree with no remaining panes, the application shall transition the source worktree to the closed state.
+
+**PWD-2.3** When a reassignment completes, the application shall set the destination worktree as the selected worktree and focus the moved pane so the UI follows the pane the user is actively typing into.
+
+**PWD-2.4** When the destination worktree was previously in the closed state, the application shall transition it to the running state as part of the reassignment.
+
+### 7.3 Position Memory
+
+**PWD-3.1** Before removing a pane from a source worktree, the application shall record its split-tree position — an anchor leaf, split direction, and before/after placement — keyed by `(terminalID, worktreePath)`.
+
+**PWD-3.2** When reinserting a pane into a worktree for which a remembered position exists and whose anchor leaf is still present, the application shall restore the pane adjacent to that anchor with the recorded direction and placement.
+
+**PWD-3.3** If no usable remembered position exists for the destination worktree, the application shall insert the pane at the first available leaf with a horizontal split as a fallback.
+
+**PWD-3.4** Position memory shall be maintained in-process only and not persisted across app restarts.
+
+## 8. Keyboard, Clipboard, and Mouse Integration
+
+### 8.1 Keyboard Forwarding
+
+**KEY-1.1** The application shall forward all keyboard input, including Command-modified keys, to libghostty so that libghostty's default keybindings (Cmd+C copy, Cmd+V paste, Cmd+A select-all, Cmd+K clear, etc.) take effect.
+
+**KEY-1.2** When libghostty reports that a key was not handled, the application shall allow the event to continue up the responder chain.
+
+**KEY-1.3** Application-level menu keyboard shortcuts (Cmd+D split, Cmd+W close pane, Cmd+O add repository, and pane navigation shortcuts) shall be matched by AppKit's menu `keyEquivalent` interception before the keyDown event reaches the terminal, so menu shortcuts override any conflicting libghostty keybinding.
+
+### 8.2 Clipboard
+
+**KEY-2.1** When libghostty requests a clipboard write (e.g., from `Cmd+C` or the context menu Copy), the application shall write the provided content to `NSPasteboard.general`.
+
+**KEY-2.2** When libghostty requests a clipboard read (e.g., from `Cmd+V` or the context menu Paste), the application shall read from `NSPasteboard.general` and return the text via `ghostty_surface_complete_clipboard_request`.
+
+**KEY-2.3** Selection clipboard requests (X11-style primary selection) shall route to the same general pasteboard, as macOS does not provide a distinct selection clipboard.
+
+**KEY-2.4** OSC 52 read-confirmation prompts shall be declined by default for security; terminal programs requesting OSC 52 reads shall fail silently rather than succeeding without user consent.
+
+### 8.3 Mouse
+
+**MOUSE-1.1** When libghostty requests a new mouse cursor shape via `MOUSE_SHAPE`, the application shall map the shape to the closest `NSCursor` and apply it to the targeted surface view.
+
+**MOUSE-1.2** When libghostty requests cursor visibility change via `MOUSE_VISIBILITY`, the application shall hide or show the system cursor, using a reference-counted pair of `NSCursor.hide()` / `NSCursor.unhide()` so repeated HIDDEN events do not leak into permanent invisibility.
+
+**MOUSE-1.3** When a terminal pane is destroyed while its cursor is hidden, the application shall unhide the cursor as part of teardown so the destroyed pane cannot leave the cursor invisible.
+
+**MOUSE-1.4** When libghostty fires `OPEN_URL` in response to a user gesture on a detected URL (e.g., Cmd-click), the application shall open the URL using `NSWorkspace.shared.open`.
+
+### 8.4 Bell
+
+**BELL-1.1** When libghostty fires `RING_BELL`, the application shall play the system beep sound.
+
+## 9. Desktop Notifications and Shell Integration Signals
+
+### 9.1 Desktop Notifications
+
+**NOTIF-1.1** When libghostty fires `DESKTOP_NOTIFICATION` (OSC 9), the application shall post a banner notification via `UNUserNotificationCenter` using the title and body provided.
+
+**NOTIF-1.2** If notification authorization has not yet been determined, the application shall request authorization on the first notification and post once authorization is granted.
+
+**NOTIF-1.3** If the user has denied notification authorization, the application shall silently skip the notification rather than surfacing an error.
+
+### 9.2 Attention Badge Auto-Population
+
+**NOTIF-2.1** When libghostty fires `COMMAND_FINISHED` with a zero exit code, the application shall set the owning worktree's attention overlay to a checkmark indicator that auto-clears after 3 seconds.
+
+**NOTIF-2.2** When libghostty fires `COMMAND_FINISHED` with a non-zero exit code, the application shall set the owning worktree's attention overlay to an error indicator that auto-clears after 8 seconds.
+
+**NOTIF-2.3** When libghostty fires `PROGRESS_REPORT` with a percentage, the application shall set the owning worktree's attention overlay to that percentage. Indeterminate, paused, and error states shall be displayed with distinct short labels.
+
+**NOTIF-2.4** Auto-populated attention badges from shell-integration events shall share the existing clearing semantics defined in STATE-2.x; a subsequent event on the same worktree replaces the previous badge.
+
+## 10. Shell Integration Configuration
+
+### 10.1 Config Loading
+
+**CONFIG-1.1** At startup, the application shall call `ghostty_config_load_default_files` to load the XDG-standard ghostty config paths.
+
+**CONFIG-1.2** In addition to the XDG paths, the application shall load the Ghostty macOS app's config file at `~/Library/Application Support/com.mitchellh.ghostty/config` if the file exists. Values loaded later shall override earlier values.
+
+**CONFIG-1.3** After loading config files, the application shall call `ghostty_config_load_recursive_files` to resolve any `config-file = …` include directives.
+
+### 10.2 Shell Integration Script Discovery
+
+**CONFIG-2.1** Before calling `ghostty_init`, the application shall set the `GHOSTTY_RESOURCES_DIR` environment variable so libghostty can locate its per-shell integration scripts.
+
+**CONFIG-2.2** If `GHOSTTY_RESOURCES_DIR` is already set in the process environment, the application shall not override it; the user's explicit setting wins.
+
+**CONFIG-2.3** Otherwise, the application shall probe standard locations (`/Applications/Ghostty.app/Contents/Resources/ghostty` and `~/Applications/Ghostty.app/Contents/Resources/ghostty`) and, on first match, set `GHOSTTY_RESOURCES_DIR` to the match.
+
+**CONFIG-2.4** If no Ghostty.app installation is found, shell integration features (OSC 7 auto-reporting, OSC 133 prompt marks, `COMMAND_FINISHED`, and `PROGRESS_REPORT`) shall silently be unavailable rather than surfacing an error; spawned shells shall still function.
+
+## 11. Technology Constraints
 
 **TECH-1** The application shall be built in Swift using SwiftUI for app chrome and AppKit for terminal view hosting.
 
