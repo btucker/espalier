@@ -110,7 +110,7 @@ struct EspalierApp: App {
                 .keyboardShortcut("w", modifiers: [.command])
             }
 
-            CommandMenu("Espalier") {
+            CommandGroup(after: .appInfo) {
                 Button("Install CLI Tool...") {
                     installCLI()
                 }
