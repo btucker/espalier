@@ -70,9 +70,18 @@ public final class WebServer {
             .childChannelInitializer { channel in
                 let handler = HTTPHandler(config: capturedConfig, auth: capturedAuth)
                 let upgrader = Self.makeWSUpgrader(config: capturedConfig, auth: capturedAuth)
+                // After a successful WebSocket upgrade, the HTTP encoder/decoder
+                // are removed by NIO, but our `HTTPHandler` (added below) stays
+                // in the pipeline and would receive raw WebSocketFrames — which
+                // it can't decode, crashing with a "tried to decode as type
+                // HTTPPart" fatalError. Remove it in the completion handler so
+                // the WebSocketBridgeHandler is the only inbound handler after
+                // upgrade.
                 let upgradeConfig: NIOHTTPServerUpgradeConfiguration = (
                     upgraders: [upgrader],
-                    completionHandler: { _ in }
+                    completionHandler: { context in
+                        context.channel.pipeline.removeHandler(handler, promise: nil)
+                    }
                 )
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: upgradeConfig
@@ -94,7 +103,13 @@ public final class WebServer {
             }
             throw error
         }
-        status = .listening(addresses: bindAddresses, port: config.port)
+        // When config.port == 0, the kernel assigns an ephemeral port; read it
+        // back from the first bound channel so callers can discover the actual
+        // listening port. If multiple binds produce different ports (not
+        // expected with a fixed non-zero port, but defensible), the first one
+        // wins.
+        let actualPort = channels.first?.localAddress?.port ?? config.port
+        status = .listening(addresses: bindAddresses, port: actualPort)
     }
 
     public func stop() {
@@ -148,7 +163,7 @@ public final class WebServer {
 
     // MARK: - HTTP handler
 
-    private final class HTTPHandler: ChannelInboundHandler {
+    private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
         typealias InboundIn = HTTPServerRequestPart
         typealias OutboundOut = HTTPServerResponsePart
 
