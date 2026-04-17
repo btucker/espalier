@@ -10,7 +10,6 @@ final class AppServices {
     let worktreeMonitor: WorktreeMonitor
     let statsStore: WorktreeStatsStore
     var worktreeMonitorBridge: WorktreeMonitorBridge?
-    var statsPollTimer: Timer?
 
     init(socketPath: String) {
         self.socketServer = SocketServer(socketPath: socketPath)
@@ -281,23 +280,12 @@ struct EspalierApp: App {
 
         reconcileOnLaunch()
 
-        // 60s poll catches origin/<default> drift from external `git fetch`
-        // invocations — WorktreeMonitor's HEAD watcher only fires when this
-        // worktree's HEAD moves, not when the remote ref does.
-        let statsBinding = $appState
-        let statsStore = services.statsStore
-        services.statsPollTimer = Timer.scheduledTimer(
-            withTimeInterval: 60,
-            repeats: true
-        ) { _ in
-            MainActor.assumeIsolated {
-                for repo in statsBinding.wrappedValue.repos {
-                    for wt in repo.worktrees where wt.state != .stale {
-                        statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
-                    }
-                }
-            }
-        }
+        // Start the stats poller: a 5s ticker that, per-repo, periodically
+        // `git fetch`es the default branch and recomputes divergence stats
+        // for every non-stale worktree. Replaces the legacy 60s Timer and
+        // additionally surfaces origin-side drift that WorktreeMonitor's
+        // per-worktree HEAD watcher can't see.
+        services.statsStore.startPolling(appState: appState)
 
         restoreRunningWorktrees()
     }
