@@ -65,13 +65,19 @@ public enum PtyProcess {
         }
         let slavePath = String(cString: slaveNameCStr)
 
-        // 3a. Prime the slave side. On macOS, `ioctl(masterFD, TIOCSWINSZ, …)`
-        // fails with ENOTTY until the slave has been opened at least once.
-        // Open-and-close the slave in the parent (with O_NOCTTY so we don't
-        // claim the tty) so resize works as soon as `spawn` returns, without
-        // having to wait for the child to reach its own open(slave).
-        let primerFD = Darwin.open(slavePath, O_RDWR | O_NOCTTY)
-        if primerFD >= 0 { close(primerFD) }
+        // 3a. Open the slave in the parent before forking, so there's always
+        // one slave fd open on the PTY. We close it in the parent AFTER the
+        // child has execve'd (the child re-opens its own slave for the dup2
+        // dance). The reason we don't simply open-and-close: on macOS, when
+        // the slave ref count goes to 0 the PTY enters an EOF state on the
+        // master, and subsequent reads return -1/EIO even after the child
+        // opens a fresh slave fd. Keeping the parent's slave fd alive across
+        // fork avoids that zero-crossing.
+        let parentSlaveFD = Darwin.open(slavePath, O_RDWR | O_NOCTTY)
+        if parentSlaveFD < 0 {
+            close(master)
+            throw Error.ptsnameFailed
+        }
 
         // 4. Prepare argv + envp for execve. We copy into C arrays the
         //    child will inherit; after fork, the child execs, which
@@ -112,6 +118,12 @@ public enum PtyProcess {
         }
 
         // Parent.
+        // Close the parent's slave fd now that the child has forked and
+        // will open its own. Slave ref count stays ≥ 1 throughout because
+        // the child's copy (inherited from fork) is still open until the
+        // child's execve runs — and by that point the child has dup2'd a
+        // fresh slave open onto 0/1/2, so the PTY never goes idle.
+        close(parentSlaveFD)
         // Free the C strings we allocated for argv/env; execve in the
         // child has its own copy.
         for ptr in argvCStrings { free(ptr) }
