@@ -282,10 +282,11 @@ struct ZmxSurvivalIntegrationTests {
     /// Requires an installed Ghostty.app for its shell-integration dir;
     /// skipped cleanly on machines that don't have one.
     @Test func innerShellEmitsOsc7AfterCdWhenGhosttyIntegrationPresent() throws {
-        let ghosttyRes = try #require(
-            Self.locateGhosttyResourcesDir(),
-            "Ghostty.app shell-integration not found — skipping PWD-follow integration test"
-        )
+        // Silently skip when Ghostty.app isn't installed (e.g., CI runners) —
+        // `try #require(nil)` reports as a failure in Swift Testing, but this
+        // test is legitimately environmental and shouldn't fail the suite on
+        // machines that happen not to have Ghostty.
+        guard let ghosttyRes = Self.locateGhosttyResourcesDir() else { return }
         try Self.withScopedZmxDir { launcher in
             // Clean HOME stops the developer's own .zshrc from emitting its
             // own OSC 7 and confusing the assertion.
