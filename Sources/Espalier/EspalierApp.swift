@@ -9,13 +9,14 @@ final class AppServices {
     let socketServer: SocketServer
     let worktreeMonitor: WorktreeMonitor
     let statsStore: WorktreeStatsStore
+    let prStatusStore: PRStatusStore
     var worktreeMonitorBridge: WorktreeMonitorBridge?
-    var statsPollTimer: Timer?
 
     init(socketPath: String) {
         self.socketServer = SocketServer(socketPath: socketPath)
         self.worktreeMonitor = WorktreeMonitor()
         self.statsStore = WorktreeStatsStore()
+        self.prStatusStore = PRStatusStore()
     }
 }
 
@@ -68,6 +69,7 @@ struct EspalierApp: App {
                 appState: $appState,
                 terminalManager: terminalManager,
                 statsStore: services.statsStore,
+                prStatusStore: services.prStatusStore,
                 worktreeMonitor: services.worktreeMonitor
             )
                 .onAppear { startup() }
@@ -267,7 +269,8 @@ struct EspalierApp: App {
 
         let bridge = WorktreeMonitorBridge(
             appState: $appState,
-            statsStore: services.statsStore
+            statsStore: services.statsStore,
+            prStatusStore: services.prStatusStore
         )
         services.worktreeMonitorBridge = bridge
         services.worktreeMonitor.delegate = bridge
@@ -280,56 +283,68 @@ struct EspalierApp: App {
         }
 
         reconcileOnLaunch()
-        for repo in appState.repos {
-            for wt in repo.worktrees where wt.state != .stale {
-                services.statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
-            }
-        }
 
-        // 60s poll catches origin/<default> drift from external `git fetch`
-        // invocations — WorktreeMonitor's HEAD watcher only fires when this
-        // worktree's HEAD moves, not when the remote ref does.
-        let statsBinding = $appState
-        let statsStore = services.statsStore
-        services.statsPollTimer = Timer.scheduledTimer(
-            withTimeInterval: 60,
-            repeats: true
-        ) { _ in
-            MainActor.assumeIsolated {
-                for repo in statsBinding.wrappedValue.repos {
-                    for wt in repo.worktrees where wt.state != .stale {
-                        statsStore.refresh(worktreePath: wt.path, repoPath: repo.path)
-                    }
-                }
+        // Start the stats poller: a 5s ticker that, per-repo, periodically
+        // `git fetch`es the default branch and recomputes divergence stats
+        // for every non-stale worktree. Replaces the legacy 60s Timer and
+        // additionally surfaces origin-side drift that WorktreeMonitor's
+        // per-worktree HEAD watcher can't see.
+        services.statsStore.startPolling(appState: appState)
+
+        let prTicker = PollingTicker(
+            interval: .seconds(5),
+            pauseWhenInactive: { [prStatusStore = services.prStatusStore] in
+                // Keep polling when at least one tracked PR has pending CI, so the
+                // "green light" arrives even while the user is in another app.
+                !prStatusStore.infos.values.contains(where: { $0.checks == .pending })
             }
-        }
+        )
+        services.prStatusStore.start(
+            ticker: prTicker,
+            getRepos: { binding.wrappedValue.repos }
+        )
 
         restoreRunningWorktrees()
     }
 
     private func reconcileOnLaunch() {
-        for repoIdx in appState.repos.indices {
-            let repoPath = appState.repos[repoIdx].path
-            guard let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) else { continue }
-            let discoveredPaths = Set(discovered.map(\.path))
+        let binding = $appState
+        let statsStore = services.statsStore
+        Task {
+            for repoIdx in binding.wrappedValue.repos.indices {
+                let repoPath = binding.wrappedValue.repos[repoIdx].path
+                guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { continue }
+                let discoveredPaths = Set(discovered.map(\.path))
 
-            let existingPaths = Set(appState.repos[repoIdx].worktrees.map(\.path))
-            for d in discovered where !existingPaths.contains(d.path) {
-                appState.repos[repoIdx].worktrees.append(
-                    WorktreeEntry(path: d.path, branch: d.branch)
-                )
-            }
-
-            for wtIdx in appState.repos[repoIdx].worktrees.indices {
-                let wt = appState.repos[repoIdx].worktrees[wtIdx]
-                if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                    appState.repos[repoIdx].worktrees[wtIdx].state = .stale
+                let existingPaths = Set(binding.wrappedValue.repos[repoIdx].worktrees.map(\.path))
+                for d in discovered where !existingPaths.contains(d.path) {
+                    binding.wrappedValue.repos[repoIdx].worktrees.append(
+                        WorktreeEntry(path: d.path, branch: d.branch)
+                    )
                 }
-            }
 
-            for wtIdx in appState.repos[repoIdx].worktrees.indices {
-                if let match = discovered.first(where: { $0.path == appState.repos[repoIdx].worktrees[wtIdx].path }) {
-                    appState.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
+                    let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
+                    if !discoveredPaths.contains(wt.path) && wt.state != .stale {
+                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
+                    }
+                }
+
+                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
+                    if let match = discovered.first(where: {
+                        $0.path == binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path
+                    }) {
+                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+                    }
+                }
+
+                // Kick initial stats refresh for this repo's non-stale
+                // worktrees, after reconciliation has populated new entries
+                // and marked externally-deleted ones stale. This preserves
+                // the pre-migration "reconcile, then refresh" ordering
+                // without blocking startup.
+                for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                    statsStore.refresh(worktreePath: wt.path, repoPath: repoPath)
                 }
             }
         }
@@ -917,10 +932,16 @@ struct EspalierApp: App {
 final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     let appState: Binding<AppState>
     let statsStore: WorktreeStatsStore
+    let prStatusStore: PRStatusStore
 
-    init(appState: Binding<AppState>, statsStore: WorktreeStatsStore) {
+    init(
+        appState: Binding<AppState>,
+        statsStore: WorktreeStatsStore,
+        prStatusStore: PRStatusStore
+    ) {
         self.appState = appState
         self.statsStore = statsStore
+        self.prStatusStore = prStatusStore
     }
 
     /// Called when `.git/worktrees/` changes (new worktree added, existing
@@ -931,52 +952,50 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String) {
         let binding = appState
         let store = statsStore
-        // `git worktree list --porcelain` is a subprocess wait and must not run
-        // on the main actor — it can stall for hundreds of ms under fs/indexing
-        // pressure, blocking ghostty wakeups and keystroke delivery (manifests
-        // as intermittent ~1s input/render hangs).
-        Task.detached {
-            guard let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
-            await MainActor.run {
-                guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
+        // `git worktree list --porcelain` is a subprocess wait. Awaiting the
+        // now-async `GitWorktreeDiscovery.discover` yields the main actor
+        // during the wait so ghostty keystrokes aren't delayed (prior
+        // manifestation: intermittent ~1s input/render hangs under fs/
+        // indexing pressure).
+        Task { @MainActor in
+            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+            guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
 
-                let existing = binding.wrappedValue.repos[repoIdx].worktrees
-                let existingPaths = Set(existing.map(\.path))
-                let discoveredPaths = Set(discovered.map(\.path))
-                let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
-                let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }
+            let existing = binding.wrappedValue.repos[repoIdx].worktrees
+            let existingPaths = Set(existing.map(\.path))
+            let discoveredPaths = Set(discovered.map(\.path))
+            let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
+            let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }
 
-                for d in newlyAdded {
-                    let entry = WorktreeEntry(path: d.path, branch: d.branch)
-                    binding.wrappedValue.repos[repoIdx].worktrees.append(entry)
+            for d in newlyAdded {
+                let entry = WorktreeEntry(path: d.path, branch: d.branch)
+                binding.wrappedValue.repos[repoIdx].worktrees.append(entry)
+            }
+            for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
+                let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
+                if !discoveredPaths.contains(wt.path) && wt.state != .stale {
+                    binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
                 }
+            }
 
-                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                    let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
-                    if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
-                    }
-                }
+            // watchWorktreePath / watchHeadRef are idempotent, so registering
+            // for the whole repo is cheap; this is how newly-discovered
+            // worktrees (external `git worktree add`) start getting HEAD
+            // tracking without an app restart.
+            for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
+                monitor.watchWorktreePath(wt.path)
+                monitor.watchHeadRef(worktreePath: wt.path, repoPath: repoPath)
+            }
 
-                // watchWorktreePath / watchHeadRef are idempotent, so registering
-                // for the whole repo is cheap; this is how newly-discovered
-                // worktrees (external `git worktree add`) start getting HEAD
-                // tracking without an app restart.
-                for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
-                    monitor.watchWorktreePath(wt.path)
-                    monitor.watchHeadRef(worktreePath: wt.path, repoPath: repoPath)
-                }
-
-                // Existing worktrees' stats are driven by their own HEAD
-                // callbacks and the 60s poll (DIVERGE-4.2, DIVERGE-4.3), so a
-                // `.git/worktrees/` directory tick only needs to seed stats
-                // for new entries and drop stats for newly-stale ones.
-                for d in newlyAdded {
-                    store.refresh(worktreePath: d.path, repoPath: repoPath)
-                }
-                for wt in newlyStale {
-                    store.clear(worktreePath: wt.path)
-                }
+            // Existing worktrees' stats are driven by their own HEAD
+            // callbacks and the polling loop, so a `.git/worktrees/`
+            // directory tick only needs to seed stats for new entries and
+            // drop stats for newly-stale ones.
+            for d in newlyAdded {
+                store.refresh(worktreePath: d.path, repoPath: repoPath)
+            }
+            for wt in newlyStale {
+                store.clear(worktreePath: wt.path)
             }
         }
     }
@@ -984,6 +1003,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
         let store = statsStore
+        let prStore = prStatusStore
         Task { @MainActor in
             for repoIdx in binding.wrappedValue.repos.indices {
                 for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
@@ -993,31 +1013,27 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                 }
             }
             store.clear(worktreePath: worktreePath)
+            prStore.clear(worktreePath: worktreePath)
         }
     }
 
     nonisolated func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
         let store = statsStore
-        // Same rationale as `worktreeMonitorDidDetectChange`: keep the
-        // `GitWorktreeDiscovery.discover` subprocess waits off the main actor.
-        // Branch changes can fire in bursts (rebase, interactive checkout),
-        // making this the more common hang trigger in practice.
-        Task.detached {
-            let owningRepo: String? = await MainActor.run {
-                binding.wrappedValue.repos.first(where: { repo in
-                    repo.worktrees.contains(where: { $0.path == worktreePath })
-                })?.path
-            }
-            guard let repoPath = owningRepo,
-                  let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath),
+        // Branch changes fire in bursts (rebase, interactive checkout), so
+        // `GitWorktreeDiscovery.discover`'s subprocess wait must yield the
+        // main actor — the async version does that naturally. Scope the
+        // discover call to the owning repo only, not every tracked repo.
+        Task { @MainActor in
+            guard let repoPath = binding.wrappedValue.repos.first(where: { repo in
+                repo.worktrees.contains(where: { $0.path == worktreePath })
+            })?.path else { return }
+            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
                   let match = discovered.first(where: { $0.path == worktreePath }) else { return }
-            await MainActor.run {
-                guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }),
-                      let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
-                binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
-                store.refresh(worktreePath: worktreePath, repoPath: repoPath)
-            }
+            guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }),
+                  let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
+            binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
+            store.refresh(worktreePath: worktreePath, repoPath: repoPath)
         }
     }
 }

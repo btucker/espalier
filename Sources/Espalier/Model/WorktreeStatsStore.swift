@@ -1,12 +1,14 @@
 import Foundation
+import AppKit
 import Observation
 import EspalierKit
 
 /// Session-scoped, @MainActor-observed store of per-worktree divergence stats.
 ///
-/// Not persisted. All git work runs on a background Task.detached; publishing
-/// back to `stats` happens on the MainActor. Concurrent refresh requests for
-/// the same worktree path are deduplicated (DIVERGE-4.4).
+/// Not persisted. Git work is kicked on a child `Task` inherited from the
+/// MainActor; the async CLI calls yield rather than block. Publishing back
+/// to `stats` happens on the MainActor. Concurrent refresh requests for the
+/// same worktree path are deduplicated (DIVERGE-4.4).
 @MainActor
 @Observable
 public final class WorktreeStatsStore {
@@ -24,6 +26,18 @@ public final class WorktreeStatsStore {
     @ObservationIgnored
     private var inFlight: Set<String> = []
 
+    @ObservationIgnored
+    private var lastRepoFetch: [String: Date] = [:]
+
+    @ObservationIgnored
+    private var repoFailureStreak: [String: Int] = [:]
+
+    @ObservationIgnored
+    private var inFlightRepos: Set<String> = []
+
+    @ObservationIgnored
+    private var ticker: PollingTicker?
+
     public init() {}
 
     public func refresh(worktreePath: String, repoPath: String) {
@@ -31,13 +45,13 @@ public final class WorktreeStatsStore {
         inFlight.insert(worktreePath)
         let cached = defaultBranchByRepo[repoPath] ?? nil
 
-        Task.detached { [weak self] in
+        Task {
             let computed = await Self.computeOffMain(
                 worktreePath: worktreePath,
                 repoPath: repoPath,
                 cachedDefault: cached
             )
-            await self?.apply(
+            self.apply(
                 worktreePath: worktreePath,
                 repoPath: repoPath,
                 result: computed
@@ -47,6 +61,27 @@ public final class WorktreeStatsStore {
 
     public func clear(worktreePath: String) {
         stats.removeValue(forKey: worktreePath)
+    }
+
+    /// Start a 5s ticker that periodically `git fetch`es each repo (on its
+    /// own cadence — see `repoFetchCadence`) and refreshes stats for every
+    /// non-stale worktree on that repo afterward. This replaces the legacy
+    /// 60s `Timer` in `EspalierApp.startup()`, and additionally surfaces
+    /// origin-side drift (remote moved, local didn't) that `WorktreeMonitor`'s
+    /// per-worktree HEAD watcher can't see.
+    public func startPolling(appState: AppState) {
+        stopPolling()
+        let getRepos: () -> [RepoEntry] = { appState.repos }
+        let ticker = PollingTicker(interval: .seconds(5))
+        self.ticker = ticker
+        ticker.start { [weak self] in
+            await self?.pollTick(repos: getRepos())
+        }
+    }
+
+    public func stopPolling() {
+        ticker?.stop()
+        ticker = nil
     }
 
     /// Returns the full base ref used for divergence computation for a
@@ -80,7 +115,7 @@ public final class WorktreeStatsStore {
         if let cached = cachedDefault {
             name = cached
         } else {
-            name = (try? GitOriginDefaultBranch.resolve(repoPath: repoPath)) ?? nil
+            name = (try? await GitOriginDefaultBranch.resolve(repoPath: repoPath)) ?? nil
         }
         guard let name else {
             return ComputeResult(defaultBranch: nil, stats: nil)
@@ -92,7 +127,7 @@ public final class WorktreeStatsStore {
         // counting commits that are already on local main.
         let isHomeWorktree = (worktreePath == repoPath)
         let baseRef = isHomeWorktree ? "origin/\(name)" : name
-        let stats = try? GitWorktreeStats.compute(
+        let stats = try? await GitWorktreeStats.compute(
             worktreePath: worktreePath,
             defaultBranchRef: baseRef
         )
@@ -107,9 +142,79 @@ public final class WorktreeStatsStore {
         inFlight.remove(worktreePath)
         defaultBranchByRepo[repoPath] = result.defaultBranch
         if let s = result.stats {
-            stats[worktreePath] = s
-        } else {
+            if stats[worktreePath] != s {
+                stats[worktreePath] = s
+            }
+        } else if stats[worktreePath] != nil {
             stats.removeValue(forKey: worktreePath)
+        }
+    }
+
+    nonisolated static func repoFetchCadence(failureStreak: Int) -> Duration {
+        ExponentialBackoff.scale(
+            base: .seconds(5 * 60),
+            streak: failureStreak,
+            cap: .seconds(30 * 60)
+        )
+    }
+
+    private func pollTick(repos: [RepoEntry]) async {
+        let now = Date()
+        for repo in repos {
+            if inFlightRepos.contains(repo.path) { continue }
+            let streak = repoFailureStreak[repo.path] ?? 0
+            let interval = Self.repoFetchCadence(failureStreak: streak)
+            if let last = lastRepoFetch[repo.path],
+               now.timeIntervalSince(last) < Double(interval.components.seconds) {
+                continue
+            }
+            inFlightRepos.insert(repo.path)
+            let repoPath = repo.path
+            let worktreePaths = repo.worktrees
+                .filter { $0.state != .stale }
+                .map(\.path)
+
+            Task { [weak self] in
+                await self?.performRepoFetch(
+                    repoPath: repoPath,
+                    worktreePaths: worktreePaths
+                )
+            }
+        }
+    }
+
+    private func performRepoFetch(repoPath: String, worktreePaths: [String]) async {
+        defer { self.inFlightRepos.remove(repoPath) }
+
+        let defaultBranchResult: String?
+        if let cached = defaultBranchByRepo[repoPath] ?? nil {
+            defaultBranchResult = cached
+        } else {
+            defaultBranchResult = (try? await GitOriginDefaultBranch.resolve(repoPath: repoPath)) ?? nil
+        }
+        self.defaultBranchByRepo[repoPath] = defaultBranchResult
+        guard let defaultBranch = defaultBranchResult else {
+            self.lastRepoFetch[repoPath] = Date()
+            self.repoFailureStreak[repoPath] = 0
+            return
+        }
+
+        do {
+            _ = try await GitRunner.captureAll(
+                args: ["fetch", "--no-tags", "--prune", "origin", defaultBranch],
+                at: repoPath
+            )
+            self.lastRepoFetch[repoPath] = Date()
+            self.repoFailureStreak[repoPath] = 0
+        } catch {
+            self.lastRepoFetch[repoPath] = Date()
+            self.repoFailureStreak[repoPath, default: 0] += 1
+            return
+        }
+
+        // Recompute stats for each worktree on this repo after fetch succeeds.
+        for wtPath in worktreePaths {
+            self.refresh(worktreePath: wtPath, repoPath: repoPath)
         }
     }
 }

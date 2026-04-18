@@ -10,6 +10,11 @@ public enum GitWorktreeAdd {
     public enum Error: Swift.Error, Equatable {
         /// Non-zero exit from git, with stderr included for display.
         case gitFailed(exitCode: Int32, stderr: String)
+        /// Git failed to launch or was not found on PATH. Wraps the
+        /// underlying `CLIError` so callers can distinguish "git ran
+        /// and rejected the request" (where stderr is meaningful) from
+        /// "git never ran" (where a generic failure message is right).
+        case cliFailure(CLIError)
     }
 
     /// - Parameters:
@@ -26,12 +31,17 @@ public enum GitWorktreeAdd {
         worktreePath: String,
         branchName: String,
         startPoint: String?
-    ) throws {
+    ) async throws {
         var args: [String] = ["worktree", "add", "-b", branchName, worktreePath]
         if let startPoint, !startPoint.isEmpty {
             args.append(startPoint)
         }
-        let result = try GitRunner.captureAll(args: args, at: repoPath)
+        let result: CLIOutput
+        do {
+            result = try await GitRunner.captureAll(args: args, at: repoPath)
+        } catch let err as CLIError {
+            throw Error.cliFailure(err)
+        }
         guard result.exitCode == 0 else {
             throw Error.gitFailed(
                 exitCode: result.exitCode,

@@ -6,6 +6,7 @@ struct MainWindow: View {
     @Binding var appState: AppState
     @ObservedObject var terminalManager: TerminalManager
     let statsStore: WorktreeStatsStore
+    let prStatusStore: PRStatusStore
     let worktreeMonitor: WorktreeMonitor
 
     /// Debounces writes of `sidebarWidth` to AppState so a drag doesn't
@@ -47,9 +48,13 @@ struct MainWindow: View {
             VStack(spacing: 0) {
                 BreadcrumbBar(
                     repoName: selectedRepo?.displayName,
+                    worktreeDisplayName: worktreeDisplayName,
+                    worktreePath: selectedWorktree?.path,
                     branchName: selectedWorktree?.branch,
-                    path: selectedWorktree?.path,
-                    theme: terminalManager.theme
+                    isHomeCheckout: isHomeCheckout,
+                    prInfo: prInfo,
+                    theme: terminalManager.theme,
+                    onRefreshPR: refreshPR
                 )
 
                 if let worktree = selectedWorktreeBinding {
@@ -169,6 +174,26 @@ struct MainWindow: View {
         return nil
     }
 
+    private var isHomeCheckout: Bool {
+        guard let repo = selectedRepo, let wt = selectedWorktree else { return false }
+        return wt.path == repo.path
+    }
+
+    private var worktreeDisplayName: String? {
+        guard let repo = selectedRepo, let wt = selectedWorktree else { return nil }
+        return wt.displayName(amongSiblingPaths: repo.worktrees.map(\.path))
+    }
+
+    private var prInfo: PRInfo? {
+        guard let path = selectedWorktree?.path else { return nil }
+        return prStatusStore.infos[path]
+    }
+
+    private func refreshPR() {
+        guard let wt = selectedWorktree, let repo = selectedRepo else { return }
+        prStatusStore.refresh(worktreePath: wt.path, repoPath: repo.path, branch: wt.branch)
+    }
+
     /// Selects a worktree *and* focuses a specific pane within it. Used by
     /// the sidebar's per-pane title rows so clicking "claude" under a
     /// worktree both activates that worktree and focuses Claude's pane.
@@ -254,7 +279,7 @@ struct MainWindow: View {
     /// checkout happens to have checked out right now). Returns nil on
     /// success or the stderr message on failure, for the sheet to display.
     ///
-    /// On success, discovers the new worktree synchronously, registers
+    /// On success, discovers the new worktree inline, registers
     /// its FSEvents watches, kicks its divergence stats, and selects
     /// it. The existing `.git/worktrees/` watcher will also fire
     /// `worktreeMonitorDidDetectChange` asynchronously — that path is
@@ -267,29 +292,34 @@ struct MainWindow: View {
         let repoPath = repo.path
         let worktreePath = repoPath + "/.worktrees/" + worktreeName
 
-        let gitError = await Task.detached {
-            let startPoint = (try? GitOriginDefaultBranch.resolve(repoPath: repoPath)) ?? nil
-            do {
-                try GitWorktreeAdd.add(
-                    repoPath: repoPath,
-                    worktreePath: worktreePath,
-                    branchName: branchName,
-                    startPoint: startPoint
-                )
-                return nil as String?
-            } catch GitWorktreeAdd.Error.gitFailed(_, let stderr) {
-                return stderr.isEmpty ? "git worktree add failed" : stderr
-            } catch {
-                return "\(error)"
-            }
-        }.value
+        let startPoint: String?
+        do {
+            startPoint = try await GitOriginDefaultBranch.resolve(repoPath: repoPath)
+        } catch {
+            startPoint = nil
+        }
+
+        let gitError: String?
+        do {
+            try await GitWorktreeAdd.add(
+                repoPath: repoPath,
+                worktreePath: worktreePath,
+                branchName: branchName,
+                startPoint: startPoint
+            )
+            gitError = nil
+        } catch GitWorktreeAdd.Error.gitFailed(_, let stderr) {
+            gitError = stderr.isEmpty ? "git worktree add failed" : stderr
+        } catch {
+            gitError = "\(error)"
+        }
         if let gitError { return gitError }
 
         // Run discovery now rather than waiting for FSEvents so the new
         // entry is in appState by the time we call selectWorktree below
         // — otherwise selectWorktree's terminal-launch logic sees no
         // matching entry and no-ops.
-        if let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath),
+        if let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
            let repoIdx = appState.repos.firstIndex(where: { $0.path == repoPath }) {
             let existingPaths = Set(appState.repos[repoIdx].worktrees.map(\.path))
             for d in discovered where !existingPaths.contains(d.path) {
@@ -366,26 +396,28 @@ struct MainWindow: View {
         // running terminals intact — tearing them down before we know
         // whether the delete will succeed would leave the user with a
         // visible worktree and dead panes.
-        do {
-            try GitWorktreeRemove.remove(repoPath: repoPath, worktreePath: worktreePath)
-        } catch GitWorktreeRemove.Error.gitFailed(_, let stderr) {
-            let errorAlert = NSAlert()
-            errorAlert.messageText = "Could not delete worktree"
-            errorAlert.informativeText = stderr.isEmpty ? "git worktree remove failed" : stderr
-            errorAlert.alertStyle = .warning
-            errorAlert.runModal()
-            return
-        } catch {
-            return
-        }
+        Task { @MainActor in
+            do {
+                try await GitWorktreeRemove.remove(repoPath: repoPath, worktreePath: worktreePath)
+            } catch GitWorktreeRemove.Error.gitFailed(_, let stderr) {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = "Could not delete worktree"
+                errorAlert.informativeText = stderr.isEmpty ? "git worktree remove failed" : stderr
+                errorAlert.alertStyle = .warning
+                errorAlert.runModal()
+                return
+            } catch {
+                return
+            }
 
-        if appState.selectedWorktreePath == worktreePath {
-            appState.selectedWorktreePath = nil
+            if appState.selectedWorktreePath == worktreePath {
+                appState.selectedWorktreePath = nil
+            }
+            if wt.state == .running {
+                terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
+            }
+            appState.repos[repoIdx].worktrees.removeAll { $0.path == worktreePath }
         }
-        if wt.state == .running {
-            terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
-        }
-        appState.repos[repoIdx].worktrees.removeAll { $0.path == worktreePath }
     }
 
     private func stopWorktreeWithConfirmation(_ worktreePath: String) {
@@ -418,17 +450,18 @@ struct MainWindow: View {
             return
         }
 
-        guard let discovered = try? GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+        Task {
+            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+            let worktrees = discovered.map { WorktreeEntry(path: $0.path, branch: $0.branch) }
+            let displayName = URL(fileURLWithPath: repoPath).lastPathComponent
+            let repo = RepoEntry(path: repoPath, displayName: displayName, worktrees: worktrees)
+            appState.addRepo(repo)
 
-        let worktrees = discovered.map { WorktreeEntry(path: $0.path, branch: $0.branch) }
-        let displayName = URL(fileURLWithPath: repoPath).lastPathComponent
-        let repo = RepoEntry(path: repoPath, displayName: displayName, worktrees: worktrees)
-        appState.addRepo(repo)
-
-        if let wt = selectWorktree {
-            self.selectWorktree(wt)
-        } else if let first = worktrees.first {
-            self.selectWorktree(first.path)
+            if let wt = selectWorktree {
+                self.selectWorktree(wt)
+            } else if let first = worktrees.first {
+                self.selectWorktree(first.path)
+            }
         }
     }
 }

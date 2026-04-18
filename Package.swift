@@ -39,7 +39,8 @@ let package = Package(
         ),
         .testTarget(
             name: "EspalierKitTests",
-            dependencies: ["EspalierKit"]
+            dependencies: ["EspalierKit"],
+            resources: [.process("Hosting/Fixtures")]
         ),
     ]
 )

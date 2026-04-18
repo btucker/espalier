@@ -10,7 +10,7 @@ struct GitWorktreeRemoveTests {
     /// are gone, but the branch ref the worktree had checked out is
     /// preserved — this is the invariant the confirmation dialog
     /// promises the user.
-    @Test func removeDeletesDirectoryButPreservesBranch() throws {
+    @Test func removeDeletesDirectoryButPreservesBranch() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-remove-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -31,7 +31,7 @@ struct GitWorktreeRemoveTests {
             atPath: repoDir.appendingPathComponent(".git/worktrees/wt-feature").path
         ))
 
-        try GitWorktreeRemove.remove(repoPath: repoDir.path, worktreePath: worktreeDir.path)
+        try await GitWorktreeRemove.remove(repoPath: repoDir.path, worktreePath: worktreeDir.path)
 
         #expect(!FileManager.default.fileExists(atPath: worktreeDir.path))
         #expect(!FileManager.default.fileExists(
@@ -40,7 +40,7 @@ struct GitWorktreeRemoveTests {
 
         // The branch must survive — `git worktree remove` doesn't touch
         // refs, and the confirmation dialog explicitly promises this.
-        let refs = try GitRunner.run(
+        let refs = try await GitRunner.run(
             args: ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
             at: repoDir.path
         )
@@ -50,7 +50,7 @@ struct GitWorktreeRemoveTests {
     /// Git refuses to delete the main checkout. Ensure our wrapper surfaces
     /// that as a structured `gitFailed` error with stderr populated, so
     /// the UI can show a helpful message.
-    @Test func removeRefusesMainCheckout() throws {
+    @Test func removeRefusesMainCheckout() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-remove-main-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -62,7 +62,7 @@ struct GitWorktreeRemoveTests {
         try runShell("git init && git commit --allow-empty -m 'init'", at: repoDir)
 
         do {
-            try GitWorktreeRemove.remove(repoPath: repoDir.path, worktreePath: repoDir.path)
+            try await GitWorktreeRemove.remove(repoPath: repoDir.path, worktreePath: repoDir.path)
             Issue.record("expected gitFailed error for main-checkout removal")
         } catch GitWorktreeRemove.Error.gitFailed(let code, let stderr) {
             #expect(code != 0)
