@@ -21,8 +21,10 @@ struct WebServerIntegrationTests {
         // manifest on GitHub Actions runners (see PR #14 discussion). The
         // WebServer → WebSession → PtyProcess unit path is covered by
         // WebServerAuthTests + WebStaticResourcesTests + PtyProcessTests.
-        try #require(ProcessInfo.processInfo.environment["CI"] == nil,
-                     "wsEchoRoundTrip is skipped in CI")
+        //
+        // Plain early-return rather than `#require` because Swift Testing
+        // treats `#require` failure as a test failure, not a skip.
+        if ProcessInfo.processInfo.environment["CI"] != nil { return }
         let zmx = try #require(
             ZmxSurvivalIntegrationTests.vendoredZmx(),
             "zmx binary not vendored — run scripts/bump-zmx.sh"
