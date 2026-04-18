@@ -101,17 +101,21 @@ public final class WebSession {
         stateLock.unlock()
 
         if let spawned {
-            _ = kill(spawned.pid, SIGTERM)
-            // Brief wait, then force.
+            // Straight to SIGKILL; zmx attach exiting gracefully is not
+            // required (its daemon handles abrupt client disconnect).
+            // Closing masterFD unblocks the reader thread's read() —
+            // it returns -1/EIO and the thread exits.
+            _ = kill(spawned.pid, SIGKILL)
+            Darwin.close(spawned.masterFD)
+            // Bounded nonblocking reap (≤500ms). If waitpid doesn't see
+            // the child marked dead in that window, give up and leave it
+            // as a zombie rather than block NIO's event loop thread —
+            // this is the close() path called from channelInactive.
             var status: Int32 = 0
             for _ in 0..<10 {
-                let rc = waitpid(spawned.pid, &status, WNOHANG)
-                if rc != 0 { break }
+                if waitpid(spawned.pid, &status, WNOHANG) != 0 { break }
                 usleep(50_000)
             }
-            _ = kill(spawned.pid, SIGKILL)
-            _ = waitpid(spawned.pid, &status, 0)
-            Darwin.close(spawned.masterFD)
         }
     }
 
