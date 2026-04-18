@@ -8,7 +8,13 @@ import Foundation
 /// the raw libghostty call in a closure of shape
 /// `(actionName) -> ShortcutChord?` and hands it to the init.
 public struct GhosttyKeybindBridge: Sendable {
-    public typealias Resolver = @Sendable (String) -> ShortcutChord?
+    /// Resolver isn't `@Sendable` because the app-target adapter needs to
+    /// capture a `ghostty_config_t` (an `UnsafeMutableRawPointer`) that
+    /// itself isn't Sendable. This is safe: the closure is invoked only
+    /// inside `init` (on whatever actor constructed the bridge), never
+    /// stored past construction — the struct retains only the resolved
+    /// `[GhosttyAction: ShortcutChord]` dictionary, which *is* Sendable.
+    public typealias Resolver = (String) -> ShortcutChord?
 
     private let chords: [GhosttyAction: ShortcutChord]
 
