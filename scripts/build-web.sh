@@ -22,8 +22,7 @@ cp "$ROOT/dist-tmp/app.js"     "$RES/app.js"
 cp "$ROOT/dist-tmp/app.css"    "$RES/app.css"
 
 WTERM_VER=$(cd "$WEB" && node -p "require('./node_modules/@wterm/react/package.json').version" 2>/dev/null || echo "unknown")
-GIT_SHA=$(cd "$ROOT" && git rev-parse --short HEAD)
-printf "wterm-react: %s\nespalier-build-sha: %s\nbuilt: %s\n" "$WTERM_VER" "$GIT_SHA" "$(date -u +%FT%TZ)" > "$RES/VERSION"
+printf "wterm-react: %s\n" "$WTERM_VER" > "$RES/VERSION"
 
 echo "→ done. Artifacts in $RES:"
 ls -la "$RES"
