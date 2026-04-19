@@ -1316,3 +1316,35 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - The cycle-49 worktree-name validation bug is off the queue. Pick a new target from origin/main's surface that I haven't audited yet: TERM-4.2/4.3 divider drag, TERM-5.3 zmx shell exit, GIT-4.7/4.8/4.9 offer-delete-on-merge, PWD-1.3 rotated log, GIT-5.1/5.2/5.3 worktree sanitizer.
 - Truly-stale click UX, keyboard shortcut to switch worktrees, WebSession cleanup audit — all still queued.
+
+## Cycle 50 — 2026-04-19 (Delete Worktree cache-drop, GIT-4.10)
+
+### Explored
+- First cycle on clean origin/main post-rebase. Surveyed new origin work for gaps/regressions in the delete/dismiss surface.
+- Traced `performDeleteWorktree`: runs git remove, destroys surfaces if running, removes from model. Doesn't call `prStatusStore.clear` or `statsStore.clear` — orphan cache entries survive. Traced `dismissWorktree`: already calls both (my cycle 48 work survived the rebase into GIT-3.10's spec wording).
+- My cycle 42's original GIT-4.7 (cache-drop for Delete) got superseded when origin took that slot for "offer-delete-on-merge." The cache-drop behavior I added is missing from origin's code.
+
+### Broke
+- **GIT-4.10 spec gap + leak:** Both the menu Delete Worktree path (GIT-4.3) and the PR-merged offer path (GIT-4.8) flow through `performDeleteWorktree`. Neither clears caches. `prStatusStore.infos[/tmp/a]` and `statsStore.stats[/tmp/a]` stay forever after the worktree is deleted. A same-path re-add briefly inherits stale cache before reconcile refreshes it. Memory also grows over a session with many create/delete cycles.
+
+### Fixed
+- `AppState.removeWorktree(atPath:) -> String?`: shared primitive for Delete/Dismiss. Removes from `repos`, clears `selectedWorktreePath` if applicable, returns the path so caller can feed it to store clears.
+- `performDeleteWorktree` now: git remove → destroySurfaces (if running) → `prStatusStore.clear` + `statsStore.clear` → `appState.removeWorktree`. Shrinks the call site by 3 lines (selection-clear is now inside the helper).
+- Left `dismissWorktree` alone — it works correctly today, and refactoring it to use the new helper isn't fixing a bug (can queue for a consistency cleanup cycle).
+
+### Spec
+- **GIT-4.10 added** — mirrors GIT-3.6's cache-drop contract. Cites GIT-4.3 and GIT-4.8 so readers see both delete paths.
+
+### Verified
+- 432/432 tests (+4 new on `removeWorktree`: matching path, selection-clear, selection-untouched, unknown-path).
+- TDD discipline held: failed on missing symbol, passed after impl.
+- Fourth cycle of the return-value-forces-correct-shape pattern (45, 47, 48, 50).
+
+### Try next cycle
+- Migrate `dismissWorktree` to `removeWorktree` for consistency (cleanup, not bug).
+- STATE-2.7 compliance check on the Stop path — `stopWorktreeWithConfirmation` destroys surfaces but doesn't clear paneAttention. My cycle 43 fix was lost in the rebase (wasn't in origin's STATE-2.7 implementation). Needs re-verification.
+- GIT-4.7 / 4.8 / 4.9 audit: offer-dialog race conditions; what if `offeredDeleteForMergedPR` write races with app quit? Does persistence see it?
+- TERM-4.2/4.3 divider drag (PR #29) — pane-split UX edge cases.
+- TERM-5.3 zmx shell exit (PR #31) — close panes on shell exit.
+- PR-status polling cadence + failure streak behavior.
+- Truly-stale click UX placeholder (inline Dismiss).
