@@ -7,12 +7,12 @@ struct WebURLComposerTests {
 
     @Test func ipv4Url() {
         let url = WebURLComposer.url(session: "espalier-abcd1234", host: "100.64.0.5", port: 8799)
-        #expect(url == "http://100.64.0.5:8799/?session=espalier-abcd1234")
+        #expect(url == "http://100.64.0.5:8799/session/espalier-abcd1234")
     }
 
     @Test func ipv6UrlBrackets() {
         let url = WebURLComposer.url(session: "espalier-abcd1234", host: "fd7a:115c::5", port: 8799)
-        #expect(url == "http://[fd7a:115c::5]:8799/?session=espalier-abcd1234")
+        #expect(url == "http://[fd7a:115c::5]:8799/session/espalier-abcd1234")
     }
 
     @Test func chooseHostPrefersIPv4() {
@@ -33,6 +33,6 @@ struct WebURLComposerTests {
         // Session names with unusual chars shouldn't happen today, but
         // we encode defensively.
         let url = WebURLComposer.url(session: "name with space", host: "100.64.0.5", port: 8799)
-        #expect(url.contains("session=name%20with%20space"))
+        #expect(url.contains("/session/name%20with%20space"))
     }
 }
