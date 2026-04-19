@@ -106,6 +106,11 @@ struct WorktreeRow: View {
     /// `"origin/main"` for the main checkout, `"main"` for a linked
     /// worktree). Nil when the default branch isn't resolvable.
     let baseRef: String?
+    /// True when a PR/MR is associated with this worktree's branch.
+    /// Drives the leading-icon swap to the pull-request glyph (PR-3.1).
+    /// A `Bool` rather than `PRInfo?` so the row doesn't re-render when
+    /// PR fields it doesn't display (checks, title) change on each poll.
+    let hasPR: Bool
 
     var body: some View {
         HStack(spacing: 6) {
@@ -125,12 +130,16 @@ struct WorktreeRow: View {
     }
 
     /// `house` for the repo's main checkout, `arrow.triangle.branch` for
-    /// linked worktrees. The icon's color encodes the worktree's running
-    /// state: dim foreground when closed, green when running, yellow when
-    /// stale. Two signals in one glyph.
+    /// linked worktrees, and `arrow.triangle.pull` once a PR/MR is
+    /// associated with the worktree. The icon's color encodes the
+    /// worktree's running state: dim foreground when closed, green when
+    /// running, yellow when stale.
     @ViewBuilder
     private var typeIcon: some View {
-        Image(systemName: isMainCheckout ? "house" : "arrow.triangle.branch")
+        Image(systemName: WorktreeRowIcon.symbolName(
+            isMainCheckout: isMainCheckout,
+            hasPR: hasPR
+        ))
             .font(.system(size: 10))
             .foregroundColor(typeIconColor)
             .frame(width: 12)

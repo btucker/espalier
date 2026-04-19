@@ -11,6 +11,7 @@ struct SidebarView: View {
     @ObservedObject var terminalManager: TerminalManager
     let theme: GhosttyTheme
     let statsStore: WorktreeStatsStore
+    let prStatusStore: PRStatusStore
     let onSelect: (String) -> Void
     let onSelectPane: (String, TerminalID) -> Void
     let onAddRepo: () -> Void
@@ -144,7 +145,8 @@ struct SidebarView: View {
                     baseRef: statsStore.baseRef(
                         worktreePath: worktree.path,
                         repoPath: repo.path
-                    )
+                    ),
+                    hasPR: prStatusStore.infos[worktree.path] != nil
                 )
             }
             .buttonStyle(.plain)

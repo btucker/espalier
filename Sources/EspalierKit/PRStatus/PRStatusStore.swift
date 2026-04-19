@@ -63,10 +63,29 @@ public final class PRStatusStore {
     }
 
     public func clear(worktreePath: String) {
-        infos.removeValue(forKey: worktreePath)
-        absent.remove(worktreePath)
+        // Guard the observable mutations so a no-op clear (worktree never
+        // had a cached PR) doesn't fire `@Observable` notifications and
+        // re-render every SidebarView row.
+        if infos[worktreePath] != nil {
+            infos.removeValue(forKey: worktreePath)
+        }
+        if absent.contains(worktreePath) {
+            absent.remove(worktreePath)
+        }
         lastFetch.removeValue(forKey: worktreePath)
         failureStreak.removeValue(forKey: worktreePath)
+    }
+
+    /// Notify the store that a worktree's branch has changed. Drops the
+    /// cached PR info synchronously so the UI doesn't keep showing the
+    /// previous branch's PR through the gh-fetch in-flight window, then
+    /// schedules a fresh fetch for the new branch — bypassing the
+    /// `inFlight` guard so a concurrent polling-cycle fetch doesn't
+    /// suppress the re-resolve.
+    public func branchDidChange(worktreePath: String, repoPath: String, branch: String) {
+        clear(worktreePath: worktreePath)
+        inFlight.remove(worktreePath)
+        refresh(worktreePath: worktreePath, repoPath: repoPath, branch: branch)
     }
 
     // MARK: - Fetch

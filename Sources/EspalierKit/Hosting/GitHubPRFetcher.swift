@@ -54,10 +54,14 @@ public struct GitHubPRFetcher: PRFetcher {
         let fields = state == "merged"
             ? "number,title,url,state,headRefName,mergedAt"
             : "number,title,url,state,headRefName"
+        // Qualify the head ref with the origin owner so `gh` filters by
+        // `head.label` (e.g. `btucker:feature/x`) rather than the bare
+        // `head.ref` — the latter matches PRs from forks that happen to
+        // share the branch name.
         let args = [
             "pr", "list",
             "--repo", origin.slug,
-            "--head", branch,
+            "--head", "\(origin.owner):\(branch)",
             "--state", state,
             "--limit", "1",
             "--json", fields,

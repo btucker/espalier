@@ -1247,6 +1247,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String) {
         let binding = appState
         let store = statsStore
+        let prStore = prStatusStore
         // Branch changes fire in bursts (rebase, interactive checkout), so
         // `GitWorktreeDiscovery.discover`'s subprocess wait must yield the
         // main actor — the async version does that naturally. Scope the
@@ -1261,6 +1262,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                   let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
             binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
             store.refresh(worktreePath: worktreePath, repoPath: repoPath)
+            prStore.branchDidChange(worktreePath: worktreePath, repoPath: repoPath, branch: match.branch)
         }
     }
 }
