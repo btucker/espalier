@@ -506,7 +506,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ZMX-4.2** When the application restores a worktree's split tree on launch (per `PERSIST-3.x`), each restored pane's surface shall be created with the same session name derived from the persisted pane UUID, so reattach to a surviving daemon is automatic.
 
-**ZMX-4.3** When the application destroys a terminal surface (user-initiated close, automatic close on shell exit, or worktree stop), it shall asynchronously invoke `zmx kill --force <session>` for the matching session. Every site that initiates `zmx kill --force` shall also mark the pane as an intentional close, so the subsequent `close_surface_cb` is not misclassified as session-loss per `ZMX-7.2`.
+**ZMX-4.3** When the application destroys a terminal surface (user-initiated close, automatic close on shell exit, or worktree stop), it shall asynchronously invoke `zmx kill --force <session>` for the matching session.
 
 **ZMX-4.4** When the application quits, it shall not invoke `zmx kill` — pending PTY teardown by the OS is the desired detach signal that lets daemons survive.
 
@@ -528,11 +528,9 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ZMX-7.1** When the application restores a worktree's split tree on launch (per `PERSIST-3.x` and `ZMX-4.2`), it shall, before creating each pane's surface, query the live zmx session set and clear the pane's rehydration label if the expected session name is absent. This ensures a freshly-created daemon (the result of `zmx attach`'s create-on-miss semantics) is not mistaken for a surviving session by `defaultCommandDecision`.
 
-**ZMX-7.2** When `close_surface_cb` fires for a pane and Espalier did not initiate the close, the application shall query the live zmx session set; if the expected session name is absent, the application shall rebuild the pane's libghostty surface in place — same `TerminalID`, same split-tree position, fresh `zmx attach` — instead of removing the pane from the tree.
+**ZMX-7.2** If `zmx list` fails for any reason at the cold-start query site (per `ZMX-7.1`), the application shall treat the result as "session not missing" and take no recovery action — preferring a missed recovery over a spurious rehydration clear.
 
-**ZMX-7.3** While rebuilding a surface per `ZMX-7.2`, the application shall prepend a single visually-distinct banner line ("`— session restarted at HH:MM —`", ANSI dim) to the new pane's `initial_input` so the user can recognize that the underlying session has been replaced.
-
-**ZMX-7.4** If `zmx list` fails for any reason at either query site (per `ZMX-7.1` or `ZMX-7.2`), the application shall treat the result as "session not missing" and take no recovery action — preferring a missed recovery over a spurious rebuild.
+**ZMX-7.3** When `close_surface_cb` fires for a pane, the application shall always route to the close-pane path (remove from the split tree, free the surface) regardless of the zmx session's liveness. The mid-flight "rebuild surface in place" recovery explored in an earlier design was withdrawn because the available signals (session-missing + no Espalier-initiated close) cannot distinguish a clean user `exit` from an external daemon kill, and the rebuild path regressed `TERM-5.3`. Recovery from daemon loss while Espalier is running is deferred until a zmx-side signal disambiguates the two cases.
 
 ## 14. Distribution
 

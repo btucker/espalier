@@ -212,12 +212,8 @@ struct EspalierApp: App {
         // on an arbitrary terminalID rather than the currently-focused one.
         terminalManager.onCloseRequest = { [appState = $appState, tm = terminalManager] terminalID in
             MainActor.assumeIsolated {
-                // ZMX-7.2: if Espalier didn't initiate this close and the
-                // daemon is gone, rebuild in place rather than destroying.
-                if !tm.claimIntentionalClose(terminalID),
-                   tm.isSessionMissing(for: terminalID) {
-                    tm.restartSurface(for: terminalID)
-                } else {
+                switch paneCloseAction() {
+                case .closePane:
                     Self.closePane(
                         appState: appState,
                         terminalManager: tm,
