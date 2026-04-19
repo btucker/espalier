@@ -36,7 +36,10 @@ struct WebSettingsPane: View {
             case .stopped:
                 Text("Stopped").foregroundStyle(.secondary)
             case .listening(let addrs, let port):
-                Text("Listening on \(addrs.joined(separator: ", ")):\(port)")
+                // `verbatim:` because `Text("…\(port)")` goes through
+                // LocalizedStringKey, which formats `Int` with the
+                // locale's grouping separator (e.g., `12,345`).
+                Text(verbatim: "Listening on \(addrs.joined(separator: ", ")):\(port)")
                     .foregroundStyle(.green)
             case .disabledNoTailscale:
                 Text("Tailscale unavailable").foregroundStyle(.orange)
