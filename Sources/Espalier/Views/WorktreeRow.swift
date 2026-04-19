@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import EspalierKit
 
 /// Child row under a running worktree showing a single pane's title
@@ -106,15 +107,20 @@ struct WorktreeRow: View {
     /// `"origin/main"` for the main checkout, `"main"` for a linked
     /// worktree). Nil when the default branch isn't resolvable.
     let baseRef: String?
-    /// True when a PR/MR is associated with this worktree's branch.
-    /// Drives the leading-icon swap to the pull-request glyph (PR-3.1).
-    /// A `Bool` rather than `PRInfo?` so the row doesn't re-render when
-    /// PR fields it doesn't display (checks, title) change on each poll.
-    let hasPR: Bool
+    /// Narrow PR snapshot for this worktree, or nil when no PR/MR is
+    /// associated. Drives (a) the leading-icon swap to the pull-request
+    /// glyph (PR-3.1) and (b) the colored `#<number>` badge rendered
+    /// between icon and branch label (PR-3.2, PR-3.3). `PRBadge` is
+    /// deliberately narrower than `PRInfo` so unrelated changes (CI
+    /// checks, title, fetchedAt) don't invalidate the row on each poll.
+    let prBadge: PRBadge?
 
     var body: some View {
         HStack(spacing: 6) {
             typeIcon
+            if let prBadge {
+                prBadgeLabel(prBadge)
+            }
             branchLabel
             Spacer()
             WorktreeRowGutter(
@@ -138,7 +144,7 @@ struct WorktreeRow: View {
     private var typeIcon: some View {
         Image(systemName: WorktreeRowIcon.symbolName(
             isMainCheckout: isMainCheckout,
-            hasPR: hasPR
+            hasPR: prBadge != nil
         ))
             .font(.system(size: 10))
             .foregroundColor(typeIconColor)
@@ -151,6 +157,26 @@ struct WorktreeRow: View {
         case .running: return .green
         case .stale: return .yellow
         }
+    }
+
+    @ViewBuilder
+    private func prBadgeLabel(_ badge: PRBadge) -> some View {
+        Button {
+            NSWorkspace.shared.open(badge.url)
+        } label: {
+            Text("#\(badge.number)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(badge.state.statusColor)
+        }
+        .buttonStyle(.plain)
+        .help("Open #\(badge.number) on \(badge.url.host ?? "")")
+        .accessibilityLabel(badgeAccessibilityLabel(badge))
+    }
+
+    private func badgeAccessibilityLabel(_ badge: PRBadge) -> String {
+        let stateWord = badge.state == .open ? "open" : "merged"
+        return "Pull request \(badge.number), \(stateWord). Click to open in browser."
     }
 
     @ViewBuilder
