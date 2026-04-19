@@ -26,6 +26,19 @@ public final class WebServer {
             self.zmxExecutable = zmxExecutable
             self.zmxDir = zmxDir
         }
+
+        /// Accepts the range NIO's `bootstrap.bind(host:port:)` will accept
+        /// without throwing: 0 (kernel-assigned ephemeral — integration
+        /// tests rely on this) through 65535 (`UInt16.max`). Negative
+        /// values and values ≥ 65536 are rejected.
+        ///
+        /// `WebServerController` runs `WebAccessSettings.port` through this
+        /// gate before constructing the `Config` — without it, user input
+        /// like "99999" would surface as an opaque `NIOBindError` in the
+        /// Settings pane status row (`WEB-1.5`).
+        public static func isValidListenablePort(_ port: Int) -> Bool {
+            (0...65535).contains(port)
+        }
     }
 
     /// Decides whether a given peer IP is allowed. Pluggable so tests

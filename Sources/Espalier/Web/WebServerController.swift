@@ -51,6 +51,15 @@ final class WebServerController: ObservableObject {
         status = .stopped
         currentURL = nil
         guard desired.enabled else { return }
+        // Validate port BEFORE reaching into Tailscale / NIO. An
+        // out-of-range `WebAccessSettings.port` (e.g. the user typed
+        // "99999" into the Settings TextField, which has no clamp of
+        // its own) otherwise surfaces as `NIOBindError(port: 99999, …)`
+        // in the status row — opaque to the user. `WEB-1.5`.
+        guard WebServer.Config.isValidListenablePort(desired.port) else {
+            status = .error("Port must be 0–65535 (got \(desired.port))")
+            return
+        }
         do {
             let api = try TailscaleLocalAPI.autoDetected()
             let tailscaleStatus = try runBlocking { try await api.status() }
