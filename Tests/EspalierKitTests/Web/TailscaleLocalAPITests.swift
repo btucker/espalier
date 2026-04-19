@@ -41,3 +41,118 @@ struct TailscaleLocalAPIParsingTests {
         }
     }
 }
+
+@Suite("TailscaleLocalAPI — autoDetected transport selection")
+struct TailscaleLocalAPIAutoDetectTests {
+
+    private func makeTempDir() throws -> String {
+        let dir = NSTemporaryDirectory() + "tsapi-" + UUID().uuidString
+        try FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true
+        )
+        return dir
+    }
+
+    @Test func prefersUnixSocketWhenPresent() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        // A plain file at the candidate path is enough for the existence probe.
+        let fakeSocket = tmp + "/tailscaled.socket"
+        FileManager.default.createFile(atPath: fakeSocket, contents: nil)
+        // A macsys layout present too; socket should still win.
+        try "9999".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "secret".write(toFile: tmp + "/sameuserproof-9999", atomically: true, encoding: .utf8)
+
+        let api = try TailscaleLocalAPI.autoDetected(
+            socketPaths: [fakeSocket],
+            macsysSupportDir: tmp
+        )
+        #expect(api.transport == .unixSocket(path: fakeSocket))
+    }
+
+    @Test func fallsBackToMacsysTCPWhenSocketsAbsent() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "49161".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "token-abc-123".write(
+            toFile: tmp + "/sameuserproof-49161", atomically: true, encoding: .utf8
+        )
+
+        let api = try TailscaleLocalAPI.autoDetected(
+            socketPaths: ["/does/not/exist/tailscaled.socket"],
+            macsysSupportDir: tmp
+        )
+        #expect(api.transport == .tcpLocalhost(port: 49161, authToken: "token-abc-123"))
+    }
+
+    @Test func readsPortFromIpnportSymlink() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        // macsys writes ipnport as a symlink whose target is the port number.
+        try FileManager.default.createSymbolicLink(
+            atPath: tmp + "/ipnport", withDestinationPath: "49161"
+        )
+        try "token-xyz".write(
+            toFile: tmp + "/sameuserproof-49161", atomically: true, encoding: .utf8
+        )
+
+        let api = try TailscaleLocalAPI.autoDetected(
+            socketPaths: ["/does/not/exist/tailscaled.socket"],
+            macsysSupportDir: tmp
+        )
+        #expect(api.transport == .tcpLocalhost(port: 49161, authToken: "token-xyz"))
+    }
+
+    @Test func trimsWhitespaceFromTokenAndPort() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "  49161\n".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "token-xyz\n".write(
+            toFile: tmp + "/sameuserproof-49161", atomically: true, encoding: .utf8
+        )
+        let api = try TailscaleLocalAPI.autoDetected(
+            socketPaths: ["/does/not/exist/tailscaled.socket"],
+            macsysSupportDir: tmp
+        )
+        #expect(api.transport == .tcpLocalhost(port: 49161, authToken: "token-xyz"))
+    }
+
+    @Test func throwsSocketUnreachableWhenNothingPresent() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        #expect(throws: TailscaleLocalAPI.Error.socketUnreachable) {
+            _ = try TailscaleLocalAPI.autoDetected(
+                socketPaths: ["/does/not/exist/tailscaled.socket"],
+                macsysSupportDir: tmp
+            )
+        }
+    }
+
+    @Test func missingTokenFileIsNotDetected() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "49161".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        // Intentionally no sameuserproof-49161 file.
+        #expect(throws: TailscaleLocalAPI.Error.socketUnreachable) {
+            _ = try TailscaleLocalAPI.autoDetected(
+                socketPaths: ["/does/not/exist/tailscaled.socket"],
+                macsysSupportDir: tmp
+            )
+        }
+    }
+
+    @Test func emptyTokenIsNotDetected() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "49161".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "   \n".write(
+            toFile: tmp + "/sameuserproof-49161", atomically: true, encoding: .utf8
+        )
+        #expect(throws: TailscaleLocalAPI.Error.socketUnreachable) {
+            _ = try TailscaleLocalAPI.autoDetected(
+                socketPaths: ["/does/not/exist/tailscaled.socket"],
+                macsysSupportDir: tmp
+            )
+        }
+    }
+}

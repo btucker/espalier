@@ -1,7 +1,18 @@
 import Foundation
 
-/// Client for the Tailscale LocalAPI served on a Unix domain socket by
-/// the Tailscale daemon. We call two endpoints only:
+/// Client for the Tailscale LocalAPI. Two install flavors, two transports:
+///
+/// - **OSS / App Store sandboxed:** LocalAPI is a Unix domain socket
+///   (e.g., `/var/run/tailscaled.socket`). Auth is `Basic base64(":")`
+///   — the socket is local, the user is implicit.
+/// - **DMG "macsys" (Tailscale.app + system extension):** LocalAPI is
+///   TCP on `127.0.0.1:<port>`. The port is published in
+///   `/Library/Tailscale/ipnport` (typically a symlink whose target is
+///   the decimal port) and the auth token is in
+///   `/Library/Tailscale/sameuserproof-<port>` (root-owned, group
+///   `admin`). Auth is `Basic base64(":<token>")`.
+///
+/// We call two endpoints only:
 ///
 /// - `GET /localapi/v0/status` — returns the local tailnet identity
 ///   (our LoginName) and the TailscaleIPs assigned to this host.
@@ -9,7 +20,7 @@ import Foundation
 ///   UserProfile of the tailnet peer at that address.
 ///
 /// # Lifetime
-/// Stateless. Each call opens + closes the Unix socket.
+/// Stateless. Each call opens + closes the transport.
 ///
 /// # Failure policy
 /// All failure modes throw. Callers are expected to treat any thrown
@@ -17,13 +28,14 @@ import Foundation
 /// binds without a successful `status()` call.
 public struct TailscaleLocalAPI {
 
-    /// Candidate Unix-socket paths, tried in order. The first path
-    /// reachable is used; later calls do not re-probe — the caller
-    /// is expected to stop/restart the server if Tailscale moves.
+    /// Candidate Unix-socket paths, tried in order.
     public static let defaultSocketPaths: [String] = [
         "/var/run/tailscaled.socket",
         NSString(string: "~/Library/Containers/io.tailscale.ipn.macsys/Data/IPN/tailscaled.sock").expandingTildeInPath,
     ]
+
+    /// Where the macsys (DMG) install publishes its TCP port + auth token.
+    public static let defaultMacsysSupportDir: String = "/Library/Tailscale"
 
     public struct Status: Equatable {
         public let loginName: String
@@ -40,20 +52,75 @@ public struct TailscaleLocalAPI {
         case malformedResponse
     }
 
-    private let socketPath: String
-
-    public init(socketPath: String) {
-        self.socketPath = socketPath
+    /// Which transport to use for this client. `autoDetected()` picks
+    /// one based on what's on disk; tests construct instances directly
+    /// via `init(socketPath:)` (Unix) or the internal transport init.
+    enum Transport: Equatable {
+        case unixSocket(path: String)
+        case tcpLocalhost(port: Int, authToken: String)
     }
 
-    /// Construct using the first reachable default path (DMG install vs
-    /// sandboxed App Store install land the socket in different places).
-    /// Throws `.socketUnreachable` if none of the candidates exist.
+    let transport: Transport
+
+    public init(socketPath: String) {
+        self.transport = .unixSocket(path: socketPath)
+    }
+
+    init(transport: Transport) {
+        self.transport = transport
+    }
+
+    /// Auto-detect a reachable Tailscale LocalAPI endpoint. Probes Unix
+    /// sockets first (fastest, matches OSS and the sandboxed app), then
+    /// falls back to the macsys DMG's TCP LocalAPI. Throws
+    /// `.socketUnreachable` if nothing usable is found.
     public static func autoDetected() throws -> TailscaleLocalAPI {
-        for path in defaultSocketPaths where FileManager.default.fileExists(atPath: path) {
-            return TailscaleLocalAPI(socketPath: path)
+        try autoDetected(
+            socketPaths: defaultSocketPaths,
+            macsysSupportDir: defaultMacsysSupportDir
+        )
+    }
+
+    /// Testable seam for `autoDetected()`. Injecting the candidate paths
+    /// lets unit tests exercise both detection branches without touching
+    /// real Tailscale state on disk.
+    static func autoDetected(
+        socketPaths: [String],
+        macsysSupportDir: String
+    ) throws -> TailscaleLocalAPI {
+        for path in socketPaths where FileManager.default.fileExists(atPath: path) {
+            return TailscaleLocalAPI(transport: .unixSocket(path: path))
+        }
+        if let tcp = detectMacsysTCP(supportDir: macsysSupportDir) {
+            return TailscaleLocalAPI(transport: tcp)
         }
         throw Error.socketUnreachable
+    }
+
+    /// Read `<supportDir>/ipnport` (file or symlink) + the matching
+    /// `sameuserproof-<port>` token. Returns `nil` — not throws — when
+    /// the layout is incomplete, so `autoDetected` can fall through to
+    /// its final `.socketUnreachable` error cleanly.
+    static func detectMacsysTCP(supportDir: String) -> Transport? {
+        let portPath = supportDir + "/ipnport"
+        let portText: String
+        if let link = try? FileManager.default.destinationOfSymbolicLink(atPath: portPath) {
+            portText = link
+        } else if let text = try? String(contentsOfFile: portPath, encoding: .utf8) {
+            portText = text
+        } else {
+            return nil
+        }
+        guard let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        let tokenPath = supportDir + "/sameuserproof-\(port)"
+        guard let raw = try? String(contentsOfFile: tokenPath, encoding: .utf8) else {
+            return nil
+        }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return nil }
+        return .tcpLocalhost(port: port, authToken: token)
     }
 
     // MARK: - Public API
@@ -110,35 +177,25 @@ public struct TailscaleLocalAPI {
         return Whois(loginName: raw.UserProfile.LoginName)
     }
 
-    // MARK: - HTTP over Unix socket
+    // MARK: - HTTP (transport-agnostic framing)
 
     private func request(path: String) async throws -> Data {
-        // We implement the minimum HTTP/1.1 framing needed: a single GET,
-        // read headers until CRLFCRLF, then body by Content-Length.
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        if fd < 0 { throw Error.socketUnreachable }
+        let fd: Int32
+        let hostHeader: String
+        let authHeader: String
+        switch transport {
+        case .unixSocket(let socketPath):
+            fd = try Self.openUnixSocket(path: socketPath)
+            hostHeader = "local-tailscaled.sock"
+            // Empty basic auth: user is implicit via the local socket.
+            authHeader = "Basic Og=="
+        case .tcpLocalhost(let port, let token):
+            fd = try Self.openTCPLocalhost(port: port)
+            hostHeader = "local-tailscaled.sock"
+            let creds = Data(":\(token)".utf8).base64EncodedString()
+            authHeader = "Basic \(creds)"
+        }
         defer { close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = socketPath.utf8CString
-        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            throw Error.socketUnreachable
-        }
-        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-            sunPath.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dst in
-                _ = pathBytes.withUnsafeBufferPointer { src in
-                    memcpy(dst, src.baseAddress, src.count)
-                }
-            }
-        }
-        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let rc = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                Darwin.connect(fd, sockPtr, size)
-            }
-        }
-        if rc != 0 { throw Error.socketUnreachable }
 
         // 2s send/recv timeout so a hung tailscaled doesn't wedge the WebServer
         // auth path indefinitely.
@@ -146,13 +203,14 @@ public struct TailscaleLocalAPI {
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        // Tailscale LocalAPI expects Basic auth with no password — the
-        // user is implicit because the socket is local. An empty auth
-        // header works for the documented endpoints.
+        // HTTP/1.0 avoids Transfer-Encoding: chunked responses that the
+        // macsys TCP LocalAPI emits for larger payloads (e.g., `status`).
+        // We make one request per connection anyway, so we gain nothing
+        // from 1.1 framing — 1.0 + Connection: close just works.
         let req = """
-        GET \(path) HTTP/1.1\r
-        Host: local-tailscaled.sock\r
-        Authorization: Basic Og==\r
+        GET \(path) HTTP/1.0\r
+        Host: \(hostHeader)\r
+        Authorization: \(authHeader)\r
         Connection: close\r
         \r\n
         """
@@ -187,6 +245,59 @@ public struct TailscaleLocalAPI {
         }
 
         return Data(body)
+    }
+
+    private static func openUnixSocket(path: String) throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        if fd < 0 { throw Error.socketUnreachable }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = path.utf8CString
+        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            close(fd)
+            throw Error.socketUnreachable
+        }
+        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+            sunPath.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dst in
+                _ = pathBytes.withUnsafeBufferPointer { src in
+                    memcpy(dst, src.baseAddress, src.count)
+                }
+            }
+        }
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let rc = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                Darwin.connect(fd, sockPtr, size)
+            }
+        }
+        if rc != 0 {
+            close(fd)
+            throw Error.socketUnreachable
+        }
+        return fd
+    }
+
+    private static func openTCPLocalhost(port: Int) throws -> Int32 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        if fd < 0 { throw Error.socketUnreachable }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(UInt16(port)).bigEndian
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let rc = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                Darwin.connect(fd, sockPtr, size)
+            }
+        }
+        if rc != 0 {
+            close(fd)
+            throw Error.socketUnreachable
+        }
+        return fd
     }
 
     private static func findDoubleCRLF(in data: Data) -> Int? {
