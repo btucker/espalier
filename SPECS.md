@@ -294,6 +294,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **PWD-1.2** The application shall select the destination worktree as the one whose filesystem path is the longest prefix of the reported PWD across all repos. If no worktree path is a prefix of the PWD, the pane shall remain in its current worktree.
 
+**PWD-1.3** If a pane's inner shell does not emit OSC 7 (e.g. a `zmx` session whose inner shell predates `ZMX-6.3` and therefore has no Ghostty zsh integration loaded, or a shell for which Espalier does not install integration), the application shall poll that pane's inner-shell working directory at least every 3 seconds and, when the polled value differs from the last known PWD for that pane, invoke the same reassignment-evaluation flow required by `PWD-1.1` using the polled value. Espalier resolves the inner-shell PID by reading the zmx session log at `<ZMX_DIR>/logs/<session>.log` for the most recent `pty spawned session=<session> pid=<N>` line and queries the PID's current working directory via `proc_pidinfo(PROC_PIDVNODEPATHINFO)`. When no PID is discoverable (log missing, no `pty spawned` line, cached PID no longer responds), the poll shall skip that pane for the current tick. OSC 7 events and polled values share one last-known-PWD memory per pane so a cd observed by one source does not re-fire via the other.
+
 ### 7.2 Reassignment
 
 **PWD-2.1** When the destination worktree differs from the current worktree, the application shall remove the pane from the source worktree's split tree and insert it into the destination worktree's split tree.
