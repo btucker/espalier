@@ -80,12 +80,33 @@ public final class ZmxLauncher: Sendable {
     /// Bytes Espalier writes into each pane's PTY via libghostty's
     /// `initial_input` as soon as the user's default shell starts up.
     ///
-    /// Shape: `exec '<zmx>' attach '<session>' '<userShell>'\n`
+    /// Shape (no Ghostty integration):
+    ///     `exec '<zmx>' attach '<session>' '<userShell>'\n`
+    ///
+    /// Shape (zsh with Ghostty integration available):
+    ///     `GHOSTTY_ZSH_ZDOTDIR="$ZDOTDIR" ZDOTDIR='<res>/shell-integration/zsh'
+    ///      exec '<zmx>' attach '<session>' '<userShell>'\n`
     ///
     /// The `exec` is load-bearing: it *replaces* the outer shell with
     /// `zmx attach`, so when the inner shell ends its session the whole
     /// PTY child dies. libghostty detects the child exit, fires
     /// `close_surface_cb`, and Espalier closes the pane.
+    ///
+    /// The ZDOTDIR re-injection is load-bearing when `userShell` is zsh:
+    /// libghostty installs its shell integration by setting ZDOTDIR on
+    /// the *outer* shell, but the integration's .zshenv restores ZDOTDIR
+    /// to the user's original value before we ever run initial_input.
+    /// Without the re-injection, the inner shell that zmx spawns after
+    /// our `exec` sources only the user's normal rc files — no Ghostty
+    /// integration, no chpwd-driven OSC 7, no OSC 133 prompt marks. That
+    /// breaks PWD-follow, onShellReady, and the command-finished badge
+    /// for every pane. Preserving the outgoing ZDOTDIR in
+    /// GHOSTTY_ZSH_ZDOTDIR lets the integration's .zshenv restore the
+    /// user's original dir on the other side so their .zshrc still runs.
+    ///
+    /// Non-zsh shells (bash, fish, sh) leave the prefix off — ZDOTDIR
+    /// is a zsh-only mechanism, and those shells need different
+    /// injection strategies we haven't implemented yet.
     ///
     /// Why not just set `config.command = attachCommand(...)` instead?
     /// libghostty auto-enables `wait-after-command = true` whenever
@@ -97,8 +118,17 @@ public final class ZmxLauncher: Sendable {
     /// means panes stop auto-closing on `exit`. Feeding the same command
     /// via `initial_input` into the default-shell spawn keeps
     /// wait-after-command at its default of false.
-    public func attachInitialInput(sessionName: String, userShell: String) -> String {
-        "exec \(shellQuote(executable.path))"
+    public func attachInitialInput(
+        sessionName: String,
+        userShell: String,
+        ghosttyResourcesDir: String? = nil
+    ) -> String {
+        let prefix = zshIntegrationPrefix(
+            userShell: userShell,
+            ghosttyResourcesDir: ghosttyResourcesDir
+        )
+        return prefix
+            + "exec \(shellQuote(executable.path))"
             + " attach \(shellQuote(sessionName))"
             + " \(shellQuote(userShell))\n"
     }
@@ -114,6 +144,23 @@ public final class ZmxLauncher: Sendable {
     public func attachArgv(sessionName: String,
                            userShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/bash") -> [String] {
         [executable.path, "attach", sessionName, userShell]
+    }
+
+    /// Produce the `GHOSTTY_ZSH_ZDOTDIR=… ZDOTDIR=…` prefix for the
+    /// `exec zmx attach …` line when the user's shell is zsh and a
+    /// Ghostty resources directory is available. Returns an empty
+    /// string (no prefix) otherwise. See `attachInitialInput` for
+    /// why this is necessary.
+    private func zshIntegrationPrefix(
+        userShell: String,
+        ghosttyResourcesDir: String?
+    ) -> String {
+        guard let root = ghosttyResourcesDir, !root.isEmpty else { return "" }
+        guard (userShell as NSString).lastPathComponent == "zsh" else { return "" }
+        let integrationDir = (root as NSString).appendingPathComponent("shell-integration/zsh")
+        return "GHOSTTY_ZSH_ZDOTDIR=\"$ZDOTDIR\""
+            + " ZDOTDIR=\(shellQuote(integrationDir))"
+            + " "
     }
 
     /// Env additions that should accompany every zmx invocation Espalier

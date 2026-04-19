@@ -169,6 +169,116 @@ struct ZmxLauncherUnitTests {
         #expect(input.hasPrefix("exec "))
     }
 
+    // MARK: Ghostty zsh shell-integration pass-through
+    //
+    // Ghostty activates its zsh integration by setting ZDOTDIR to
+    // `<resources>/shell-integration/zsh` when libghostty spawns the PTY
+    // child. That integration dir's .zshenv immediately restores ZDOTDIR
+    // to the user's original value and then sources the Ghostty hooks.
+    // By the time our `exec zmx attach …` initial_input runs, ZDOTDIR is
+    // back to the user's normal value — so the *inner* shell spawned by
+    // zmx's daemon would never re-source the integration, and chpwd's
+    // OSC 7 (and OSC 133 prompt marks, etc.) would stop firing across
+    // the zmx hop. PWD-follow, default-command, and command-finished
+    // badges all depend on that integration staying active in the inner
+    // shell.
+    //
+    // Fix: when the user's shell is zsh and a Ghostty resources root is
+    // supplied, prefix the exec line with a ZDOTDIR re-injection that
+    // points back at Ghostty's integration dir — and save the outgoing
+    // ZDOTDIR into GHOSTTY_ZSH_ZDOTDIR so the integration's .zshenv
+    // can restore the user's original on the other side.
+
+    @Test func attachInitialInputReInjectsZshIntegrationZDOTDIRWhenAvailable() throws {
+        let launcher = ZmxLauncher(
+            executable: URL(fileURLWithPath: "/Applications/Espalier.app/Contents/Helpers/zmx")
+        )
+        let input = launcher.attachInitialInput(
+            sessionName: "espalier-deadbeef",
+            userShell: "/bin/zsh",
+            ghosttyResourcesDir: "/Applications/Ghostty.app/Contents/Resources/ghostty"
+        )
+        #expect(
+            input ==
+            "GHOSTTY_ZSH_ZDOTDIR=\"$ZDOTDIR\""
+            + " ZDOTDIR='/Applications/Ghostty.app/Contents/Resources/ghostty/shell-integration/zsh'"
+            + " exec '/Applications/Espalier.app/Contents/Helpers/zmx'"
+            + " attach 'espalier-deadbeef' '/bin/zsh'\n"
+        )
+    }
+
+    @Test func attachInitialInputWorksForAnyZshInstallPath() throws {
+        // Homebrew zsh at /opt/homebrew/bin/zsh, MacPorts at
+        // /usr/local/bin/zsh, user-built at ~/bin/zsh, etc. — all should
+        // get the re-injection because basename is still "zsh".
+        let launcher = ZmxLauncher(executable: URL(fileURLWithPath: "/usr/bin/zmx"))
+        for shell in ["/opt/homebrew/bin/zsh", "/usr/local/bin/zsh", "/home/user/bin/zsh"] {
+            let input = launcher.attachInitialInput(
+                sessionName: "espalier-x",
+                userShell: shell,
+                ghosttyResourcesDir: "/ghostty"
+            )
+            #expect(
+                input.hasPrefix("GHOSTTY_ZSH_ZDOTDIR=\"$ZDOTDIR\" ZDOTDIR='/ghostty/shell-integration/zsh' exec "),
+                "expected ZDOTDIR prefix for \(shell); got: \(input)"
+            )
+        }
+    }
+
+    @Test func attachInitialInputOmitsZshPrefixWhenShellIsNotZsh() throws {
+        // bash doesn't honor ZDOTDIR; fish has its own config model.
+        // Leaving the prefix off is the safe default — integration pass-
+        // through for non-zsh shells is a separate follow-up.
+        let launcher = ZmxLauncher(
+            executable: URL(fileURLWithPath: "/usr/bin/zmx")
+        )
+        for shell in ["/bin/bash", "/usr/local/bin/fish", "/bin/sh"] {
+            let input = launcher.attachInitialInput(
+                sessionName: "espalier-x",
+                userShell: shell,
+                ghosttyResourcesDir: "/Applications/Ghostty.app/Contents/Resources/ghostty"
+            )
+            #expect(
+                input.hasPrefix("exec "),
+                "\(shell) should not get the zsh ZDOTDIR prefix; got: \(input)"
+            )
+        }
+    }
+
+    @Test func attachInitialInputOmitsZshPrefixWhenNoGhosttyResourcesProvided() throws {
+        // Backwards-compatible: when callers don't pass a resources dir,
+        // behavior matches the original exec-only form. This is the
+        // Ghostty-not-installed path.
+        let launcher = ZmxLauncher(
+            executable: URL(fileURLWithPath: "/usr/bin/zmx")
+        )
+        let input = launcher.attachInitialInput(
+            sessionName: "espalier-x",
+            userShell: "/bin/zsh",
+            ghosttyResourcesDir: nil
+        )
+        #expect(input.hasPrefix("exec "))
+    }
+
+    @Test func attachInitialInputShellQuotesGhosttyResourcesDir() throws {
+        // Same ' → '\'' defense as every other substituted field. Path
+        // with a space is the common real-world case (users with
+        // Ghostty in `/Applications/My Apps/Ghostty.app`).
+        let launcher = ZmxLauncher(
+            executable: URL(fileURLWithPath: "/usr/bin/zmx")
+        )
+        let input = launcher.attachInitialInput(
+            sessionName: "espalier-x",
+            userShell: "/bin/zsh",
+            ghosttyResourcesDir: "/Applications/My Apps/Ghostty.app/Contents/Resources/ghostty"
+        )
+        #expect(
+            input.contains(
+                " ZDOTDIR='/Applications/My Apps/Ghostty.app/Contents/Resources/ghostty/shell-integration/zsh' "
+            )
+        )
+    }
+
     // MARK: parseListOutput
     //
     // `zmx list --short` emits one session name per line. (The non-short

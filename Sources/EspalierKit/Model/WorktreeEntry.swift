@@ -11,7 +11,19 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
     public let path: String
     public var branch: String
     public var state: WorktreeState
+    /// Worktree-scoped attention slot. Driven by the CLI
+    /// (`espalier notify`), which targets a worktree path rather than a
+    /// specific pane. Rendered on pane rows that don't have their own
+    /// `paneAttention[terminalID]` entry.
     public var attention: Attention?
+    /// Pane-scoped attention slots keyed by pane `TerminalID`. Driven by
+    /// shell-integration events (`COMMAND_FINISHED`) that are emitted by
+    /// one specific pane — so the ping must land on that pane's sidebar
+    /// row and leave its siblings untouched. A pane's entry wins over
+    /// the worktree-level `attention` slot when rendering that pane's
+    /// row, but the worktree slot stays available as a fallback for
+    /// other panes (and for the CLI path).
+    public var paneAttention: [TerminalID: Attention]
     public var splitTree: SplitTree
     public var focusedTerminalID: TerminalID?
 
@@ -27,8 +39,36 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
         self.branch = branch
         self.state = state
         self.attention = attention
+        self.paneAttention = [:]
         self.splitTree = splitTree
         self.focusedTerminalID = nil
+    }
+
+    // Custom Decodable so `paneAttention` (added after the initial
+    // release) is optional on disk. Pre-fix persisted state blobs don't
+    // carry the key; defaulting to empty lets existing users keep their
+    // saved split trees across this upgrade rather than failing to
+    // decode and silently losing everything.
+    private enum CodingKeys: String, CodingKey {
+        case id, path, branch, state, attention, paneAttention, splitTree, focusedTerminalID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.path = try container.decode(String.self, forKey: .path)
+        self.branch = try container.decode(String.self, forKey: .branch)
+        self.state = try container.decode(WorktreeState.self, forKey: .state)
+        self.attention = try container.decodeIfPresent(Attention.self, forKey: .attention)
+        self.paneAttention = try container.decodeIfPresent(
+            [TerminalID: Attention].self,
+            forKey: .paneAttention
+        ) ?? [:]
+        self.splitTree = try container.decode(SplitTree.self, forKey: .splitTree)
+        self.focusedTerminalID = try container.decodeIfPresent(
+            TerminalID.self,
+            forKey: .focusedTerminalID
+        )
     }
 
     /// User-facing label for the worktree *in the context of its siblings*.
