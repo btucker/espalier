@@ -25,11 +25,35 @@ public enum ZmxPIDLookup {
     }
 
     /// Nil on missing/unreadable log — caller skips the poll for that pane.
+    ///
+    /// zmx rotates each session's `<session>.log` to `<session>.log.old`
+    /// once it reaches its size threshold (~5MB). The `pty spawned` line
+    /// that `shellPID(fromLogContents:sessionName:)` parses can therefore
+    /// live in the rotated file while the post-rotation `.log` is still
+    /// too fresh to contain one. We look in the current log first (so a
+    /// post-rotation respawn supersedes stale PIDs in `.log.old`) and
+    /// fall back to the rotated file only when the current log has no
+    /// matching line — otherwise PWD-1.3's PID-based PWD-follow fallback
+    /// stays silent for the remaining lifetime of every long-lived
+    /// session, which is exactly how this bug manifested in practice.
     public static func shellPID(logFile: URL, sessionName: String) -> Int32? {
-        guard let contents = try? String(contentsOf: logFile, encoding: .utf8) else {
+        if let contents = try? String(contentsOf: logFile, encoding: .utf8),
+           let pid = shellPID(fromLogContents: contents, sessionName: sessionName) {
+            return pid
+        }
+        let rotated = rotatedLogURL(for: logFile)
+        guard let contents = try? String(contentsOf: rotated, encoding: .utf8) else {
             return nil
         }
         return shellPID(fromLogContents: contents, sessionName: sessionName)
+    }
+
+    /// Compute the rotated sibling path (`<name>.log` → `<name>.log.old`).
+    /// Extracted so the fallback path is testable without hardcoding the
+    /// suffix at the call site.
+    static func rotatedLogURL(for logFile: URL) -> URL {
+        logFile.deletingLastPathComponent()
+            .appendingPathComponent(logFile.lastPathComponent + ".old")
     }
 
     private static func parsePID<S: StringProtocol>(from line: S) -> Int32? {

@@ -102,4 +102,60 @@ struct ZmxPIDLookupTests {
         )
         #expect(pid == nil)
     }
+
+    @Test func readsRotatedLogWhenCurrentHasNoSpawnLine() throws {
+        // Regression: zmx rotates `<session>.log` → `<session>.log.old`
+        // once the file reaches its size threshold (empirically ~5MB).
+        // The most recent `pty spawned session=… pid=N` line can live in
+        // the rotated file while the post-rotation `.log` is still too
+        // fresh to contain any spawn line. Before the fix, `shellPID`
+        // only consulted `.log`, so after rotation the PID lookup went
+        // silent for the remaining lifetime of the session — and
+        // `PWD-1.3`'s PID-based PWD-follow fallback stopped firing
+        // because `resolveCwd` could never find a PID to poll.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmx-rotation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let current = dir.appendingPathComponent("espalier-session.log")
+        let rotated = dir.appendingPathComponent("espalier-session.log.old")
+
+        try """
+        [100] [info] (default): pty spawned session=espalier-session pid=4242
+        [200] [info] (default): serialize terminal state
+        """.write(to: rotated, atomically: true, encoding: .utf8)
+
+        try """
+        [300] [info] (default): client connected fd=8 total=1
+        [400] [info] (default): sending ipc message tag=Output
+        """.write(to: current, atomically: true, encoding: .utf8)
+
+        let pid = ZmxPIDLookup.shellPID(logFile: current, sessionName: "espalier-session")
+        #expect(pid == 4242)
+    }
+
+    @Test func currentLogSpawnLineWinsOverRotated() throws {
+        // If the session respawned after rotation, the post-rotation
+        // `.log` holds the newer spawn line. Prefer it over the stale
+        // pid still sitting in `.log.old`.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmx-rotation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let current = dir.appendingPathComponent("espalier-session.log")
+        let rotated = dir.appendingPathComponent("espalier-session.log.old")
+
+        try """
+        [100] [info] (default): pty spawned session=espalier-session pid=1111
+        """.write(to: rotated, atomically: true, encoding: .utf8)
+
+        try """
+        [300] [info] (default): pty spawned session=espalier-session pid=2222
+        """.write(to: current, atomically: true, encoding: .utf8)
+
+        let pid = ZmxPIDLookup.shellPID(logFile: current, sessionName: "espalier-session")
+        #expect(pid == 2222)
+    }
 }
