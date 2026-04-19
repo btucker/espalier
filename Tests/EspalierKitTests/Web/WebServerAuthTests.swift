@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import EspalierKit
 
-@Suite("WebServer — auth gate")
+@Suite("WebServer — auth gate", .serialized)
 struct WebServerAuthTests {
 
     private static func makeConfig(port: Int = 0) -> WebServer.Config {
