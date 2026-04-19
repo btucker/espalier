@@ -193,6 +193,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **GIT-2.4** While a repository is in the sidebar, the application shall detect every operation that moves a worktree's HEAD — including commits on the current branch, `checkout`, `switch`, `reset`, `merge`, and `rebase` — and surface each as a HEAD-reference change.
 
+**GIT-2.5** While a repository is in the sidebar, the application shall watch `<repoPath>/.git/logs/refs/remotes/origin/` using FSEvents so that any operation which advances a remote-tracking ref — `git push` (the common `gh pr create` path), `git fetch`, and prune — surfaces as an origin-ref change. One watch per repository covers all linked worktrees, since they share the main checkout's git directory.
+
 ### 4.3 Change Handling
 
 **GIT-3.1** When a new worktree is detected, the application shall add a new entry in the closed state and briefly flash its background highlight.
@@ -683,6 +685,8 @@ its Ghostty-config-derived menu shortcuts without requiring a restart.
 ### 17.2 Refresh Triggers
 
 **PR-2.1** When a worktree's HEAD reference changes (per GIT-2.4), the application shall drop the worktree's previously cached PR display synchronously and shall trigger a fresh PR resolution for the new branch — rather than waiting for the next polling tick to discover the change. This prevents the previous branch's PR from continuing to display through the polling cadence window after a `git checkout`, rebase, or other HEAD-rewriting operation.
+
+**PR-2.2** When the application observes an origin-ref change for a repository (per GIT-2.5), the application shall trigger a fresh PR resolution for every non-stale worktree in that repository whose branch is fetchable. This catches the `gh pr create` / `git push` flow — neither moves local HEAD, so PR-2.1 doesn't fire, and without this trigger the user would wait up to the full `absent` polling cadence before a newly-opened PR appears in the sidebar.
 
 ### 17.3 Sidebar Indicator
 

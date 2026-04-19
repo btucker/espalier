@@ -355,6 +355,7 @@ struct EspalierApp: App {
         services.worktreeMonitor.delegate = bridge
         for repo in appState.repos {
             services.worktreeMonitor.watchWorktreeDirectory(repoPath: repo.path)
+            services.worktreeMonitor.watchOriginRefs(repoPath: repo.path)
             for wt in repo.worktrees {
                 services.worktreeMonitor.watchWorktreePath(wt.path)
                 services.worktreeMonitor.watchHeadRef(worktreePath: wt.path, repoPath: repo.path)
@@ -1283,6 +1284,27 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             }
             store.clear(worktreePath: worktreePath)
             prStore.clear(worktreePath: worktreePath)
+        }
+    }
+
+    /// Fires when any remote-tracking ref under
+    /// `<repoPath>/.git/logs/refs/remotes/origin/` moves — i.e. a
+    /// `git push` or `git fetch` landed. Covers the `gh pr create`
+    /// flow, which pushes then creates the PR via API without touching
+    /// local HEAD. We refresh every non-stale worktree in the repo
+    /// because a single directory-level event doesn't tell us which
+    /// specific branch's ref moved, and `PRStatusStore.refresh` is
+    /// already idempotent against duplicate fetches via its `inFlight`
+    /// gate.
+    nonisolated func worktreeMonitorDidDetectOriginRefChange(_ monitor: WorktreeMonitor, repoPath: String) {
+        let binding = appState
+        let prStore = prStatusStore
+        Task { @MainActor in
+            guard let repo = binding.wrappedValue.repos.first(where: { $0.path == repoPath }) else { return }
+            for wt in repo.worktrees where wt.state != .stale {
+                guard PRStatusStore.isFetchableBranch(wt.branch) else { continue }
+                prStore.refresh(worktreePath: wt.path, repoPath: repoPath, branch: wt.branch)
+            }
         }
     }
 
