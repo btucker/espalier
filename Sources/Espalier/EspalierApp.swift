@@ -469,21 +469,29 @@ struct EspalierApp: App {
     ) {
         switch message {
         case .notify(let path, let text, let clearAfter):
+            // Pin the timestamp the attention carries AND the auto-clear
+            // timer closes over, so the timer can verify it's still OUR
+            // notification when it fires (cf. WorktreeEntry.clearAttentionIfTimestamp).
+            let stamp = Date()
             for repoIdx in appState.wrappedValue.repos.indices {
                 for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
                     if appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].path == path {
                         appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].attention = Attention(
                             text: text,
-                            timestamp: Date(),
+                            timestamp: stamp,
                             clearAfter: clearAfter
                         )
 
-                        if let clearAfter {
+                        // Only schedule a clear for strictly-positive durations.
+                        // Zero or negative values would fire immediately, making
+                        // the notification invisible — treat them as "no auto-clear"
+                        // so ill-formed CLI input degrades gracefully.
+                        if let clearAfter, clearAfter > 0 {
                             DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) {
                                 for ri in appState.wrappedValue.repos.indices {
                                     for wi in appState.wrappedValue.repos[ri].worktrees.indices {
                                         if appState.wrappedValue.repos[ri].worktrees[wi].path == path {
-                                            appState.wrappedValue.repos[ri].worktrees[wi].attention = nil
+                                            appState.wrappedValue.repos[ri].worktrees[wi].clearAttentionIfTimestamp(stamp)
                                         }
                                     }
                                 }

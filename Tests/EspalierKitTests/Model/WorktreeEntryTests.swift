@@ -47,6 +47,45 @@ struct WorktreeEntryTests {
         #expect(attn.clearAfter == 10)
     }
 
+    // MARK: auto-clear timestamp guard
+    //
+    // `espalier notify --clear-after 10 "A"` schedules a clear at t=10.
+    // If a second `notify "B"` lands at t=5, the pending timer must NOT
+    // wipe "B" when it fires — the auto-clear is for *its own*
+    // notification, not the current one. Server code captures the
+    // Attention's timestamp when scheduling and uses
+    // `clearAttentionIfTimestamp(_:)` to guard the fire.
+
+    @Test func clearAttentionIfTimestampClearsMatching() {
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let now = Date()
+        entry.attention = Attention(text: "A", timestamp: now, clearAfter: 10)
+        entry.clearAttentionIfTimestamp(now)
+        #expect(entry.attention == nil)
+    }
+
+    @Test func clearAttentionIfTimestampIsNoopForReplacedAttention() {
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let t1 = Date()
+        entry.attention = Attention(text: "A", timestamp: t1, clearAfter: 10)
+        let t2 = t1.addingTimeInterval(5)
+        entry.attention = Attention(text: "B", timestamp: t2)
+
+        // Timer scheduled by "A" fires at t=10, but the current attention
+        // is "B" — the guard must keep "B" alive.
+        entry.clearAttentionIfTimestamp(t1)
+        #expect(entry.attention?.text == "B")
+    }
+
+    @Test func clearAttentionIfTimestampIsNoopWhenAlreadyCleared() {
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let now = Date()
+        entry.attention = Attention(text: "A", timestamp: now, clearAfter: 10)
+        entry.attention = nil
+        entry.clearAttentionIfTimestamp(now) // should not crash or re-set
+        #expect(entry.attention == nil)
+    }
+
     // MARK: paneAttention
     //
     // Per-pane attention badges are distinct from the worktree-level
