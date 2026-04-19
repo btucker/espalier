@@ -2,6 +2,15 @@
 
 import PackageDescription
 
+// CI runs `swift build` / `swift test` which default to the debug
+// configuration; matching that here means warnings fail the local
+// build too and we don't find out from a CI round-trip. Release
+// configuration stays lenient so a future Swift version's new
+// warnings don't block shipping.
+let strictWarnings: [SwiftSetting] = [
+    .unsafeFlags(["-warnings-as-errors"], .when(configuration: .debug)),
+]
+
 let package = Package(
     name: "Espalier",
     platforms: [.macOS(.v14)],
@@ -29,21 +38,24 @@ let package = Package(
             ],
             resources: [
                 .copy("Web/Resources"),
-            ]
+            ],
+            swiftSettings: strictWarnings
         ),
         .executableTarget(
             name: "Espalier",
             dependencies: [
                 "EspalierKit",
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
-            ]
+            ],
+            swiftSettings: strictWarnings
         ),
         .executableTarget(
             name: "EspalierCLI",
             dependencies: [
                 "EspalierKit",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            swiftSettings: strictWarnings
         ),
         .testTarget(
             name: "EspalierKitTests",
@@ -51,7 +63,8 @@ let package = Package(
             resources: [
                 .process("Hosting/Fixtures"),
                 .copy("Web/Fixtures"),
-            ]
+            ],
+            swiftSettings: strictWarnings
         ),
     ]
 )
