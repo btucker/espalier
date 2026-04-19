@@ -177,6 +177,27 @@ struct ZmxSurvivalIntegrationTests {
         return PtyAttach(process: process, masterFd: master)
     }
 
+    /// Poll `listSessions` until `name` appears or the deadline elapses.
+    /// Throws if the session never registers, so the calling test fails
+    /// loudly instead of silently proceeding against a missing daemon.
+    static func waitForSession(
+        launcher: ZmxLauncher,
+        name: String,
+        timeout: TimeInterval
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let names = try? launcher.listSessions(), names.contains(name) { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw NSError(
+            domain: "ZmxSurvivalIntegrationTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey:
+                       "session \(name) did not appear within \(timeout)s"]
+        )
+    }
+
     /// Wait until accumulated output from `attach` contains `marker` or
     /// the deadline elapses.
     static func readUntil(
@@ -388,6 +409,31 @@ struct ZmxSurvivalIntegrationTests {
         try process.run()
         Darwin.close(slave)
         return PtyAttach(process: process, masterFd: master)
+    }
+
+    @Test func isSessionMissingFlipsAfterKill() throws {
+        try Self.withScopedZmxDir { launcher in
+            let name = "espalier-detect1"
+            // Create a session by spawning a noop-ish attach via PTY
+            // (mirroring the helper used elsewhere in this suite).
+            let pty = try Self.spawnAttach(launcher: launcher, sessionName: name)
+            defer { pty.terminate() }
+
+            // Wait briefly for the daemon to register.
+            try Self.waitForSession(launcher: launcher, name: name, timeout: 2.0)
+
+            #expect(launcher.isSessionMissing(name) == false)
+
+            launcher.kill(sessionName: name)
+            // listSessions should now omit the killed name. Poll for up
+            // to a second to absorb the daemon's exit latency.
+            let deadline = Date().addingTimeInterval(1.0)
+            while Date() < deadline {
+                if launcher.isSessionMissing(name) { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            #expect(launcher.isSessionMissing(name) == true)
+        }
     }
 
     /// Locate Ghostty's shell-integration root the same way

@@ -368,4 +368,25 @@ struct ZmxLauncherUnitTests {
         let env = launcher.subprocessEnv(from: ["ZMX_DIR": "/somewhere/else"])
         #expect(env["ZMX_DIR"] == "/tmp/ours")
     }
+
+    // MARK: isSessionMissing
+    //
+    // The contract: when zmx itself can't answer (binary missing,
+    // subprocess throws), return "not missing" so spurious session-loss
+    // recoveries don't fire. The true-when-absent case is covered by
+    // the integration test (real zmx daemon spawn-then-kill).
+
+    @Test func isSessionMissingFalseWhenBinaryUnavailable() throws {
+        let launcher = ZmxLauncher(
+            executable: URL(fileURLWithPath: "/nonexistent/path/zmx")
+        )
+        #expect(launcher.isSessionMissing("espalier-aaaa1111") == false)
+    }
+
+    @Test func isSessionMissingFalseWhenListSessionsThrows() throws {
+        // /bin/sh is executable so isAvailable is true, but listSessions
+        // throws because it isn't zmx — locks the throw → false bias.
+        let launcher = ZmxLauncher(executable: URL(fileURLWithPath: "/bin/sh"))
+        #expect(launcher.isSessionMissing("anything") == false)
+    }
 }

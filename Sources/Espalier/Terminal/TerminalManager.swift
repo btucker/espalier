@@ -48,6 +48,13 @@ final class TerminalManager: ObservableObject {
     /// `EspalierApp.restoreRunningWorktrees`.
     private var rehydratedSurfaces: Set<TerminalID> = []
 
+    /// Terminal IDs whose close was initiated by Espalier — user Cmd+W,
+    /// Stop-worktree. Consulted by the close handler to distinguish "we
+    /// wanted this gone" from "the daemon died underneath us." Populated
+    /// by `killZmxSession` (the single funnel for Espalier-initiated
+    /// kills); consumed by `claimIntentionalClose(_:)`.
+    private var intentionalCloses: Set<TerminalID> = []
+
     private var wakeupObserver: NSObjectProtocol?
 
     /// Set by `EspalierApp` at startup. When non-nil and `isAvailable`,
@@ -350,8 +357,13 @@ final class TerminalManager: ObservableObject {
     ) -> [TerminalID: SurfaceHandle] {
         guard let app = ghosttyApp?.app else { return [:] }
 
+        // Hoist one zmx list call so K rehydrated leaves do not spawn K
+        // subprocesses. nil = no answer; helper falls back to per-leaf check.
+        let liveSessions: Set<String>? = zmxLauncher.flatMap { try? $0.listSessions() }
+
         var created: [TerminalID: SurfaceHandle] = [:]
         for terminalID in splitTree.allLeaves where surfaces[terminalID] == nil {
+            clearRehydratedIfDaemonGone(terminalID, liveSessions: liveSessions)
             let (zmxInitialInput, zmxDir) = resolveZmxSpawn(for: terminalID)
             let handle = SurfaceHandle(
                 terminalID: terminalID,
@@ -379,6 +391,8 @@ final class TerminalManager: ObservableObject {
             return existing
         }
 
+        clearRehydratedIfDaemonGone(terminalID, liveSessions: nil)
+
         let (zmxInitialInput, zmxDir) = resolveZmxSpawn(for: terminalID)
         let handle = SurfaceHandle(
             terminalID: terminalID,
@@ -400,6 +414,73 @@ final class TerminalManager: ObservableObject {
         guard let poller = pwdPoller else { return }
         poller.track(terminalID)
         poller.seed(terminalID, pwd: initialPWD)
+    }
+
+    /// Rebuild the libghostty surface for an existing pane in place,
+    /// keeping the same `TerminalID` (and therefore its split-tree slot,
+    /// remembered position, title, etc.) but starting a fresh zmx
+    /// session under the same name. Called by EspalierApp's close
+    /// handler when `isSessionMissing(for:)` returns true and the close
+    /// was unannounced. ZMX-7.2.
+    ///
+    /// Prepends `sessionRestartBanner(at:)` to the new surface's
+    /// `initial_input` (ZMX-7.3). No-op if the pane is unknown or no
+    /// GhosttyApp is initialised.
+    func restartSurface(for terminalID: TerminalID) {
+        guard let app = ghosttyApp?.app,
+              let existing = surfaces[terminalID] else {
+            return
+        }
+
+        let worktreePath = existing.worktreePath
+        forgetSurfaceRuntimeState(for: terminalID)
+
+        let (zmxInitialInput, zmxDir) = resolveZmxSpawn(for: terminalID)
+        let banneredInput = zmxInitialInput.map { sessionRestartBanner(at: Date()) + $0 }
+
+        surfaces[terminalID] = SurfaceHandle(
+            terminalID: terminalID,
+            app: app,
+            worktreePath: worktreePath,
+            socketPath: socketPath,
+            zmxInitialInput: banneredInput,
+            zmxDir: zmxDir,
+            terminalManager: self
+        )
+        trackForPWDPoll(terminalID: terminalID, initialPWD: worktreePath)
+    }
+
+    /// Cold-start session-loss check (ZMX-7.1): if a rehydrated pane's
+    /// zmx daemon is gone, the imminent `zmx attach` will create a fresh
+    /// daemon — treat the pane as fresh so the default command runs.
+    /// `liveSessions` lets callers batch one `zmx list` across many leaves;
+    /// pass `nil` to fall back to a per-call check.
+    private func clearRehydratedIfDaemonGone(
+        _ terminalID: TerminalID,
+        liveSessions: Set<String>?
+    ) {
+        guard rehydratedSurfaces.contains(terminalID),
+              let launcher = zmxLauncher else { return }
+        let name = launcher.sessionName(for: terminalID.id)
+        let missing = liveSessions.map { !$0.contains(name) }
+            ?? launcher.isSessionMissing(name)
+        if missing { clearRehydrated(terminalID) }
+    }
+
+    /// Drop per-instantiation runtime state — the things that belong to
+    /// the *current* libghostty surface and shell, not to the lifecycle
+    /// labels (firstPaneMarkers, rehydratedSurfaces) that survive a
+    /// session restart. Called by `destroySurface(s)` (full teardown)
+    /// and `restartSurface` (in-place rebuild).
+    private func forgetSurfaceRuntimeState(for terminalID: TerminalID) {
+        surfaces.removeValue(forKey: terminalID)
+        titles.removeValue(forKey: terminalID)
+        shellReadyFired.remove(terminalID)
+        // The rebuilt shell is a fresh process; drop the cached PID so
+        // the PWD poller re-resolves on its next tick. (Belongs here
+        // rather than in `forgetTrackingState` because the PID is tied
+        // to the shell instance, not the pane lifecycle.)
+        cachedShellPIDs.removeValue(forKey: terminalID)
     }
 
     /// Look up the `NSView` hosting a given terminal's surface.
@@ -428,18 +509,13 @@ final class TerminalManager: ObservableObject {
     /// is freed when the last strong reference to the `SurfaceHandle` drops.
     func destroySurfaces(terminalIDs: [TerminalID]) {
         for id in terminalIDs {
-            surfaces[id]?.requestClose()
-            surfaces.removeValue(forKey: id)
-            titles.removeValue(forKey: id)
-            killZmxSession(for: id)
-            forgetTrackingState(for: id)
+            destroySurface(terminalID: id)
         }
     }
 
     func destroySurface(terminalID: TerminalID) {
         surfaces[terminalID]?.requestClose()
-        surfaces.removeValue(forKey: terminalID)
-        titles.removeValue(forKey: terminalID)
+        forgetSurfaceRuntimeState(for: terminalID)
         killZmxSession(for: terminalID)
         forgetTrackingState(for: terminalID)
     }
@@ -461,6 +537,30 @@ final class TerminalManager: ObservableObject {
         rehydratedSurfaces.insert(terminalID)
     }
 
+    /// Drop the rehydration label so `defaultCommandDecision` treats a
+    /// pane as fresh. Called by `clearRehydratedIfDaemonGone`.
+    func clearRehydrated(_ terminalID: TerminalID) {
+        rehydratedSurfaces.remove(terminalID)
+    }
+
+    /// True iff `terminalID` was previously marked as an Espalier-
+    /// initiated close. Consumes (removes) the flag — the same close
+    /// cannot be claimed twice. Callers use this to short-circuit the
+    /// session-loss check for closes they triggered themselves.
+    func claimIntentionalClose(_ terminalID: TerminalID) -> Bool {
+        intentionalCloses.remove(terminalID) != nil
+    }
+
+    /// Whether the zmx daemon backing `terminalID` is absent from
+    /// `listSessions()`. Returns `false` when no `ZmxLauncher` is
+    /// configured (zmx fallback path — there is no daemon to be
+    /// missing). Wraps `ZmxLauncher.isSessionMissing` with the pane's
+    /// deterministic session name so callers don't need to know it.
+    func isSessionMissing(for terminalID: TerminalID) -> Bool {
+        guard let launcher = zmxLauncher else { return false }
+        return launcher.isSessionMissing(launcher.sessionName(for: terminalID.id))
+    }
+
     /// Whether a terminal was marked as the first pane of its worktree.
     func isFirstPane(_ terminalID: TerminalID) -> Bool {
         firstPaneMarkers.contains(terminalID)
@@ -479,7 +579,7 @@ final class TerminalManager: ObservableObject {
         firstPaneMarkers.remove(terminalID)
         rehydratedSurfaces.remove(terminalID)
         pwdPoller?.untrack(terminalID)
-        cachedShellPIDs.removeValue(forKey: terminalID)
+        intentionalCloses.remove(terminalID)
     }
 
     /// Resolve the per-surface zmx spawn parameters for a terminal pane.
@@ -522,6 +622,10 @@ final class TerminalManager: ObservableObject {
     /// don't want to block UI. Result is intentionally ignored — kill of
     /// an already-gone session is the success outcome.
     private func killZmxSession(for terminalID: TerminalID) {
+        // Mark before kill so the imminent close_surface_cb sees the
+        // flag (claimIntentionalClose) and skips session-loss recovery.
+        intentionalCloses.insert(terminalID)
+
         guard let launcher = zmxLauncher, launcher.isAvailable else { return }
         let name = launcher.sessionName(for: terminalID.id)
         DispatchQueue.global(qos: .utility).async {
