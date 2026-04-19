@@ -7,3 +7,5 @@
 .blindspots/experiments/
 .blindspots/user-trials/
 .blindspots/interviews/
+dist-tmp/
+web-client/node_modules/
