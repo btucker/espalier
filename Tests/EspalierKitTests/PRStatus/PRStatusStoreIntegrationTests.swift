@@ -107,7 +107,7 @@ struct PRStatusStoreIntegrationTests {
         )
         fake.stub(
             command: "gh",
-            args: ["pr", "checks", "100", "--repo", "foo/bar", "--json", "name,state,conclusion"],
+            args: ["pr", "checks", "100", "--repo", "foo/bar", "--json", "name,state,bucket"],
             output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
         )
 
@@ -126,7 +126,7 @@ struct PRStatusStoreIntegrationTests {
         )
         fake.stub(
             command: "gh",
-            args: ["pr", "checks", "200", "--repo", "foo/bar", "--json", "name,state,conclusion"],
+            args: ["pr", "checks", "200", "--repo", "foo/bar", "--json", "name,state,bucket"],
             output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
         )
 

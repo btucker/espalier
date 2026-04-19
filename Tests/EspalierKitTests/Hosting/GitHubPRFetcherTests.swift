@@ -91,7 +91,7 @@ struct GitHubPRFetcherTests {
         )
         fake.stub(
             command: "gh",
-            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
+            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,bucket"],
             output: CLIOutput(stdout: loadFixture("gh-pr-checks-passing"), stderr: "", exitCode: 0)
         )
 
