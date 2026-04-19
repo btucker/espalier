@@ -691,6 +691,13 @@ struct EspalierApp: App {
         text: String,
         clearAfter: TimeInterval
     ) {
+        // Pin a single Date so the stored attention AND the closure
+        // share the same generation token (same shape as the
+        // worktree-scoped fix in handleNotification). The closure
+        // checks current timestamp == captured before clearing, so a
+        // newer ping or an explicit clear that lands between the
+        // schedule and the fire can't be wiped.
+        let stamp = Date()
         for repoIdx in appState.wrappedValue.repos.indices {
             for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
                 if appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
@@ -698,7 +705,7 @@ struct EspalierApp: App {
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
                         .paneAttention[terminalID] = Attention(
                             text: text,
-                            timestamp: Date(),
+                            timestamp: stamp,
                             clearAfter: clearAfter
                         )
                     let path = appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].path
@@ -707,7 +714,7 @@ struct EspalierApp: App {
                             for wi in appState.wrappedValue.repos[ri].worktrees.indices {
                                 if appState.wrappedValue.repos[ri].worktrees[wi].path == path {
                                     appState.wrappedValue.repos[ri].worktrees[wi]
-                                        .paneAttention[terminalID] = nil
+                                        .clearPaneAttentionIfTimestamp(stamp, for: terminalID)
                                 }
                             }
                         }
