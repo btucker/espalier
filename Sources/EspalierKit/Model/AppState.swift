@@ -38,6 +38,58 @@ public struct AppState: Codable, Sendable, Equatable {
         repos.removeAll { $0.path == path }
     }
 
+    /// Persist "this pane had focus last" on the worktree at `path`, so
+    /// `TERM-2.3`'s focus-restore contract survives a worktree switch.
+    ///
+    /// Every pane-focus site — sidebar pane-row click, split-tree
+    /// mouse-click, new-split creation, pane-close focus promotion,
+    /// PWD-migration graft — must call this rather than only
+    /// `TerminalManager.setFocus`. The libghostty focus alone is
+    /// ephemeral (lives on the `NSView` / surface); the model state is
+    /// the persisted truth that `selectWorktree` consults when
+    /// restoring focus on a return visit.
+    ///
+    /// Silent no-op for an unknown path — keeps the call site terse at
+    /// places like `TerminalContentView.onFocusTerminal` that don't
+    /// have a handy "this worktree exists" invariant.
+    public mutating func setFocusedTerminal(
+        _ terminalID: TerminalID?,
+        forWorktreePath path: String
+    ) {
+        for repoIdx in repos.indices {
+            for wtIdx in repos[repoIdx].worktrees.indices
+                where repos[repoIdx].worktrees[wtIdx].path == path
+            {
+                repos[repoIdx].worktrees[wtIdx].focusedTerminalID = terminalID
+            }
+        }
+    }
+
+    /// Shared primitive for the Delete Worktree (GIT-4.x) and Dismiss
+    /// (GIT-3.6) paths. Removes the worktree at `path` from its
+    /// enclosing repo's `worktrees` list, clears `selectedWorktreePath`
+    /// if it was the removed one, and returns the removed path so the
+    /// caller can pass it to `PRStatusStore.clear` /
+    /// `WorktreeStatsStore.clear` to drop per-path cache entries
+    /// (`GIT-4.10`).
+    ///
+    /// Returns nil for an unknown path — caller's "clear caches" step
+    /// is then skipped naturally. Surface teardown and the git-side
+    /// `git worktree remove` are the caller's responsibility; this
+    /// helper owns the model + selection + "tell me what path to clean
+    /// up" contract only.
+    @discardableResult
+    public mutating func removeWorktree(atPath path: String) -> String? {
+        guard indices(forWorktreePath: path) != nil else { return nil }
+        for repoIdx in repos.indices {
+            repos[repoIdx].worktrees.removeAll { $0.path == path }
+        }
+        if selectedWorktreePath == path {
+            selectedWorktreePath = nil
+        }
+        return path
+    }
+
     public func worktree(forPath path: String) -> WorktreeEntry? {
         for repo in repos {
             if let wt = repo.worktrees.first(where: { $0.path == path }) {

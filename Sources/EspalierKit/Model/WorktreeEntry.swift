@@ -108,6 +108,74 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
         }
     }
 
+    /// Transitions this entry from `.stale` back to `.closed`, returning
+    /// the list of leaf `TerminalID`s whose surfaces the caller MUST
+    /// destroy via `TerminalManager.destroySurfaces(terminalIDs:)` before
+    /// the UI re-creates the worktree (`GIT-3.9`).
+    ///
+    /// When a worktree went stale *while running* (`GIT-3.4` keeps its
+    /// Ghostty surfaces alive across the stale transition), those
+    /// surfaces are still registered in `TerminalManager`. The resurrect
+    /// path then creates a *new* `TerminalID` and a *new* surface, which
+    /// leaves the old surfaces orphan: their render/io/kqueue threads
+    /// keep running forever. On macOS this has been observed to corrupt
+    /// libghostty's internal `os_unfair_lock` during window resize and
+    /// SIGKILL the app.
+    ///
+    /// Returning the old leaves from the same mutation that clears
+    /// `splitTree` forces the caller to either destroy them or
+    /// deliberately drop them — silently clearing the tree in-place (the
+    /// pre-`GIT-3.9` shape) is no longer spellable from the outside.
+    @discardableResult
+    public mutating func prepareForResurrection() -> [TerminalID] {
+        let oldLeaves = splitTree.allLeaves
+        state = .closed
+        splitTree = SplitTree(root: nil)
+        focusedTerminalID = nil
+        paneAttention.removeAll()
+        return oldLeaves
+    }
+
+    /// Returns the leaf `TerminalID`s whose surfaces the caller MUST
+    /// destroy via `TerminalManager.destroySurfaces(terminalIDs:)` before
+    /// removing this entry from the model (`GIT-3.10`). Same orphan-
+    /// surfaces concern as `prepareForResurrection` (`GIT-3.9`), but via
+    /// the Dismiss path instead of the resurrect path.
+    ///
+    /// `GIT-3.4` keeps terminal surfaces alive when a worktree goes
+    /// stale-while-running. Dismiss (`GIT-3.6`) then removes the entry
+    /// from the sidebar — but if the caller forgets to tear the
+    /// surfaces down, their render/IO/kqueue threads keep running
+    /// forever. Same corruption path that SIGKILL'd the app under
+    /// window resize pre-`GIT-3.9`.
+    ///
+    /// Clearing `splitTree` / `focusedTerminalID` / `paneAttention`
+    /// here is largely symbolic since the caller is about to drop the
+    /// whole entry, but it ensures a caller that ignores the return
+    /// value leaves a visibly-empty entry rather than a sidebar row
+    /// that still looks populated.
+    @discardableResult
+    public mutating func prepareForDismissal() -> [TerminalID] {
+        let leaves = splitTree.allLeaves
+        splitTree = SplitTree(root: nil)
+        focusedTerminalID = nil
+        paneAttention.removeAll()
+        return leaves
+    }
+
+    /// Transitions the entry from `.running` to `.closed` as part of the
+    /// Stop menu action, dropping `paneAttention` for every pane (all
+    /// panes are being destroyed; their pane-scoped badges must go per
+    /// `STATE-2.11`). Leaves `splitTree` and `focusedTerminalID` alone
+    /// so re-open recreates the exact same layout at the same leaf IDs
+    /// (`TERM-1.2`), and leaves the worktree-level `attention` slot
+    /// alone since a CLI-notify ping is a worktree-level concern
+    /// independent of which panes are alive.
+    public mutating func prepareForStop() {
+        state = .closed
+        paneAttention.removeAll()
+    }
+
     /// User-facing label for the worktree *in the context of its siblings*.
     ///
     /// Common case: the directory name the user picked when running

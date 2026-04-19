@@ -66,6 +66,16 @@ struct MainWindow: View {
                             set: { worktree.wrappedValue.splitTree = $0 }
                         ),
                         onFocusTerminal: { terminalID in
+                            // Persist the focus change on the model BEFORE
+                            // routing to libghostty: `TERM-2.3`'s focus-
+                            // restore after a worktree switch reads
+                            // `focusedTerminalID`, so a mouse-click that
+                            // only called `setFocus` (the libghostty side)
+                            // used to let focus snap back to the first leaf
+                            // on the next return visit.
+                            if let wtPath = appState.selectedWorktreePath {
+                                appState.setFocusedTerminal(terminalID, forWorktreePath: wtPath)
+                            }
                             terminalManager.setFocus(terminalID)
                         }
                     )
@@ -234,9 +244,11 @@ struct MainWindow: View {
                 let wt = appState.repos[repoIdx].worktrees[wtIdx]
                 if wt.path == path && wt.state == .stale &&
                    FileManager.default.fileExists(atPath: path) {
-                    appState.repos[repoIdx].worktrees[wtIdx].state = .closed
-                    appState.repos[repoIdx].worktrees[wtIdx].splitTree = SplitTree(root: nil)
-                    appState.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = nil
+                    let orphan = appState.repos[repoIdx].worktrees[wtIdx]
+                        .prepareForResurrection()
+                    if !orphan.isEmpty {
+                        terminalManager.destroySurfaces(terminalIDs: orphan)
+                    }
                 }
             }
         }
@@ -446,13 +458,18 @@ struct MainWindow: View {
                 return
             }
 
-            if appState.selectedWorktreePath == worktreePath {
-                appState.selectedWorktreePath = nil
-            }
             if wt.state == .running {
                 terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
             }
-            appState.repos[repoIdx].worktrees.removeAll { $0.path == worktreePath }
+            // GIT-4.10: drop per-path caches BEFORE removing the model
+            // entry. Same reason `dismissWorktree` (GIT-3.6) does: orphan
+            // cache entries survive indefinitely and bleed into a future
+            // same-path re-add (rare but cheap — path-keyed caches aren't
+            // inode-scoped). Runs unconditionally; clear on a never-cached
+            // path is a no-op.
+            prStatusStore.clear(worktreePath: worktreePath)
+            statsStore.clear(worktreePath: worktreePath)
+            appState.removeWorktree(atPath: worktreePath)
         }
     }
 
@@ -501,7 +518,13 @@ struct MainWindow: View {
                         guard alert.runModal() == .alertFirstButtonReturn else { return }
                     }
                     terminalManager.destroySurfaces(terminalIDs: terminalIDs)
-                    appState.repos[repoIdx].worktrees[wtIdx].state = .closed
+                    // STATE-2.11: Stop clears pane-scoped attention. Stop
+                    // preserves splitTree so re-open recreates the same
+                    // layout at the same leaf IDs (TERM-1.2) — which
+                    // means stale `paneAttention[ID]` from before the
+                    // Stop would reappear on the fresh pane's row
+                    // without this clear.
+                    appState.repos[repoIdx].worktrees[wtIdx].prepareForStop()
                     return
                 }
             }

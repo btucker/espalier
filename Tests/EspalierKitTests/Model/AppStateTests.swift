@@ -225,4 +225,147 @@ struct AppStateTests {
         let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
         #expect(!contents.contains { $0.hasPrefix("state.json.corrupt") })
     }
+
+    // MARK: setFocusedTerminal — focus-preservation on worktree switch
+    //
+    // `TERM-2.3`: "When the user switches back to a running worktree,
+    // the application shall restore keyboard focus to the pane that was
+    // focused when the user last switched away." That guarantee requires
+    // the UI to persist *which* pane had focus — otherwise a worktree
+    // switch round-trip snaps focus back to the first leaf regardless of
+    // where the user was typing.
+    //
+    // Before this helper existed, the TerminalContentView's
+    // `onFocusTerminal` callback called only `TerminalManager.setFocus`
+    // (the libghostty / SwiftUI side) and never touched the model —
+    // `focusedTerminalID` drifted to whatever was last written by
+    // sidebar clicks / pane splits / pane closes. The model shape has a
+    // dedicated mutator so every focus-change site updates the persisted
+    // truth in one call.
+
+    @Test func setFocusedTerminalUpdatesTheMatchingWorktree() {
+        let pane1 = TerminalID()
+        let pane2 = TerminalID()
+        let wt = WorktreeEntry(path: "/tmp/wt", branch: "main")
+        let repo = RepoEntry(path: "/tmp/wt", displayName: "repo", worktrees: [wt])
+        var state = AppState(repos: [repo])
+
+        state.setFocusedTerminal(pane1, forWorktreePath: "/tmp/wt")
+        #expect(state.worktree(forPath: "/tmp/wt")?.focusedTerminalID == pane1)
+
+        state.setFocusedTerminal(pane2, forWorktreePath: "/tmp/wt")
+        #expect(state.worktree(forPath: "/tmp/wt")?.focusedTerminalID == pane2)
+    }
+
+    @Test func setFocusedTerminalToNilClearsFocus() {
+        let pane1 = TerminalID()
+        var wt = WorktreeEntry(path: "/tmp/wt", branch: "main")
+        wt.focusedTerminalID = pane1
+        let repo = RepoEntry(path: "/tmp/wt", displayName: "repo", worktrees: [wt])
+        var state = AppState(repos: [repo])
+
+        state.setFocusedTerminal(nil, forWorktreePath: "/tmp/wt")
+        #expect(state.worktree(forPath: "/tmp/wt")?.focusedTerminalID == nil)
+    }
+
+    @Test func setFocusedTerminalOnlyTouchesTheMatchingWorktree() {
+        let paneA = TerminalID()
+        let paneB = TerminalID()
+        let wtA = WorktreeEntry(path: "/tmp/a", branch: "main")
+        let wtB = WorktreeEntry(path: "/tmp/b", branch: "main")
+        let repoA = RepoEntry(path: "/tmp/a", displayName: "A", worktrees: [wtA])
+        let repoB = RepoEntry(path: "/tmp/b", displayName: "B", worktrees: [wtB])
+        var state = AppState(repos: [repoA, repoB])
+
+        state.setFocusedTerminal(paneA, forWorktreePath: "/tmp/a")
+        state.setFocusedTerminal(paneB, forWorktreePath: "/tmp/b")
+
+        #expect(state.worktree(forPath: "/tmp/a")?.focusedTerminalID == paneA)
+        #expect(state.worktree(forPath: "/tmp/b")?.focusedTerminalID == paneB)
+    }
+
+    @Test func setFocusedTerminalOnUnknownPathIsANoOp() {
+        let pane = TerminalID()
+        let wt = WorktreeEntry(path: "/tmp/wt", branch: "main")
+        let repo = RepoEntry(path: "/tmp/wt", displayName: "repo", worktrees: [wt])
+        var state = AppState(repos: [repo])
+
+        state.setFocusedTerminal(pane, forWorktreePath: "/tmp/nonexistent")
+        #expect(state.worktree(forPath: "/tmp/wt")?.focusedTerminalID == nil)
+    }
+
+    // MARK: removeWorktree — Delete / Dismiss shared primitive (GIT-4.10)
+    //
+    // Both Delete Worktree (GIT-4.x) and Dismiss (GIT-3.6) remove an
+    // entry from the model AND must drop per-path entries in the
+    // observable stores (PRStatusStore, WorktreeStatsStore). Pre-GIT-
+    // 4.10, Delete did NOT drop caches — orphan entries leaked in
+    // `prStatusStore.infos[path]` etc. A subsequent same-path re-add
+    // would briefly inherit stale cache data on its first reconcile
+    // tick. Memory also grew over a long session where Andy created &
+    // deleted many feature worktrees.
+    //
+    // `removeWorktree(atPath:)` is the shared primitive: removes from
+    // `repos`, clears `selectedWorktreePath` if it was the target, and
+    // returns the path so the caller can pass it to the stores' `clear`
+    // methods. Unknown paths return nil — terse call sites don't need
+    // to guard.
+
+    @Test func removeWorktreeRemovesAndReturnsPath() {
+        var state = AppState(repos: [
+            RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                WorktreeEntry(path: "/tmp/r", branch: "main"),
+                WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+            ]),
+        ])
+
+        let removed = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(removed == "/tmp/r/wt")
+        #expect(state.worktree(forPath: "/tmp/r/wt") == nil)
+        #expect(state.worktree(forPath: "/tmp/r") != nil)
+    }
+
+    @Test func removeWorktreeClearsSelectionWhenItWasTheTarget() {
+        var state = AppState(
+            repos: [
+                RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                    WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+                ]),
+            ],
+            selectedWorktreePath: "/tmp/r/wt"
+        )
+
+        _ = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(state.selectedWorktreePath == nil)
+    }
+
+    @Test func removeWorktreeLeavesSelectionAloneWhenDifferent() {
+        var state = AppState(
+            repos: [
+                RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                    WorktreeEntry(path: "/tmp/r", branch: "main"),
+                    WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+                ]),
+            ],
+            selectedWorktreePath: "/tmp/r"
+        )
+
+        _ = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(state.selectedWorktreePath == "/tmp/r")
+    }
+
+    @Test func removeWorktreeReturnsNilForUnknownPath() {
+        var state = AppState(repos: [
+            RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                WorktreeEntry(path: "/tmp/r", branch: "main"),
+            ]),
+        ])
+
+        let removed = state.removeWorktree(atPath: "/nowhere")
+        #expect(removed == nil)
+        #expect(state.worktree(forPath: "/tmp/r") != nil)
+    }
 }
