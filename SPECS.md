@@ -588,13 +588,19 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 15.3 Protocol
 
-**WEB-3.1** The application shall serve a single static page at `/` (and `/index.html`) bundled with vendored xterm.js.
+**WEB-3.1** The application shall serve a single static page at `/` (and `/index.html`) that bootstraps the bundled web client.
 
-**WEB-3.2** The application shall upgrade `/ws?session=<name>` to WebSocket after the authorization check passes.
+**WEB-3.2** When a client requests any path that does not match a bundled
+static asset and does not begin with `/ws`, the application shall respond
+with the bundled `index.html` body and `Content-Type: text/html; charset=utf-8`.
+This serves the SPA fallback for client-side-routed URLs such as
+`/session/<name>`.
 
-**WEB-3.3** WebSocket binary frames shall carry raw PTY bytes in both directions.
+**WEB-3.3** The application shall upgrade `/ws?session=<name>` to WebSocket after the authorization check passes.
 
-**WEB-3.4** WebSocket text frames shall carry JSON control envelopes. The only Phase 2 envelope shape shall be `{"type":"resize","cols":<uint16>,"rows":<uint16>}`.
+**WEB-3.4** WebSocket binary frames shall carry raw PTY bytes in both directions.
+
+**WEB-3.5** WebSocket text frames shall carry JSON control envelopes. The only Phase 2 envelope shape shall be `{"type":"resize","cols":<uint16>,"rows":<uint16>}`.
 
 ### 15.4 Lifecycle
 
@@ -610,9 +616,9 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 ### 15.5 Client
 
-**WEB-5.1** The bundled client shall render a single terminal (xterm.js) that attaches to the session indicated by the `?session=` query parameter.
+**WEB-5.1** The bundled client shall render a single terminal (wterm) that attaches to the session indicated by the `/session/<name>` URL path. If a client arrives at the root path `/` with a `?session=<name>` query parameter, the client shall redirect to `/session/<name>` (backward compatibility).
 
-**WEB-5.2** The client shall send xterm.js data events as binary WebSocket frames.
+**WEB-5.2** The client shall send terminal data events as binary WebSocket frames.
 
 **WEB-5.3** The client shall send resize events as JSON control envelopes in text frames.
 
