@@ -1,20 +1,13 @@
 import Foundation
 
-/// Bytes Espalier prepends to a rebuilt pane's `initial_input` so the
-/// user sees a visible marker that the underlying zmx session has been
-/// replaced. Intended to be concatenated *before* the existing
-/// `exec zmx attach …` line.
+/// Banner line prepended to a rebuilt pane's `initial_input` so the
+/// user sees a marker that the underlying zmx session was replaced
+/// (ZMX-7.3).
 ///
-/// Shape: `printf '\n\033[2m— session restarted at HH:MM —\033[0m\n'\n`
-///
-/// We deliberately use `printf` (not `echo -e`, not `$(date …)`) for
-/// portability — the outer shell that interprets this banner can be
-/// bash, zsh, or fish, and only `printf` behaves identically across all
-/// three. The timestamp is computed in Swift and embedded as a literal
-/// so we do not need command substitution at all.
-///
-/// ANSI dim (`\033[2m`) + reset (`\033[0m`) wrap the message so it is
-/// visually distinct from real shell output without being noisy.
+/// Uses `printf` (not `echo -e`) because its behavior is identical
+/// across bash, zsh, and fish. The timestamp is embedded as a
+/// Swift-formatted literal — `$(date …)` substitution syntax differs
+/// across those shells, so we avoid it entirely.
 public func sessionRestartBanner(at date: Date) -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "HH:mm"

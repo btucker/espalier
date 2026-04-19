@@ -371,30 +371,22 @@ struct ZmxLauncherUnitTests {
 
     // MARK: isSessionMissing
     //
-    // The fail-safe direction is "not missing": if zmx itself can't tell
-    // us what's alive (binary unavailable, subprocess threw), we don't
-    // want to fabricate session-loss events that would trigger spurious
-    // restarts. These tests lock that contract.
+    // The contract: when zmx itself can't answer (binary missing,
+    // subprocess throws), return "not missing" so spurious session-loss
+    // recoveries don't fire. The true-when-absent case is covered by
+    // the integration test (real zmx daemon spawn-then-kill).
 
     @Test func isSessionMissingFalseWhenBinaryUnavailable() throws {
         let launcher = ZmxLauncher(
             executable: URL(fileURLWithPath: "/nonexistent/path/zmx")
         )
-        // Binary missing — no way to query — return "not missing" so
-        // callers don't react to a pseudo-loss.
         #expect(launcher.isSessionMissing("espalier-aaaa1111") == false)
     }
 
-    @Test func isSessionMissingTrueWhenAbsentFromListSessions() throws {
-        // Build a launcher where isAvailable is true but listSessions
-        // returns a set NOT containing the queried name. We can't easily
-        // mock listSessions; cover this path in the integration tests
-        // (next task). Here, just verify the helper exists and the
-        // empty-name edge case doesn't crash.
+    @Test func isSessionMissingFalseWhenListSessionsThrows() throws {
+        // /bin/sh is executable so isAvailable is true, but listSessions
+        // throws because it isn't zmx — locks the throw → false bias.
         let launcher = ZmxLauncher(executable: URL(fileURLWithPath: "/bin/sh"))
-        // /bin/sh is executable, so isAvailable is true; listSessions
-        // will throw because /bin/sh isn't zmx. The catch arm returns
-        // false (= not missing). Locks the throw → false bias.
         #expect(launcher.isSessionMissing("anything") == false)
     }
 }
