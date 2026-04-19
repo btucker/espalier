@@ -47,7 +47,10 @@ public struct GitHubPRFetcher: PRFetcher {
     private struct RawCheck: Decodable {
         let name: String
         let state: String
-        let conclusion: String?
+        /// `gh pr checks --json bucket` value: "pass", "fail", "pending",
+        /// "skipping", or "cancel". Decodes as nil when gh emits an empty
+        /// string (neutral / never-classified checks).
+        let bucket: String?
     }
 
     private func fetchOne(origin: HostingOrigin, branch: String, state: String) async throws -> RawPR? {
@@ -76,26 +79,36 @@ public struct GitHubPRFetcher: PRFetcher {
         let args = [
             "pr", "checks", String(number),
             "--repo", origin.slug,
-            "--json", "name,state,conclusion"
+            "--json", "name,state,bucket"
         ]
         let output = try await executor.run(command: "gh", args: args, at: NSTemporaryDirectory())
         let data = Data(output.stdout.utf8)
         let checks = try JSONDecoder().decode([RawCheck].self, from: data)
-        return Self.rollup(checks.map { ($0.state, $0.conclusion) })
+        return Self.rollup(checks.map { ($0.state, $0.bucket) })
     }
 
-    static func rollup(_ checks: [(state: String, conclusion: String?)]) -> PRInfo.Checks {
+    /// Rolls up per-check `(state, bucket)` pairs (as emitted by
+    /// `gh pr checks --json state,bucket`) into a single verdict. Values:
+    /// `bucket` ∈ {"pass","fail","pending","skipping","cancel", nil};
+    /// `state` ∈ {"COMPLETED","IN_PROGRESS","QUEUED","PENDING", ...}.
+    ///
+    /// Priority: any fail → .failure. Any pending bucket or in-flight
+    /// state → .pending. All-pass → .success. Anything else (skipping,
+    /// cancel, null bucket) → .none so the user sees neutral rather than
+    /// false-success.
+    static func rollup(_ checks: [(state: String, bucket: String?)]) -> PRInfo.Checks {
         if checks.isEmpty { return .none }
-        if checks.contains(where: { ($0.conclusion ?? "").uppercased() == "FAILURE" }) {
+        if checks.contains(where: { ($0.bucket ?? "").lowercased() == "fail" }) {
             return .failure
         }
         if checks.contains(where: {
+            if ($0.bucket ?? "").lowercased() == "pending" { return true }
             let s = $0.state.uppercased()
             return s == "IN_PROGRESS" || s == "QUEUED" || s == "PENDING"
         }) {
             return .pending
         }
-        if checks.allSatisfy({ ($0.conclusion ?? "").uppercased() == "SUCCESS" }) {
+        if checks.allSatisfy({ ($0.bucket ?? "").lowercased() == "pass" }) {
             return .success
         }
         return .none

@@ -74,9 +74,11 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **STATE-2.5** When the CLI sends a clear message for a worktree, the application shall clear the worktree-scoped attention overlay. Pane-scoped overlays are not affected by CLI clear messages; they auto-clear on their own timers.
 
-**STATE-2.6** When an attention overlay was set with an auto-clear duration, the application shall clear that overlay after the duration elapses. Pane-scoped overlay timers are independent per pane.
+**STATE-2.6** When an attention overlay was set with an auto-clear duration, the application shall clear that overlay after the duration elapses, unless by then the overlay has already been cleared or replaced by a newer notification. Pane-scoped overlay timers are independent per pane.
 
 **STATE-2.7** When a pane is removed from a worktree (user close, shell exit, or migration to a different worktree via `PWD-x.x`), the application shall drop that pane's pane-scoped attention entry from the source worktree.
+
+**STATE-2.8** If a notify request specifies an auto-clear duration of zero or negative, then the application shall treat the notification as having no auto-clear timer (the overlay persists until cleared by the CLI or replaced by another notification).
 
 ## 3. Terminal Lifecycle
 
@@ -229,6 +231,10 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-1.5** The CLI shall resolve the current worktree by walking up from `$PWD` looking for a `.git` file (linked worktree) or `.git` directory (main working tree).
 
+**ATTN-1.6** If `espalier notify` is invoked with both a `<text>` argument and the `--clear` flag, then the CLI shall exit non-zero with a usage error rather than silently dropping the text and performing a clear.
+
+**ATTN-1.7** If `espalier notify` is invoked with text that is empty or contains only whitespace characters (including tabs and newlines), then the CLI shall exit non-zero with a usage error rather than sending a visually-empty attention badge.
+
 ### 5.2 Communication Protocol
 
 **ATTN-2.1** The application shall listen on a Unix domain socket at `~/Library/Application Support/Espalier/espalier.sock`.
@@ -243,6 +249,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 **ATTN-2.4** The application shall set the environment variable `ESPALIER_SOCK` in each terminal surface's environment, pointing to the socket path.
 
 **ATTN-2.5** The CLI shall read the `ESPALIER_SOCK` environment variable to locate the socket.
+
+**ATTN-2.6** When the application receives a `notify` message over the socket whose text is empty or contains only whitespace characters, the application shall silently drop the message rather than render an invisible attention overlay. This backs up the CLI's ATTN-1.7 validation for non-CLI socket clients.
 
 ### 5.3 Error Handling
 

@@ -71,6 +71,17 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
         )
     }
 
+    /// Clears the worktree-scoped attention overlay iff it still has the
+    /// given `timestamp`. Used by the auto-clear timer scheduled for a
+    /// `--clear-after` notification: if the attention has been replaced
+    /// by a newer `notify` in the meantime, or cleared manually, the
+    /// pending timer must leave the current state alone.
+    public mutating func clearAttentionIfTimestamp(_ timestamp: Date) {
+        if attention?.timestamp == timestamp {
+            attention = nil
+        }
+    }
+
     /// User-facing label for the worktree *in the context of its siblings*.
     ///
     /// Common case: the directory name the user picked when running

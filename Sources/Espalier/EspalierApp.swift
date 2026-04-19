@@ -469,21 +469,34 @@ struct EspalierApp: App {
     ) {
         switch message {
         case .notify(let path, let text, let clearAfter):
+            // Defense-in-depth behind the CLI's ATTN-1.7 guard: reject
+            // empty / whitespace-only text silently so a raw socket
+            // client (`nc -U`, custom script, web surface) can't write
+            // an invisible red capsule Andy can't read or dismiss.
+            guard Attention.isValidText(text) else { return }
+            // Pin the timestamp the attention carries AND the auto-clear
+            // timer closes over, so the timer can verify it's still OUR
+            // notification when it fires (cf. WorktreeEntry.clearAttentionIfTimestamp).
+            let stamp = Date()
             for repoIdx in appState.wrappedValue.repos.indices {
                 for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
                     if appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].path == path {
                         appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].attention = Attention(
                             text: text,
-                            timestamp: Date(),
+                            timestamp: stamp,
                             clearAfter: clearAfter
                         )
 
-                        if let clearAfter {
+                        // Only schedule a clear for strictly-positive durations.
+                        // Zero or negative values would fire immediately, making
+                        // the notification invisible — treat them as "no auto-clear"
+                        // so ill-formed CLI input degrades gracefully.
+                        if let clearAfter, clearAfter > 0 {
                             DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) {
                                 for ri in appState.wrappedValue.repos.indices {
                                     for wi in appState.wrappedValue.repos[ri].worktrees.indices {
                                         if appState.wrappedValue.repos[ri].worktrees[wi].path == path {
-                                            appState.wrappedValue.repos[ri].worktrees[wi].attention = nil
+                                            appState.wrappedValue.repos[ri].worktrees[wi].clearAttentionIfTimestamp(stamp)
                                         }
                                     }
                                 }
