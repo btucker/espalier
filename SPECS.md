@@ -258,7 +258,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-2.4** The application shall set the environment variable `ESPALIER_SOCK` in each terminal surface's environment, pointing to the socket path.
 
-**ATTN-2.5** The CLI shall read the `ESPALIER_SOCK` environment variable to locate the socket.
+**ATTN-2.5** The CLI shall read the `ESPALIER_SOCK` environment variable to locate the socket. If the variable is unset or set to an empty string, the CLI shall fall back to the default path `<Application Support>/Espalier/espalier.sock`. Treating empty as unset prevents a blank `ESPALIER_SOCK=` line (e.g. from a sourced `.env` file) from redirecting the CLI to a nonexistent socket at the empty path.
 
 **ATTN-2.6** When the application receives a `notify` message over the socket whose text is empty or contains only whitespace characters, the application shall silently drop the message rather than render an invisible attention overlay. This backs up the CLI's ATTN-1.7 validation for non-CLI socket clients.
 
