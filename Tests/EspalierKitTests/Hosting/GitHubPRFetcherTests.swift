@@ -185,6 +185,38 @@ struct GitHubPRFetcherTests {
         let pr = try await fetcher.fetch(origin: origin, branch: branch)
         #expect(pr == nil)
     }
+
+    // PR-5.4: `gh pr list` and `gh pr checks` are separate subprocess
+    // calls. A transient failure of the SECOND (auth hiccup, rate limit,
+    // network blip, gh version bump that broke the checks subcommand)
+    // used to propagate out and make the whole fetch fail — the caller
+    // (PRStatusStore) caught the error and DROPPED the cached PRInfo
+    // entirely. User-visible: the `#<number>` sidebar badge (PR-3.2) and
+    // breadcrumb PR button disappeared even though the PR itself was
+    // still cached-discoverable. Fix: treat the second call as best-effort;
+    // fall back to `.none` checks so the PR identity still surfaces.
+    @Test func openPRSurfacesEvenWhenChecksFetchFails() async throws {
+        let fake = FakeCLIExecutor()
+        fake.stub(
+            command: "gh",
+            args: listArgs(state: "open"),
+            output: CLIOutput(stdout: loadFixture("gh-pr-open-passing"), stderr: "", exitCode: 0)
+        )
+        fake.stub(
+            command: "gh",
+            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,bucket"],
+            error: CLIError.nonZeroExit(command: "gh", exitCode: 1, stderr: "authentication required")
+        )
+
+        let fetcher = GitHubPRFetcher(executor: fake, now: { Date(timeIntervalSince1970: 100) })
+        let pr = try await fetcher.fetch(origin: origin, branch: branch)
+
+        // The PR is still resolved — what the user cares about.
+        #expect(pr?.number == 412)
+        #expect(pr?.state == .open)
+        // Checks degrade to neutral rather than making the PR vanish.
+        #expect(pr?.checks == PRInfo.Checks.none)
+    }
 }
 
 @Suite("GitHubPRFetcher.rollup")
