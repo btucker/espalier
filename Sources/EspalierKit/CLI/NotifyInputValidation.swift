@@ -16,6 +16,7 @@ public enum NotifyInputValidation: Equatable {
     case bothTextAndClear
     case emptyText
     case clearAfterTooLarge(max: Int)
+    case clearAfterWithClearFlag
 
     /// Upper bound for `--clear-after`, in seconds. 24h covers any
     /// plausible "ping me after this long build finishes" case without
@@ -51,7 +52,16 @@ public enum NotifyInputValidation: Equatable {
                 return .clearAfterTooLarge(max: clearAfterMaxSeconds)
             }
             return .valid
-        case (false, true): return .valid
+        case (false, true):
+            // `--clear-after` only applies to notify messages. A user
+            // writing both is ambiguous (schedule-a-clear? clear now?);
+            // the server-side `.clear` path ignores clearAfter, so
+            // before this check the CLI silently dropped it. Reject
+            // rather than guess.
+            if clearAfter != nil {
+                return .clearAfterWithClearFlag
+            }
+            return .valid
         }
     }
 
@@ -64,6 +74,8 @@ public enum NotifyInputValidation: Equatable {
         case .emptyText: return "Notification text cannot be empty or whitespace-only"
         case .clearAfterTooLarge(let max):
             return "--clear-after exceeds the \(max)-second (\(max / 3600)-hour) limit"
+        case .clearAfterWithClearFlag:
+            return "Cannot use --clear-after with --clear; --clear-after applies only to notify messages"
         }
     }
 }

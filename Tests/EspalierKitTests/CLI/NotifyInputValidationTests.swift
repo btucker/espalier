@@ -90,17 +90,34 @@ struct NotifyInputValidationTests {
         #expect(r.message?.contains("86400") == true)
     }
 
-    @Test func clearAfterIsIgnoredWhenClearingExplicitly() {
-        // `--clear --clear-after N` passes through only because a higher
-        // priority error (bothTextAndClear / missingTextAndClear) is
-        // about to fire anyway when combined with text. In the
-        // text=nil + clear=true path, clearAfter is meaningless and
-        // not inspected here; that ambiguity is a separate (future)
-        // validation concern.
-        #expect(NotifyInputValidation.validate(text: nil, clear: true, clearAfter: 9999999) == .valid)
-    }
-
     @Test func nilClearAfterIsValid() {
         #expect(NotifyInputValidation.validate(text: "x", clear: false, clearAfter: nil) == .valid)
+    }
+
+    // `--clear --clear-after <n>` was accepted pre-fix and the
+    // `clearAfter` value silently dropped — the CLI's run() body took
+    // the `.clear` branch and never read it. Reject: `--clear-after`
+    // only applies to notify messages, and a user writing both is
+    // ambiguous enough to warrant feedback rather than a mute
+    // "did what you meant" guess.
+
+    @Test func clearWithPositiveClearAfterIsRejected() {
+        let r = NotifyInputValidation.validate(text: nil, clear: true, clearAfter: 30)
+        #expect(r == .clearAfterWithClearFlag)
+        #expect(r.message?.contains("--clear-after") == true)
+        #expect(r.message?.contains("--clear") == true)
+    }
+
+    @Test func clearWithZeroOrNegativeClearAfterIsRejected() {
+        // Even "harmless" values signal an ambiguous invocation. No
+        // implicit "that's the same as bare --clear" fallback.
+        #expect(NotifyInputValidation.validate(text: nil, clear: true, clearAfter: 0) == .clearAfterWithClearFlag)
+        #expect(NotifyInputValidation.validate(text: nil, clear: true, clearAfter: -1) == .clearAfterWithClearFlag)
+    }
+
+    @Test func clearAloneWithoutClearAfterStaysValid() {
+        // Regression: the happy path for `--clear` (no text, no
+        // clearAfter) must keep passing through.
+        #expect(NotifyInputValidation.validate(text: nil, clear: true, clearAfter: nil) == .valid)
     }
 }
