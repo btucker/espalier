@@ -4,6 +4,7 @@ public protocol WorktreeMonitorDelegate: AnyObject {
     func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String)
     func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String)
     func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String)
+    func worktreeMonitorDidDetectOriginRefChange(_ monitor: WorktreeMonitor, repoPath: String)
 }
 
 public final class WorktreeMonitor: @unchecked Sendable {
@@ -57,6 +58,31 @@ public final class WorktreeMonitor: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             guard let self else { return }
             self.delegate?.worktreeMonitorDidDetectBranchChange(self, worktreePath: worktreePath)
+        }
+        source.setCancelHandler {}
+        source.resume()
+        sources[key] = source
+    }
+
+    /// Watches `<repoPath>/.git/logs/refs/remotes/origin/` — the dir
+    /// git appends to on every remote-tracking-ref movement (push,
+    /// fetch, prune). Catches the `gh pr create` / `git push` flow,
+    /// which doesn't move HEAD and is therefore invisible to the
+    /// per-worktree HEAD watcher. One watch per repo covers every
+    /// linked worktree, since they share the main repo's git dir.
+    ///
+    /// The directory is created if missing so the watch can arm before
+    /// the first push ever creates a reflog file inside it. A packed-
+    /// refs regime (`git gc`) leaves the `logs/` side of refs intact.
+    public func watchOriginRefs(repoPath: String) {
+        let dir = "\(repoPath)/.git/logs/refs/remotes/origin"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let key = "originrefs:\(repoPath)"
+        guard sources[key] == nil else { return }
+        guard let source = createFileWatcher(path: dir, events: [.write, .extend, .link]) else { return }
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.delegate?.worktreeMonitorDidDetectOriginRefChange(self, repoPath: repoPath)
         }
         source.setCancelHandler {}
         source.resume()
