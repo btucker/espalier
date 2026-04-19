@@ -13,7 +13,7 @@ public enum WebURLComposer {
                 CharacterSet(charactersIn: " ")
             )
         ) ?? session
-        return "http://\(hostPart):\(port)/?session=\(encodedSession)"
+        return "http://\(hostPart):\(port)/session/\(encodedSession)"
     }
 
     /// Prefer the first IPv4 address; fall back to the first IPv6 only

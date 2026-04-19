@@ -24,6 +24,24 @@ jobs:
           swift --version
           xcodebuild -version
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web-client/pnpm-lock.yaml
+
+      - name: Verify web-client bundle is up to date
+        run: |
+          ./scripts/build-web.sh
+          git diff --exit-code Sources/EspalierKit/Web/Resources/ \
+            || { echo "::error::web-client/ changed but the committed bundle is stale. Run ./scripts/build-web.sh locally and recommit."; exit 1; }
+
       - name: Cache SwiftPM build
         uses: actions/cache@v4
         with:

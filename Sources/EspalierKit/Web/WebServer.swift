@@ -211,9 +211,25 @@ public final class WebServer {
 
         func serveStatic(context: ChannelHandlerContext, head: HTTPRequestHead) {
             let path = head.uri.split(separator: "?").first.map(String.init) ?? "/"
+            // /ws paths are reserved for WebSocket upgrade; never fall through to
+            // the SPA index for plain HTTP requests on those paths.
+            if path == "/ws" || path.hasPrefix("/ws/") {
+                Self.respond(context: context, status: .notFound, body: Data("not found\n".utf8), contentType: "text/plain; charset=utf-8")
+                return
+            }
             do {
                 let asset = try WebStaticResources.asset(for: path)
                 Self.respond(context: context, status: .ok, body: asset.data, contentType: asset.contentType)
+            } catch WebStaticResources.Error.missingResource {
+                // SPA fallback: any non-asset path returns index.html so
+                // TanStack Router can resolve client-side routes like
+                // /session/<name> when loaded directly by the browser.
+                do {
+                    let index = try WebStaticResources.indexHTML()
+                    Self.respond(context: context, status: .ok, body: index.data, contentType: index.contentType)
+                } catch {
+                    Self.respond(context: context, status: .notFound, body: Data("not found\n".utf8), contentType: "text/plain; charset=utf-8")
+                }
             } catch {
                 Self.respond(context: context, status: .notFound, body: Data("not found\n".utf8), contentType: "text/plain; charset=utf-8")
             }

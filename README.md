@@ -23,6 +23,28 @@ swift build
 
 Open `Package.swift` in Xcode to run the app.
 
+## Developing the web client
+
+Espalier's browser-facing web access client lives in `web-client/` (React +
+Vite + TypeScript + TanStack Router). If you change anything under
+`web-client/`, rebuild the bundle that ships with the app:
+
+```bash
+./scripts/build-web.sh
+```
+
+This refreshes `Sources/EspalierKit/Web/Resources/{index.html,app.js,app.css}`.
+CI verifies the committed bundle matches a fresh build.
+
+You need `node` (LTS) and `pnpm` installed locally for web-client work:
+
+```bash
+brew install node pnpm
+```
+
+If you only touch Swift, you need neither — the committed bundle is what
+`swift build` ships, and Homebrew users get the prebuilt tarball.
+
 ## Further reading
 
 - [`SPECS.md`](SPECS.md) — authoritative EARS-style behavior spec.
