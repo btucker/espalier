@@ -22,7 +22,7 @@ struct PRStatusStoreIntegrationTests {
         )
         fake.stub(
             command: "gh",
-            args: ["pr", "checks", "10", "--repo", "foo/bar", "--json", "name,state,conclusion"],
+            args: ["pr", "checks", "10", "--repo", "foo/bar", "--json", "name,state,bucket"],
             output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
         )
 

@@ -28,7 +28,7 @@ struct GitHubPRFetcherTests {
         )
         fake.stub(
             command: "gh",
-            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
+            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,bucket"],
             output: CLIOutput(stdout: loadFixture("gh-pr-checks-passing"), stderr: "", exitCode: 0)
         )
 
@@ -133,40 +133,60 @@ struct GitHubPRFetcherTests {
 
 @Suite("GitHubPRFetcher.rollup")
 struct GitHubPRFetcherRollupTests {
+    // `gh pr checks --json ...` exposes the per-check verdict via the
+    // `bucket` field (values: "pass", "fail", "pending", "skipping",
+    // "cancel"), NOT `conclusion` (which is the underlying Actions
+    // attribute visible only through the GraphQL API). Earlier code asked
+    // gh for `conclusion` and got a hard error — this suite now pins
+    // against the real gh schema.
+
     @Test func emptyIsNone() {
         #expect(GitHubPRFetcher.rollup([]) == PRInfo.Checks.none)
     }
 
     @Test func anyFailureWins() {
         #expect(GitHubPRFetcher.rollup([
-            ("COMPLETED", "SUCCESS"),
-            ("COMPLETED", "FAILURE")
+            ("COMPLETED", "pass"),
+            ("COMPLETED", "fail")
         ]) == .failure)
     }
 
     @Test func inProgressBeatsSuccess() {
         #expect(GitHubPRFetcher.rollup([
-            ("COMPLETED", "SUCCESS"),
+            ("COMPLETED", "pass"),
             ("IN_PROGRESS", nil)
         ]) == .pending)
     }
 
-    @Test func queuedIsPending() {
+    @Test func pendingBucketIsPending() {
+        #expect(GitHubPRFetcher.rollup([("PENDING", "pending")]) == .pending)
+    }
+
+    @Test func queuedStateIsPending() {
         #expect(GitHubPRFetcher.rollup([("QUEUED", nil)]) == .pending)
     }
 
-    @Test func allSuccessIsSuccess() {
+    @Test func allPassIsSuccess() {
         #expect(GitHubPRFetcher.rollup([
-            ("COMPLETED", "SUCCESS"),
-            ("COMPLETED", "SUCCESS")
+            ("COMPLETED", "pass"),
+            ("COMPLETED", "pass")
         ]) == .success)
     }
 
-    @Test func completedWithNullConclusionIsNone() {
-        // Neutral / skipped checks: COMPLETED but conclusion is null.
+    @Test func completedWithNullBucketIsNone() {
+        // Neutral / skipped checks: COMPLETED but gh didn't classify it.
         #expect(GitHubPRFetcher.rollup([
-            ("COMPLETED", "SUCCESS"),
+            ("COMPLETED", "pass"),
             ("COMPLETED", nil)
+        ]) == PRInfo.Checks.none)
+    }
+
+    @Test func skippingAndCancelDoNotCountAsSuccess() {
+        // One skip alongside passes: don't promote to "success" — user
+        // probably wants visibility that not everything ran.
+        #expect(GitHubPRFetcher.rollup([
+            ("COMPLETED", "pass"),
+            ("COMPLETED", "skipping")
         ]) == PRInfo.Checks.none)
     }
 }
