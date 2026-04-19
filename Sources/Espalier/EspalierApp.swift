@@ -693,7 +693,16 @@ struct EspalierApp: App {
                     newTree = wt.splitTree.insertingBefore(newID, at: targetID, direction: direction)
                 }
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = newTree
-                _ = terminalManager.createSurface(terminalID: newID, worktreePath: wt.path)
+                // TERM-5.5: createSurface can now fail gracefully
+                // (libghostty returned null). Roll back the split-tree
+                // mutation so we don't leave a dangling leaf that renders
+                // forever as `Color.black + ProgressView`. Returning nil
+                // propagates to callers like `addPane` which emit a
+                // readable socket `.error`.
+                guard terminalManager.createSurface(terminalID: newID, worktreePath: wt.path) != nil else {
+                    appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = wt.splitTree
+                    return nil
+                }
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = newID
                 terminalManager.setFocus(newID)
                 return newID

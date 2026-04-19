@@ -42,7 +42,13 @@ final class SurfaceHandle {
     /// through callbacks that want per-surface identity.
     private let userdataPointer: UnsafeMutableRawPointer
 
-    init(
+    /// Failable because `ghostty_surface_new` can return null — e.g. under
+    /// resource exhaustion or internal libghostty state the app can't
+    /// recover from. Returning nil instead of trapping lets the caller
+    /// surface an error (a socket `.error("...")`, a logged warning) and
+    /// keep the rest of the app alive. Previously a `fatalError` here
+    /// brought down Espalier mid-`espalier pane add` (`TERM-5.5`).
+    init?(
         terminalID: TerminalID,
         app: ghostty_app_t,
         worktreePath: String,
@@ -65,12 +71,12 @@ final class SurfaceHandle {
         self.view = surfaceView
         surfaceView.terminalID = terminalID
         surfaceView.terminalManager = terminalManager
-        defer {
-            // Bind the surface to the view AFTER ghostty_surface_new returns
-            // so the view can forward keystrokes/mouse events to it. The
-            // view weakly references the surface via this unmanaged handle.
-            surfaceView.surface = self.surface
-        }
+        // NB: the original impl used a `defer` here to bind
+        // `surfaceView.surface = self.surface` after all exit paths. That
+        // was fine for a non-failable init, but failable-init's nil-return
+        // path runs defer before `self.surface` is assigned — which the
+        // compiler rejects. Inline the bind after the success assignment
+        // (line below the `guard let newSurface`).
 
         // Allocate C strings up front so we can free them deterministically.
         let cwdCStr = strdup(worktreePath)
@@ -119,7 +125,12 @@ final class SurfaceHandle {
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
 
         guard let newSurface = ghostty_surface_new(app, &config) else {
-            // Free everything we allocated, then fail. `self` is not yet fully initialized.
+            // Free everything we allocated, then fail gracefully. `self`
+            // is not yet fully initialized, so `deinit` won't run —
+            // release owned allocations explicitly before returning nil.
+            // `TERM-5.5`: previous behavior was `fatalError`, which
+            // crashed the entire app mid-`espalier pane add` when
+            // libghostty rejected the config for any reason.
             envVarsPtr.deinitialize(count: envCount)
             envVarsPtr.deallocate()
             free(cwdCStr)
@@ -129,9 +140,13 @@ final class SurfaceHandle {
             if let zmxDirKey { free(zmxDirKey) }
             if let zmxDirVal { free(zmxDirVal) }
             Unmanaged<SurfaceUserdataBox>.fromOpaque(userdataPtr).release()
-            fatalError("ghostty_surface_new returned null")
+            return nil
         }
         self.surface = newSurface
+        // Bind the surface to the view now that ghostty_surface_new succeeded.
+        // The view weakly references the surface via this unmanaged handle;
+        // it forwards keystrokes/mouse events back into libghostty.
+        surfaceView.surface = newSurface
 
         // userdata is set after construction so we can pass a valid `self`.
         // libghostty does not use userdata until after callbacks fire, so setting
