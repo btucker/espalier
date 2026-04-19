@@ -458,13 +458,18 @@ struct MainWindow: View {
                 return
             }
 
-            if appState.selectedWorktreePath == worktreePath {
-                appState.selectedWorktreePath = nil
-            }
             if wt.state == .running {
                 terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
             }
-            appState.repos[repoIdx].worktrees.removeAll { $0.path == worktreePath }
+            // GIT-4.10: drop per-path caches BEFORE removing the model
+            // entry. Same reason `dismissWorktree` (GIT-3.6) does: orphan
+            // cache entries survive indefinitely and bleed into a future
+            // same-path re-add (rare but cheap — path-keyed caches aren't
+            // inode-scoped). Runs unconditionally; clear on a never-cached
+            // path is a no-op.
+            prStatusStore.clear(worktreePath: worktreePath)
+            statsStore.clear(worktreePath: worktreePath)
+            appState.removeWorktree(atPath: worktreePath)
         }
     }
 

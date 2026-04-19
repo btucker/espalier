@@ -293,4 +293,79 @@ struct AppStateTests {
         state.setFocusedTerminal(pane, forWorktreePath: "/tmp/nonexistent")
         #expect(state.worktree(forPath: "/tmp/wt")?.focusedTerminalID == nil)
     }
+
+    // MARK: removeWorktree — Delete / Dismiss shared primitive (GIT-4.10)
+    //
+    // Both Delete Worktree (GIT-4.x) and Dismiss (GIT-3.6) remove an
+    // entry from the model AND must drop per-path entries in the
+    // observable stores (PRStatusStore, WorktreeStatsStore). Pre-GIT-
+    // 4.10, Delete did NOT drop caches — orphan entries leaked in
+    // `prStatusStore.infos[path]` etc. A subsequent same-path re-add
+    // would briefly inherit stale cache data on its first reconcile
+    // tick. Memory also grew over a long session where Andy created &
+    // deleted many feature worktrees.
+    //
+    // `removeWorktree(atPath:)` is the shared primitive: removes from
+    // `repos`, clears `selectedWorktreePath` if it was the target, and
+    // returns the path so the caller can pass it to the stores' `clear`
+    // methods. Unknown paths return nil — terse call sites don't need
+    // to guard.
+
+    @Test func removeWorktreeRemovesAndReturnsPath() {
+        var state = AppState(repos: [
+            RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                WorktreeEntry(path: "/tmp/r", branch: "main"),
+                WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+            ]),
+        ])
+
+        let removed = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(removed == "/tmp/r/wt")
+        #expect(state.worktree(forPath: "/tmp/r/wt") == nil)
+        #expect(state.worktree(forPath: "/tmp/r") != nil)
+    }
+
+    @Test func removeWorktreeClearsSelectionWhenItWasTheTarget() {
+        var state = AppState(
+            repos: [
+                RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                    WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+                ]),
+            ],
+            selectedWorktreePath: "/tmp/r/wt"
+        )
+
+        _ = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(state.selectedWorktreePath == nil)
+    }
+
+    @Test func removeWorktreeLeavesSelectionAloneWhenDifferent() {
+        var state = AppState(
+            repos: [
+                RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                    WorktreeEntry(path: "/tmp/r", branch: "main"),
+                    WorktreeEntry(path: "/tmp/r/wt", branch: "feature"),
+                ]),
+            ],
+            selectedWorktreePath: "/tmp/r"
+        )
+
+        _ = state.removeWorktree(atPath: "/tmp/r/wt")
+
+        #expect(state.selectedWorktreePath == "/tmp/r")
+    }
+
+    @Test func removeWorktreeReturnsNilForUnknownPath() {
+        var state = AppState(repos: [
+            RepoEntry(path: "/tmp/r", displayName: "r", worktrees: [
+                WorktreeEntry(path: "/tmp/r", branch: "main"),
+            ]),
+        ])
+
+        let removed = state.removeWorktree(atPath: "/nowhere")
+        #expect(removed == nil)
+        #expect(state.worktree(forPath: "/tmp/r") != nil)
+    }
 }

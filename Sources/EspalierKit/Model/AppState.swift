@@ -65,6 +65,31 @@ public struct AppState: Codable, Sendable, Equatable {
         }
     }
 
+    /// Shared primitive for the Delete Worktree (GIT-4.x) and Dismiss
+    /// (GIT-3.6) paths. Removes the worktree at `path` from its
+    /// enclosing repo's `worktrees` list, clears `selectedWorktreePath`
+    /// if it was the removed one, and returns the removed path so the
+    /// caller can pass it to `PRStatusStore.clear` /
+    /// `WorktreeStatsStore.clear` to drop per-path cache entries
+    /// (`GIT-4.10`).
+    ///
+    /// Returns nil for an unknown path — caller's "clear caches" step
+    /// is then skipped naturally. Surface teardown and the git-side
+    /// `git worktree remove` are the caller's responsibility; this
+    /// helper owns the model + selection + "tell me what path to clean
+    /// up" contract only.
+    @discardableResult
+    public mutating func removeWorktree(atPath path: String) -> String? {
+        guard indices(forWorktreePath: path) != nil else { return nil }
+        for repoIdx in repos.indices {
+            repos[repoIdx].worktrees.removeAll { $0.path == path }
+        }
+        if selectedWorktreePath == path {
+            selectedWorktreePath = nil
+        }
+        return path
+    }
+
     public func worktree(forPath path: String) -> WorktreeEntry? {
         for repo in repos {
             if let wt = repo.worktrees.first(where: { $0.path == path }) {
