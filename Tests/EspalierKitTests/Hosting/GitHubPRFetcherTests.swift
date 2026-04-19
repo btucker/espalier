@@ -19,7 +19,7 @@ struct GitHubPRFetcherTests {
             args: [
                 "pr", "list",
                 "--repo", "btucker/espalier",
-                "--head", branch,
+                "--head", "btucker:\(branch)",
                 "--state", "open",
                 "--limit", "1",
                 "--json", "number,title,url,state,headRefName"
@@ -48,7 +48,7 @@ struct GitHubPRFetcherTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "open", "--limit", "1",
+                "--head", "btucker:\(branch)", "--state", "open", "--limit", "1",
                 "--json", "number,title,url,state,headRefName"
             ],
             output: CLIOutput(stdout: loadFixture("gh-pr-empty"), stderr: "", exitCode: 0)
@@ -57,7 +57,7 @@ struct GitHubPRFetcherTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "merged", "--limit", "1",
+                "--head", "btucker:\(branch)", "--state", "merged", "--limit", "1",
                 "--json", "number,title,url,state,headRefName,mergedAt"
             ],
             output: CLIOutput(stdout: loadFixture("gh-pr-merged"), stderr: "", exitCode: 0)
@@ -71,13 +71,46 @@ struct GitHubPRFetcherTests {
         #expect(pr?.checks == PRInfo.Checks.none)
     }
 
+    @Test func scopesHeadFilterToOriginOwnerSoForkPRsAreExcluded() async throws {
+        // Regression: `gh pr list --head <branch>` matches PRs from forks
+        // that happen to share the branch name, so worktrees were sometimes
+        // associated with a stranger's PR. The fetcher must qualify the
+        // filter as `<owner>:<branch>` to scope to the same repo.
+        let fake = FakeCLIExecutor()
+        fake.stub(
+            command: "gh",
+            args: [
+                "pr", "list",
+                "--repo", "btucker/espalier",
+                "--head", "btucker:\(branch)",
+                "--state", "open",
+                "--limit", "1",
+                "--json", "number,title,url,state,headRefName"
+            ],
+            output: CLIOutput(stdout: loadFixture("gh-pr-open-passing"), stderr: "", exitCode: 0)
+        )
+        fake.stub(
+            command: "gh",
+            args: ["pr", "checks", "412", "--repo", "btucker/espalier", "--json", "name,state,conclusion"],
+            output: CLIOutput(stdout: loadFixture("gh-pr-checks-passing"), stderr: "", exitCode: 0)
+        )
+
+        let fetcher = GitHubPRFetcher(executor: fake, now: { Date() })
+        _ = try await fetcher.fetch(origin: origin, branch: branch)
+
+        let listArgs = fake.invocations.first(where: { $0.args.contains("list") })?.args ?? []
+        let headIdx = listArgs.firstIndex(of: "--head")
+        #expect(headIdx != nil)
+        #expect(headIdx.map { listArgs[listArgs.index(after: $0)] } == "btucker:\(branch)")
+    }
+
     @Test func returnsNilWhenNoOpenOrMerged() async throws {
         let fake = FakeCLIExecutor()
         fake.stub(
             command: "gh",
             args: [
                 "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "open", "--limit", "1",
+                "--head", "btucker:\(branch)", "--state", "open", "--limit", "1",
                 "--json", "number,title,url,state,headRefName"
             ],
             output: CLIOutput(stdout: loadFixture("gh-pr-empty"), stderr: "", exitCode: 0)
@@ -86,7 +119,7 @@ struct GitHubPRFetcherTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "btucker/espalier",
-                "--head", branch, "--state", "merged", "--limit", "1",
+                "--head", "btucker:\(branch)", "--state", "merged", "--limit", "1",
                 "--json", "number,title,url,state,headRefName,mergedAt"
             ],
             output: CLIOutput(stdout: loadFixture("gh-pr-empty"), stderr: "", exitCode: 0)

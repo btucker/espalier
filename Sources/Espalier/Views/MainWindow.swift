@@ -26,6 +26,7 @@ struct MainWindow: View {
                 terminalManager: terminalManager,
                 theme: terminalManager.theme,
                 statsStore: statsStore,
+                prStatusStore: prStatusStore,
                 onSelect: selectWorktree,
                 onSelectPane: selectPane,
                 onAddRepo: addRepository,

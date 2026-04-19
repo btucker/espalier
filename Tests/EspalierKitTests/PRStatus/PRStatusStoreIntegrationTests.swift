@@ -11,7 +11,7 @@ struct PRStatusStoreIntegrationTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "foo/bar",
-                "--head", "feature/x", "--state", "open", "--limit", "1",
+                "--head", "foo:feature/x", "--state", "open", "--limit", "1",
                 "--json", "number,title,url,state,headRefName"
             ],
             output: CLIOutput(
@@ -53,7 +53,7 @@ struct PRStatusStoreIntegrationTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "foo/bar",
-                "--head", "feature/x", "--state", "open", "--limit", "1",
+                "--head", "foo:feature/x", "--state", "open", "--limit", "1",
                 "--json", "number,title,url,state,headRefName"
             ],
             output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
@@ -62,7 +62,7 @@ struct PRStatusStoreIntegrationTests {
             command: "gh",
             args: [
                 "pr", "list", "--repo", "foo/bar",
-                "--head", "feature/x", "--state", "merged", "--limit", "1",
+                "--head", "foo:feature/x", "--state", "merged", "--limit", "1",
                 "--json", "number,title,url,state,headRefName,mergedAt"
             ],
             output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
@@ -82,6 +82,79 @@ struct PRStatusStoreIntegrationTests {
 
         #expect(await store.infos["/wt"] == nil)
         #expect(await store.absent.contains("/wt"))
+    }
+
+    @Test func branchDidChangeDropsStalePRImmediatelyAndRefetchesForNewBranch() async throws {
+        // Reproduces the "wrong PR after branch switch" symptom: a worktree
+        // showed branch A's PR for minutes after the user checked out
+        // branch B, because nothing notified PRStatusStore that the branch
+        // had changed — only the polling tick (5–15 min cadence) eventually
+        // corrected it.
+        let fake = FakeCLIExecutor()
+
+        // Branch A: PR #100
+        fake.stub(
+            command: "gh",
+            args: [
+                "pr", "list", "--repo", "foo/bar",
+                "--head", "foo:branchA", "--state", "open", "--limit", "1",
+                "--json", "number,title,url,state,headRefName"
+            ],
+            output: CLIOutput(
+                stdout: #"[{"number":100,"title":"A","url":"https://github.com/foo/bar/pull/100","state":"OPEN","headRefName":"branchA"}]"#,
+                stderr: "", exitCode: 0
+            )
+        )
+        fake.stub(
+            command: "gh",
+            args: ["pr", "checks", "100", "--repo", "foo/bar", "--json", "name,state,conclusion"],
+            output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
+        )
+
+        // Branch B: PR #200
+        fake.stub(
+            command: "gh",
+            args: [
+                "pr", "list", "--repo", "foo/bar",
+                "--head", "foo:branchB", "--state", "open", "--limit", "1",
+                "--json", "number,title,url,state,headRefName"
+            ],
+            output: CLIOutput(
+                stdout: #"[{"number":200,"title":"B","url":"https://github.com/foo/bar/pull/200","state":"OPEN","headRefName":"branchB"}]"#,
+                stderr: "", exitCode: 0
+            )
+        )
+        fake.stub(
+            command: "gh",
+            args: ["pr", "checks", "200", "--repo", "foo/bar", "--json", "name,state,conclusion"],
+            output: CLIOutput(stdout: "[]", stderr: "", exitCode: 0)
+        )
+
+        let origin = HostingOrigin(provider: .github, host: "github.com", owner: "foo", repo: "bar")
+        let store = await PRStatusStore(executor: fake, detectHost: { _ in origin })
+
+        await store.refresh(worktreePath: "/wt", repoPath: "/repo", branch: "branchA")
+        for _ in 0..<50 {
+            if await store.infos["/wt"]?.number == 100 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(await store.infos["/wt"]?.number == 100)
+
+        // Branch changed externally (e.g. the user ran `git checkout`).
+        // The bridge notifies the store.
+        await store.branchDidChange(worktreePath: "/wt", repoPath: "/repo", branch: "branchB")
+
+        // Stale info must be dropped immediately — not after the new fetch
+        // lands. Otherwise the UI keeps showing branch A's PR through the
+        // gh-fetch in-flight window.
+        #expect(await store.infos["/wt"] == nil, "stale PR still showing after branch change")
+
+        // Eventually the new branch's PR is fetched and published.
+        for _ in 0..<50 {
+            if await store.infos["/wt"]?.number == 200 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(await store.infos["/wt"]?.number == 200)
     }
 
     @Test func unsupportedHostMarksAbsent() async throws {

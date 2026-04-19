@@ -621,3 +621,19 @@ application shall log at debug and no-op.
 
 **KBD-4.1** When `reload_config` fires, the application shall rebuild
 its Ghostty-config-derived menu shortcuts without requiring a restart.
+
+## 17. PR/MR Status Display
+
+### 17.1 Branch-to-PR Association
+
+**PR-1.1** When the application resolves the PR for a worktree's branch on a GitHub origin, it shall scope the lookup to PRs whose head ref lives in the same repository as the base — i.e. the `gh` head filter shall be qualified as `<owner>:<branch>` rather than the bare branch name — so that PRs from forks of the repository which happen to share the branch name are not associated with the worktree.
+
+**PR-1.2** If more than one PR in the same repository matches the worktree's branch and state, the application shall associate the worktree with the most recently created one.
+
+### 17.2 Refresh Triggers
+
+**PR-2.1** When a worktree's HEAD reference changes (per GIT-2.4), the application shall drop the worktree's previously cached PR display synchronously and shall trigger a fresh PR resolution for the new branch — rather than waiting for the next polling tick to discover the change. This prevents the previous branch's PR from continuing to display through the polling cadence window after a `git checkout`, rebase, or other HEAD-rewriting operation.
+
+### 17.3 Sidebar Indicator
+
+**PR-3.1** While a worktree has a resolved PR/MR (open or merged), its sidebar row shall use the SF Symbol `arrow.triangle.pull` as its leading icon in place of the default `arrow.triangle.branch` (linked worktree) or `house` (main checkout) glyph. The icon's color shall continue to encode the worktree's running state (closed / running / stale) per existing behavior; the leading-icon change communicates only the PR's existence, while detailed PR state (number, title, check status) remains in the breadcrumb's PR button.
