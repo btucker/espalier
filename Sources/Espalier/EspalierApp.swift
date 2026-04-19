@@ -212,11 +212,21 @@ struct EspalierApp: App {
         // on an arbitrary terminalID rather than the currently-focused one.
         terminalManager.onCloseRequest = { [appState = $appState, tm = terminalManager] terminalID in
             MainActor.assumeIsolated {
-                Self.closePane(
-                    appState: appState,
-                    terminalManager: tm,
-                    targetID: terminalID
-                )
+                // Mid-flight session-loss recovery (ZMX-7.2): if the
+                // close was unannounced and the zmx session is gone, we
+                // rebuild the pane in place rather than letting it
+                // disappear. shouldRestartInsteadOfClose consumes the
+                // intentionalCloses tracker, so the same close cannot
+                // be re-evaluated as session-loss on a future call.
+                if tm.shouldRestartInsteadOfClose(terminalID) {
+                    tm.restartSurface(for: terminalID)
+                } else {
+                    Self.closePane(
+                        appState: appState,
+                        terminalManager: tm,
+                        targetID: terminalID
+                    )
+                }
             }
         }
 
