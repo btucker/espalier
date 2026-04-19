@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useTerminal } from '@wterm/react';
+import { Terminal, useTerminal } from '@wterm/react';
 
 type Status = 'connecting' | 'disconnected' | 'error' | string;
 
 export function TerminalPane({ sessionName }: { sessionName: string }) {
   const [status, setStatus] = useState<Status>('connecting');
-  const { ref, write, onData, onResize } = useTerminal();
+  const { ref, write } = useTerminal();
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -40,22 +40,25 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
     };
   }, [sessionName, write]);
 
-  onData((bytes: Uint8Array) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(bytes);
-  });
-
-  onResize(({ cols, rows }: { cols: number; rows: number }) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    }
-  });
-
   return (
     <>
       <div id="status">{status}</div>
-      <div id="term" ref={ref} />
+      <Terminal
+        ref={ref}
+        id="term"
+        onData={(data: string) => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode(data));
+          }
+        }}
+        onResize={(cols: number, rows: number) => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+          }
+        }}
+      />
     </>
   );
 }
