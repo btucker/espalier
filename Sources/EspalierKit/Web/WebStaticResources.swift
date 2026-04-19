@@ -1,18 +1,14 @@
 import Foundation
 
-/// Accessors for the Phase 2 web client bundled via
-/// `resources: [.copy("Web/Resources")]`. Task 1's SPM layout
-/// relocates resource files to the bundle root, so lookups use
-/// `Bundle.module.url(forResource:withExtension:)` with no
-/// `subdirectory:` argument.
+/// Accessors for the web client bundled via `resources: [.copy("Web/Resources")]`.
+/// SPM's copy layout relocates resource files to the bundle root, so lookups use
+/// `Bundle.module.url(forResource:withExtension:)` with no `subdirectory:` argument.
 public enum WebStaticResources {
 
     public enum Error: Swift.Error {
         case missingResource(String)
     }
 
-    /// Maps a URL path (e.g., "/", "/xterm.min.js") to its bundled data
-    /// and content type.
     public struct Asset {
         public let contentType: String
         public let data: Data
@@ -24,31 +20,38 @@ public enum WebStaticResources {
     }
 
     public static func asset(for urlPath: String) throws -> Asset {
-        let name: String
-        let contentType: String
-        switch urlPath {
-        case "/", "/index.html":
-            name = "index.html"
-            contentType = "text/html; charset=utf-8"
-        case "/xterm.min.js":
-            name = "xterm.min.js"
-            contentType = "application/javascript; charset=utf-8"
-        case "/xterm.min.css":
-            name = "xterm.min.css"
-            contentType = "text/css; charset=utf-8"
-        case "/xterm-addon-fit.min.js":
-            name = "xterm-addon-fit.min.js"
-            contentType = "application/javascript; charset=utf-8"
-        default:
-            throw Error.missingResource(urlPath)
-        }
-
-        let ext = (name as NSString).pathExtension
-        let base = (name as NSString).deletingPathExtension
+        let filename = try resolveFilename(urlPath)
+        let ext = (filename as NSString).pathExtension
+        let base = (filename as NSString).deletingPathExtension
         guard let url = Bundle.module.url(forResource: base, withExtension: ext) else {
-            throw Error.missingResource(name)
+            throw Error.missingResource(filename)
         }
         let data = try Data(contentsOf: url)
-        return Asset(contentType: contentType, data: data)
+        return Asset(contentType: contentType(forExtension: ext), data: data)
+    }
+
+    /// The bundled `index.html` body — used by the SPA fallback in `WebServer`
+    /// so unknown non-`/ws` paths resolve to the client's routing entry point.
+    public static func indexHTML() throws -> Asset {
+        try asset(for: "/")
+    }
+
+    private static func resolveFilename(_ urlPath: String) throws -> String {
+        switch urlPath {
+        case "/", "/index.html": return "index.html"
+        case "/app.js":          return "app.js"
+        case "/app.css":         return "app.css"
+        default: throw Error.missingResource(urlPath)
+        }
+    }
+
+    private static func contentType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "html": return "text/html; charset=utf-8"
+        case "js":   return "application/javascript; charset=utf-8"
+        case "css":  return "text/css; charset=utf-8"
+        case "wasm": return "application/wasm"
+        default:     return "application/octet-stream"
+        }
     }
 }
