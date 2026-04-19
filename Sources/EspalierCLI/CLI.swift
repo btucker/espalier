@@ -24,8 +24,9 @@ struct Notify: ParsableCommand {
     var clearAfter: Int?
 
     func validate() throws {
-        if !clear && text == nil {
-            throw ValidationError("Provide notification text or use --clear")
+        let result = NotifyInputValidation.validate(text: text, clear: clear)
+        if let message = result.message {
+            throw ValidationError(message)
         }
     }
 
