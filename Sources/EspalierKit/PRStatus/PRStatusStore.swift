@@ -143,6 +143,21 @@ public final class PRStatusStore {
 
 extension PRStatusStore {
 
+    /// `GitWorktreeDiscovery` encodes git's non-branch worktree states
+    /// as the sentinel strings `"(detached)"`, `"(bare)"`, and
+    /// `"(unknown)"`. None of them correspond to a real `refs/heads/`
+    /// value, so passing them to `gh pr list --head <branch>` guarantees
+    /// an empty result — two wasted `gh` invocations per polling tick,
+    /// per affected worktree. Skip at the fetch-gate.
+    public nonisolated static func isFetchableBranch(_ branch: String) -> Bool {
+        // Anything wrapped in parens is a sentinel from parsePorcelain;
+        // keep the check liberal so new sentinels added upstream (e.g.
+        // `(unborn)`) don't silently start incurring fetches.
+        if branch.hasPrefix("(") && branch.hasSuffix(")") { return false }
+        // Defensive: empty/whitespace also can't be a branch.
+        return !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     nonisolated static func cadenceFor(
         info: PRInfo?,
         isAbsent: Bool,
@@ -216,6 +231,7 @@ extension PRStatusStore {
             }
             for wt in repo.worktrees where wt.state != .stale {
                 if inFlight.contains(wt.path) { continue }
+                if !Self.isFetchableBranch(wt.branch) { continue }
                 let interval = cadence(for: wt.path)
                 let last = lastFetch[wt.path]
                 if let last, now.timeIntervalSince(last) < Double(interval.components.seconds) {
