@@ -80,6 +80,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **STATE-2.8** If a notify request specifies an auto-clear duration of zero or negative, then the application shall treat the notification as having no auto-clear timer (the overlay persists until cleared by the CLI or replaced by another notification).
 
+**STATE-2.9** If a notify request specifies an auto-clear duration greater than 86400 seconds (24 hours), then the application shall clamp the duration to 86400 seconds rather than schedule a timer that could leak onto the main queue for days or years. This backs up the CLI's `ATTN-1.8` validation for non-CLI socket clients.
+
 ## 3. Terminal Lifecycle
 
 ### 3.1 Starting Terminals

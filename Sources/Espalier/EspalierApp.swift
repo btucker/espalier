@@ -474,6 +474,13 @@ struct EspalierApp: App {
             // client (`nc -U`, custom script, web surface) can't write
             // an invisible red capsule Andy can't read or dismiss.
             guard Attention.isValidText(text) else { return }
+            // Normalize the requested auto-clear duration against the
+            // server's contract: ≤0 → nil (STATE-2.8), >24h → clamped
+            // to 24h (STATE-2.9). A non-CLI socket client can still
+            // send ridiculous values; `effectiveClearAfter` makes the
+            // server a single source of truth for what actually
+            // schedules.
+            let effectiveClearAfter = Attention.effectiveClearAfter(clearAfter)
             // Pin the timestamp the attention carries AND the auto-clear
             // timer closes over, so the timer can verify it's still OUR
             // notification when it fires (cf. WorktreeEntry.clearAttentionIfTimestamp).
@@ -484,15 +491,11 @@ struct EspalierApp: App {
                         appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].attention = Attention(
                             text: text,
                             timestamp: stamp,
-                            clearAfter: clearAfter
+                            clearAfter: effectiveClearAfter
                         )
 
-                        // Only schedule a clear for strictly-positive durations.
-                        // Zero or negative values would fire immediately, making
-                        // the notification invisible — treat them as "no auto-clear"
-                        // so ill-formed CLI input degrades gracefully.
-                        if let clearAfter, clearAfter > 0 {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter) {
+                        if let effectiveClearAfter {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + effectiveClearAfter) {
                                 for ri in appState.wrappedValue.repos.indices {
                                     for wi in appState.wrappedValue.repos[ri].worktrees.indices {
                                         if appState.wrappedValue.repos[ri].worktrees[wi].path == path {

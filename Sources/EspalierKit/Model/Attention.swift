@@ -19,4 +19,21 @@ public struct Attention: Codable, Sendable, Equatable {
     public static func isValidText(_ text: String) -> Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    /// Upper bound for `clearAfter` on the server side. Mirrors
+    /// `NotifyInputValidation.clearAfterMaxSeconds` (Int). Expressed as
+    /// `TimeInterval` for ergonomics at the DispatchQueue site.
+    public static let clearAfterMaxSeconds: TimeInterval = 86_400
+
+    /// Normalizes a requested `clearAfter` to what the server actually
+    /// schedules:
+    /// - nil or ≤0 → nil (STATE-2.8: no auto-clear timer)
+    /// - in (0, max] → pass through unchanged
+    /// - > max → clamped to `clearAfterMaxSeconds` (STATE-2.9): a
+    ///   runaway value from a non-CLI socket client can't leak a
+    ///   multi-year Dispatch work item into the main queue.
+    public static func effectiveClearAfter(_ clearAfter: TimeInterval?) -> TimeInterval? {
+        guard let c = clearAfter, c > 0 else { return nil }
+        return min(c, clearAfterMaxSeconds)
+    }
 }
