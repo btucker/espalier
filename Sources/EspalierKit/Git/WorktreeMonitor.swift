@@ -26,7 +26,6 @@ public final class WorktreeMonitor: @unchecked Sendable {
             guard let self else { return }
             self.delegate?.worktreeMonitorDidDetectChange(self, repoPath: repoPath)
         }
-        source.setCancelHandler {}
         source.resume()
         sources[key] = source
     }
@@ -41,7 +40,6 @@ public final class WorktreeMonitor: @unchecked Sendable {
                 self.delegate?.worktreeMonitorDidDetectDeletion(self, worktreePath: worktreePath)
             }
         }
-        source.setCancelHandler {}
         source.resume()
         sources[key] = source
     }
@@ -59,7 +57,6 @@ public final class WorktreeMonitor: @unchecked Sendable {
             guard let self else { return }
             self.delegate?.worktreeMonitorDidDetectBranchChange(self, worktreePath: worktreePath)
         }
-        source.setCancelHandler {}
         source.resume()
         sources[key] = source
     }
@@ -84,7 +81,6 @@ public final class WorktreeMonitor: @unchecked Sendable {
             guard let self else { return }
             self.delegate?.worktreeMonitorDidDetectOriginRefChange(self, repoPath: repoPath)
         }
-        source.setCancelHandler {}
         source.resume()
         sources[key] = source
     }
@@ -102,6 +98,10 @@ public final class WorktreeMonitor: @unchecked Sendable {
         sources.removeAll()
     }
 
+    /// Opens an fd on `path` and wraps it in a dispatch source that
+    /// closes the fd on cancel. Callers MUST NOT call
+    /// `source.setCancelHandler(...)` on the returned source — doing so
+    /// silently replaces the fd-close handler and leaks the fd. `GIT-3.11`.
     private func createFileWatcher(path: String, events: DispatchSource.FileSystemEvent) -> DispatchSourceFileSystemObject? {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return nil }
