@@ -146,7 +146,9 @@ struct SidebarView: View {
                         worktreePath: worktree.path,
                         repoPath: repo.path
                     ),
-                    hasPR: prStatusStore.infos[worktree.path] != nil
+                    prBadge: prStatusStore.infos[worktree.path].map {
+                        PRBadge(number: $0.number, state: $0.state, url: $0.url)
+                    }
                 )
             }
             .buttonStyle(.plain)

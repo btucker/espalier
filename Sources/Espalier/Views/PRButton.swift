@@ -21,7 +21,7 @@ struct PRButton: View {
             Text("#\(info.number)\(info.state == .merged ? " ✓ merged" : "")")
                 .font(.caption)
                 .fontWeight(.medium)
-                .foregroundColor(info.state == .merged ? mergedText : theme.foreground)
+                .foregroundColor(info.state == .merged ? info.state.statusColor : theme.foreground)
 
             Text(info.title)
                 .font(.caption)
@@ -59,10 +59,6 @@ struct PRButton: View {
             : theme.foreground.opacity(0.08)
     }
 
-    private var mergedText: Color {
-        Color(red: 0.82, green: 0.66, blue: 1.0)
-    }
-
     private var dotColor: Color {
         switch info.checks {
         case .success: return Color(red: 0.25, green: 0.73, blue: 0.31)
@@ -78,6 +74,19 @@ struct PRButton: View {
         case .failure: return "CI failing"
         case .pending: return "CI running"
         case .none:    return "no CI checks"
+        }
+    }
+}
+
+extension PRInfo.State {
+    /// Color representing this PR's state. Green for open, purple for
+    /// merged. Shared between the sidebar badge (foreground color of
+    /// `#<number>`) and the breadcrumb pill (foreground color when
+    /// merged). A future `.closed` case maps to red here.
+    var statusColor: Color {
+        switch self {
+        case .open:   return Color(red: 0.25, green: 0.73, blue: 0.31)
+        case .merged: return Color(red: 0.82, green: 0.66, blue: 1.0)
         }
     }
 }
