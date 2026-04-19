@@ -40,7 +40,7 @@ struct EspalierApp: App {
         // relaunches.
         Self.terminateIfAnotherInstanceIsRunning()
 
-        let loaded = (try? AppState.load(from: AppState.defaultDirectory)) ?? AppState()
+        let loaded = AppState.loadOrFreshBackingUpCorruption(from: AppState.defaultDirectory)
         _appState = State(initialValue: loaded)
 
         let socketPath = AppState.defaultDirectory.appendingPathComponent("espalier.sock").path

@@ -300,6 +300,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **PERSIST-3.6** When the application launches, it shall run worktree discovery for each repository to reconcile saved state against current disk state.
 
+**PERSIST-3.7** If `state.json` exists but fails to decode at launch (corruption from a crashed mid-write, hand-edit typo, or schema mismatch across app versions), then the application shall move the file aside to a timestamped backup at `state.json.corrupt.<milliseconds-since-epoch>` and proceed with a fresh `AppState`. The corrupt file shall remain on disk so the user can recover the prior data manually; the application shall not silently overwrite it on the next save.
+
 ### 6.4 Non-Persisted State
 
 **PERSIST-4.1** The application shall not persist shell scrollback, terminal screen buffer content, or the specific processes that were running.
