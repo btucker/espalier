@@ -234,9 +234,11 @@ struct MainWindow: View {
                 let wt = appState.repos[repoIdx].worktrees[wtIdx]
                 if wt.path == path && wt.state == .stale &&
                    FileManager.default.fileExists(atPath: path) {
-                    appState.repos[repoIdx].worktrees[wtIdx].state = .closed
-                    appState.repos[repoIdx].worktrees[wtIdx].splitTree = SplitTree(root: nil)
-                    appState.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = nil
+                    let orphan = appState.repos[repoIdx].worktrees[wtIdx]
+                        .prepareForResurrection()
+                    if !orphan.isEmpty {
+                        terminalManager.destroySurfaces(terminalIDs: orphan)
+                    }
                 }
             }
         }

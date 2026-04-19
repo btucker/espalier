@@ -270,4 +270,52 @@ struct WorktreeEntryTests {
         #expect(decoded.path == "/tmp/repo")
         #expect(decoded.worktrees.count == 1)
     }
+
+    // MARK: resurrect-from-stale contract (GIT-3.9)
+    //
+    // When a .stale entry is resurrected (directory still on disk), its
+    // old leaf TerminalIDs point at surfaces that are now orphan — the
+    // resurrect path creates a *fresh* terminal with a *new* TerminalID.
+    // The surfaces behind the old IDs keep running render/io/kqueue
+    // threads, and on macOS that's been observed to corrupt libghostty's
+    // internal `os_unfair_lock` during window resize and SIGKILL the app.
+    //
+    // `prepareForResurrection()` returns the leaves the caller must
+    // destroy, then transitions the entry into a clean .closed state with
+    // no split tree, no focused terminal, and no pane attention. If the
+    // caller fails to destroy those leaves, the next resurrection leaks
+    // more surfaces — this is an invariant worth enforcing in the type.
+
+    @Test func prepareForResurrectionReturnsOldLeavesToDestroy() {
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        let leaf1 = TerminalID()
+        let leaf2 = TerminalID()
+        entry.splitTree = SplitTree(root: .split(.init(
+            direction: .horizontal,
+            ratio: 0.5,
+            left: .leaf(leaf1),
+            right: .leaf(leaf2)
+        )))
+        entry.state = .stale
+        entry.focusedTerminalID = leaf1
+        entry.paneAttention[leaf1] = Attention(text: "!", timestamp: Date())
+
+        let toDestroy = entry.prepareForResurrection()
+
+        #expect(Set(toDestroy) == Set([leaf1, leaf2]))
+        #expect(entry.state == .closed)
+        #expect(entry.splitTree.root == nil)
+        #expect(entry.focusedTerminalID == nil)
+        #expect(entry.paneAttention.isEmpty)
+    }
+
+    @Test func prepareForResurrectionReturnsEmptyWhenNoLeaves() {
+        var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
+        entry.state = .stale
+
+        let toDestroy = entry.prepareForResurrection()
+
+        #expect(toDestroy.isEmpty)
+        #expect(entry.state == .closed)
+    }
 }

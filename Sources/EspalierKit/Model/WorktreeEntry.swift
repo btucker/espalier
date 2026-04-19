@@ -108,6 +108,34 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
         }
     }
 
+    /// Transitions this entry from `.stale` back to `.closed`, returning
+    /// the list of leaf `TerminalID`s whose surfaces the caller MUST
+    /// destroy via `TerminalManager.destroySurfaces(terminalIDs:)` before
+    /// the UI re-creates the worktree (`GIT-3.9`).
+    ///
+    /// When a worktree went stale *while running* (`GIT-3.4` keeps its
+    /// Ghostty surfaces alive across the stale transition), those
+    /// surfaces are still registered in `TerminalManager`. The resurrect
+    /// path then creates a *new* `TerminalID` and a *new* surface, which
+    /// leaves the old surfaces orphan: their render/io/kqueue threads
+    /// keep running forever. On macOS this has been observed to corrupt
+    /// libghostty's internal `os_unfair_lock` during window resize and
+    /// SIGKILL the app.
+    ///
+    /// Returning the old leaves from the same mutation that clears
+    /// `splitTree` forces the caller to either destroy them or
+    /// deliberately drop them — silently clearing the tree in-place (the
+    /// pre-`GIT-3.9` shape) is no longer spellable from the outside.
+    @discardableResult
+    public mutating func prepareForResurrection() -> [TerminalID] {
+        let oldLeaves = splitTree.allLeaves
+        state = .closed
+        splitTree = SplitTree(root: nil)
+        focusedTerminalID = nil
+        paneAttention.removeAll()
+        return oldLeaves
+    }
+
     /// User-facing label for the worktree *in the context of its siblings*.
     ///
     /// Common case: the directory name the user picked when running
