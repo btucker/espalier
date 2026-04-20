@@ -19,10 +19,18 @@ public enum WebURLComposer {
 
     /// Compose the server's root URL (no session). Bracket-notation for
     /// IPv6 hosts so the Settings-pane display + sidebar "Copy web URL"
-    /// don't emit malformed URIs on IPv6-only Tailscale setups. WEB-1.7.
+    /// don't emit malformed URIs on IPv6-only Tailscale setups. WEB-1.8.
     public static func baseURL(host: String, port: Int) -> String {
+        return "http://\(authority(host: host, port: port))/"
+    }
+
+    /// Compose a URI authority component (`<host>:<port>`), bracketing
+    /// IPv6 hosts. Used by the Settings-pane status row so a mixed
+    /// IPv4 + IPv6 listen list renders each address unambiguously
+    /// (WEB-1.10) and by `baseURL` to DRY the bracket logic.
+    public static func authority(host: String, port: Int) -> String {
         let hostPart = host.contains(":") ? "[\(host)]" : host
-        return "http://\(hostPart):\(port)/"
+        return "\(hostPart):\(port)"
     }
 
     /// Prefer the first IPv4 address; fall back to the first IPv6 only

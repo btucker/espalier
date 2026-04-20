@@ -90,4 +90,23 @@ struct WebURLComposerTests {
         let url = WebURLComposer.baseURL(host: "macbook-pro.taile2dd2b.ts.net", port: 8799)
         #expect(url == "http://macbook-pro.taile2dd2b.ts.net:8799/")
     }
+
+    /// WEB-1.10: the Settings pane status row ("Listening on …")
+    /// currently renders `addrs.joined(", "):port` which produces
+    /// `Listening on fd7a:115c::5, 127.0.0.1:49161` — ambiguous
+    /// whether `:49161` is part of the IPv6 or attaches only to the
+    /// trailing IPv4, AND the IPv6 isn't bracketed. `authority`
+    /// formats a single `<host>:<port>` unambiguously (brackets IPv6)
+    /// so callers can join per-address.
+    @Test func authorityBracketsIPv6() {
+        #expect(WebURLComposer.authority(host: "fd7a:115c::5", port: 8799) == "[fd7a:115c::5]:8799")
+    }
+
+    @Test func authorityLeavesIPv4Alone() {
+        #expect(WebURLComposer.authority(host: "100.64.0.5", port: 49161) == "100.64.0.5:49161")
+    }
+
+    @Test func authorityAcceptsHostname() {
+        #expect(WebURLComposer.authority(host: "macbook.ts.net", port: 8799) == "macbook.ts.net:8799")
+    }
 }

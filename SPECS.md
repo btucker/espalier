@@ -663,6 +663,8 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 
 **WEB-1.9** When `WebURLComposer.url(session:host:port:)` percent-encodes the session name for interpolation into the URL path, it shall use `CharacterSet.urlPathAllowed` rather than `urlQueryAllowed`. The latter leaves reserved path/query/fragment separators (`?`, `#`) unescaped, so a session name containing `?` would cause the browser to parse the URL as path-and-query and the client router would see only the prefix. Espalier's own session names per `ZMX-2.1` never include such characters, but socket clients producing custom session names would otherwise silently break.
 
+**WEB-1.10** The Settings pane status row ("Listening on …") shall render each listening address with its port individually (via `WebURLComposer.authority(host:port:)`), bracketing IPv6 hosts. The prior format `addrs.joined(", "):port` rendered `Listening on fd7a:115c::5, 127.0.0.1:49161` — ambiguous whether the port attaches to the IPv6 or only the trailing IPv4, and the IPv6 itself unbracketed. New format: `Listening on [fd7a:115c::5]:49161, 127.0.0.1:49161`.
+
 ### 15.2 Authorization
 
 **WEB-2.1** The application shall resolve each incoming peer IP via Tailscale LocalAPI `whois` before serving any content at any path.

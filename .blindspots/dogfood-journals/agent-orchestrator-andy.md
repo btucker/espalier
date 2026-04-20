@@ -2399,3 +2399,34 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - `WorktreeStatsStore` → EspalierKit move remains the biggest structural gap (DIVERGE-4.5 coverage).
 - Surface `SocketServer.lastStartError` in Espalier menu (cycle 95 follow-on).
+
+## Cycle 118 — 2026-04-20 (Settings status row ambiguous IPv6+port rendering — WEB-1.10)
+
+### Explored
+- Probed handleNotification for paths (notify on untracked worktree is silent no-op, defended by CLI pre-validation), destroySurface cleanup flow (sound), TerminalManager handle accessor. Found the WebSettingsPane status rendering.
+
+### Diagnosed
+- Line 42 of WebSettingsPane: `Text(verbatim: "Listening on \(addrs.joined(separator: ", ")):\(port)")`. For `addrs = ["fd7a:115c::5", "127.0.0.1"]`, port 49161:
+  - Renders `Listening on fd7a:115c::5, 127.0.0.1:49161`
+  - Ambiguous: does `:49161` attach to the IPv6 or just the IPv4?
+  - IPv6 isn't bracketed — visually reads as part of the IPv6 address continuing.
+- Settings pane is user-facing. The user shares the URL manually sometimes (or at least reads it to know what port the server is on). Ambiguous display on mixed-stack Tailscale.
+
+### Fixed
+- Extracted `WebURLComposer.authority(host:port:)` that shares the IPv6 bracket logic with `baseURL`. Settings pane now maps each address through `authority` then joins, producing `Listening on [fd7a:115c::5]:49161, 127.0.0.1:49161`.
+- `baseURL` rewrote itself atop `authority` — the bracket logic now lives in one place.
+
+### Spec
+- Added **WEB-1.10**.
+
+### Tests
+- Three new authority tests: IPv6 brackets, IPv4 leaves alone, hostname accepts. All compile-failed against the pre-fix `WebURLComposer`, pass after.
+- Existing baseURL tests still pass (via the `authority`-delegation rewrite).
+- 543/543.
+
+### Commit
+- `fix(web): format Settings status row per-address with bracketed IPv6 (WEB-1.10)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit.
+- `SocketServer.lastStartError` UI surface.
