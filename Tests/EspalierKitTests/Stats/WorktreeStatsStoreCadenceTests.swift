@@ -29,4 +29,12 @@ struct WorktreeStatsStoreCadenceTests {
     @Test func runawayFailureStreakStaysAtCap() {
         #expect(WorktreeStatsStore.repoFetchCadence(failureStreak: 100) == .seconds(30 * 60))
     }
+
+    /// DIVERGE-4.6: per-worktree local stats recompute cadence is
+    /// independent of the repo-level fetch cadence. Pinned at 30s to
+    /// match `PRStatusStore.cadenceFor`'s base so the sidebar's two
+    /// indicators (divergence + PR badge) refresh on the same tempo.
+    @Test func statsRefreshCadenceIsThirtySeconds() {
+        #expect(WorktreeStatsStore.statsRefreshCadence() == .seconds(30))
+    }
 }

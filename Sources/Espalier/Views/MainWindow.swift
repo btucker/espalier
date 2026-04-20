@@ -381,6 +381,7 @@ struct MainWindow: View {
                 appState.repos[repoIdx].worktrees.append(entry)
                 worktreeMonitor.watchWorktreePath(entry.path)
                 worktreeMonitor.watchHeadRef(worktreePath: entry.path, repoPath: repoPath)
+                worktreeMonitor.watchWorktreeContents(worktreePath: entry.path)
                 statsStore.refresh(worktreePath: entry.path, repoPath: repoPath)
             }
         }

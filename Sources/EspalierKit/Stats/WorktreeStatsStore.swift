@@ -42,6 +42,15 @@ public final class WorktreeStatsStore {
     @ObservationIgnored
     private var inFlightRepos: Set<String> = []
 
+    /// Last successful stats compute per worktree. Used to gate the
+    /// per-worktree recompute cadence (DIVERGE-4.6), which runs at 30s
+    /// independent of the 5-minute `git fetch` cadence. FSEvents on the
+    /// worktree contents (GIT-2.6) drives the common case; this poll is
+    /// a safety net for bursts the FSEvents coalescer ate and for
+    /// changes that happened while the app was backgrounded.
+    @ObservationIgnored
+    private var lastStatsRefresh: [String: Date] = [:]
+
     @ObservationIgnored
     private var ticker: PollingTickerLike?
 
@@ -129,6 +138,28 @@ public final class WorktreeStatsStore {
 
     func isInFlightForTesting(_ worktreePath: String) -> Bool {
         inFlight.contains(worktreePath)
+    }
+
+    /// Drives `pollTick` from tests so the DIVERGE-4.6 per-worktree
+    /// cadence gate can be exercised end-to-end. `pollTick` remains
+    /// private so production callers go through `start(ticker:)`, but a
+    /// controllable entry point is required to test that the per-repo
+    /// fetch cooldown does not gate the per-worktree stats recompute.
+    func pollTickForTesting(repos: [RepoEntry]) async {
+        await pollTick(repos: repos)
+    }
+
+    /// Seed the per-repo fetch timestamp so `pollTick`'s fetch gate
+    /// treats the repo as "already fetched recently" and falls through
+    /// to the per-worktree stats cadence branch.
+    func seedLastRepoFetchForTesting(_ date: Date, forRepo repoPath: String) {
+        lastRepoFetch[repoPath] = date
+    }
+
+    /// Seed the per-worktree stats timestamp so `pollTick`'s stats
+    /// cadence gate treats the worktree as "recently recomputed".
+    func seedLastStatsRefreshForTesting(_ date: Date, forWorktree worktreePath: String) {
+        lastStatsRefresh[worktreePath] = date
     }
 
     public func refresh(worktreePath: String, repoPath: String) {
@@ -250,6 +281,15 @@ public final class WorktreeStatsStore {
         // DIVERGE-4.5: drop the stats write if the caller's clear()
         // invalidated us while the git subprocess was running.
         if generation[worktreePath, default: 0] != fetchGeneration { return }
+        // Gate the stats cadence off successful computes only — an errored
+        // compute (result.stats == nil while defaultBranch is resolvable)
+        // shouldn't reset the clock, otherwise a repeatedly-failing
+        // subprocess (e.g. `git rev-list` aborted on a corrupted pack)
+        // would silently pace itself at the full cadence instead of
+        // retrying on the next tick.
+        if result.stats != nil || result.defaultBranch == nil {
+            lastStatsRefresh[worktreePath] = Date()
+        }
         if let s = result.stats {
             if stats[worktreePath] != s {
                 stats[worktreePath] = s
@@ -267,29 +307,66 @@ public final class WorktreeStatsStore {
         )
     }
 
+    /// DIVERGE-4.6: per-worktree local stats recompute cadence. Runs
+    /// against the local git working tree, so it's cheap (no network)
+    /// and gated independently of `repoFetchCadence`'s 5-minute network
+    /// fetch cadence. 30s base matches `PRStatusStore.cadenceFor` so
+    /// both rows of the sidebar refresh on the same tempo.
+    nonisolated static func statsRefreshCadence() -> Duration {
+        .seconds(30)
+    }
+
     private func pollTick(repos: [RepoEntry]) async {
         let now = Date()
+        let statsInterval = Self.statsRefreshCadence()
         for repo in repos {
-            if inFlightRepos.contains(repo.path) { continue }
-            let streak = repoFailureStreak[repo.path] ?? 0
-            let interval = Self.repoFetchCadence(failureStreak: streak)
-            if let last = lastRepoFetch[repo.path],
-               now.timeIntervalSince(last) < Double(interval.components.seconds) {
-                continue
-            }
-            inFlightRepos.insert(repo.path)
-            let repoPath = repo.path
-            let worktreePaths = repo.worktrees
-                .filter { $0.state != .stale }
-                .map(\.path)
+            // Gate A: network `git fetch` on the 5-min cadence (DIVERGE-4.3).
+            // On success, performRepoFetch also kicks per-worktree refreshes,
+            // so we don't double-fire them in Gate B below for the same tick.
+            let didDispatchRepoFetch = maybeDispatchRepoFetch(repo: repo, now: now)
 
-            Task { [weak self] in
-                await self?.performRepoFetch(
-                    repoPath: repoPath,
-                    worktreePaths: worktreePaths
-                )
+            // Gate B: cheap local stats recompute per worktree (DIVERGE-4.6).
+            // Skips any worktree the repo-fetch dispatch already scheduled —
+            // `performRepoFetch` calls `refresh(worktreePath:)` for each
+            // non-stale worktree after its fetch resolves.
+            if didDispatchRepoFetch { continue }
+            for wt in repo.worktrees where wt.state != .stale {
+                if inFlight.contains(wt.path) { continue }
+                if let last = lastStatsRefresh[wt.path],
+                   now.timeIntervalSince(last) < Double(statsInterval.components.seconds) {
+                    continue
+                }
+                refresh(worktreePath: wt.path, repoPath: repo.path)
             }
         }
+    }
+
+    /// Returns true if a repo-level fetch was dispatched this tick. The
+    /// pollTick caller uses that to skip its per-worktree Gate B, since
+    /// `performRepoFetch` will itself refresh every worktree in the repo
+    /// after the fetch — double-firing would waste subprocess work and
+    /// bump `inFlight` churn unnecessarily.
+    private func maybeDispatchRepoFetch(repo: RepoEntry, now: Date) -> Bool {
+        if inFlightRepos.contains(repo.path) { return true }
+        let streak = repoFailureStreak[repo.path] ?? 0
+        let interval = Self.repoFetchCadence(failureStreak: streak)
+        if let last = lastRepoFetch[repo.path],
+           now.timeIntervalSince(last) < Double(interval.components.seconds) {
+            return false
+        }
+        inFlightRepos.insert(repo.path)
+        let repoPath = repo.path
+        let worktreePaths = repo.worktrees
+            .filter { $0.state != .stale }
+            .map(\.path)
+
+        Task { [weak self] in
+            await self?.performRepoFetch(
+                repoPath: repoPath,
+                worktreePaths: worktreePaths
+            )
+        }
+        return true
     }
 
     private func performRepoFetch(repoPath: String, worktreePaths: [String]) async {

@@ -231,6 +231,10 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **GIT-2.5** While a repository is in the sidebar, the application shall watch `<repoPath>/.git/logs/refs/remotes/origin/` using FSEvents so that any operation which advances a remote-tracking ref — `git push` (the common `gh pr create` path), `git fetch`, and prune — surfaces as an origin-ref change. One watch per repository covers all linked worktrees, since they share the main checkout's git directory.
 
+**GIT-2.6** While a worktree is in the sidebar and non-stale, the application shall recursively watch the worktree's directory with `FSEventStreamCreate` (coalescing latency 0.5s) so that working-tree edits, stages / unstages via `.git/index`, and untracked-file creation surface as content-change events. Events for the worktree root, the bare `.git` directory, and the `.git/objects/` subtree shall be filtered out: the root and `.git` are coarse parent-mtime bumps that fire alongside more specific descendant events and carry no additional signal, and `.git/objects/` is pure pack-churn noise from `git gc` / pack writes. The watched path shall be resolved via `realpath(3)` before use because FSEvents always reports canonical paths (e.g. `/private/var/...` rather than `/var/...`) and an unresolved root makes the filter's `hasPrefix` comparison miss every event. The other watchers in GIT-2.1–GIT-2.5 use kqueue vnode sources (`DispatchSourceFileSystemObject`), which cannot watch a subtree recursively; the real FSEvents API is used here because the working tree is inherently recursive.
+
+**GIT-2.7** When a content-change event fires for a worktree, the application shall trigger a divergence-stats recompute for that worktree. The recompute is idempotent via `WorktreeStatsStore.inFlight` deduplication, so a burst of file events coalesces to at most one in-flight git subprocess pipeline.
+
 ### 4.3 Change Handling
 
 **GIT-3.1** When a new worktree is detected, the application shall add a new entry in the closed state and briefly flash its background highlight.
@@ -556,6 +560,12 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **DIVERGE-4.5** When `WorktreeStatsStore.clear(worktreePath:)` is called — whether from a stale transition (GIT-3.13), a Dismiss (GIT-3.6), or a Delete (GIT-4.10) — a fetch that was already in flight at that moment shall not repopulate `stats` after the clear. Each `clear` bumps a per-path generation counter; `apply` captures the generation at refresh time and drops the write if the counter changed during the await. Without this, a `git worktree remove` that fires shortly after the 5s-polling refresh leaves the divergence indicator flashing back onto a cleared row for the duration of the git subprocess (~50–200ms). Mirrors `PRStatusStore`'s pattern (PR status gained this protection earlier; stats store was lagging).
 
+**DIVERGE-4.6** The polling loop shall also recompute divergence counts for every non-stale worktree on a 30-second per-worktree cadence, independent of the 5-minute `git fetch` cadence in DIVERGE-4.3. Local-only recomputation uses no network — `git rev-list`, `git diff --shortstat`, and `git status --porcelain` all run against the local object store — so gating it behind the fetch cadence leaves local changes (a `git add` in an external shell, a commit made by a tool other than Espalier) stale for up to five minutes. When a tick finds a per-repo fetch is due in the same cycle, the per-worktree cadence is skipped for that repo because the fetch handler itself recomputes every worktree on success.
+
+**DIVERGE-4.7** When a remote-tracking-ref change event fires (GIT-2.5), the application shall refresh divergence stats for every non-stale worktree in the affected repository in addition to PR status. Local `git fetch` from another terminal advances `origin/<defaultBranch>` and therefore changes every worktree's ahead/behind count against it, not just the PR state.
+
+**DIVERGE-4.8** The polling ticker for divergence stats shall continue to fire while Espalier is not the frontmost application. Users frequently run their editor or Claude session in a different app while the sidebar's divergence indicator tracks their work; pausing on `resignActive` leaves those updates queued until the user clicks back into Espalier, defeating the purpose of the indicator.
+
 ## 12. Technology Constraints
 
 **TECH-1** The application shall be built in Swift using SwiftUI for app chrome and AppKit for terminal view hosting.
@@ -857,3 +867,5 @@ vendored surface and is what this spec pins.
 **PR-7.4** The application shall not poll stale worktrees.
 
 **PR-7.5** `PRStatusStore.refresh` and `PRStatusStore.branchDidChange` shall also apply the `PR-7.3` sentinel-branch gate, not just the background polling loop. Otherwise an on-demand refresh (sidebar selection, HEAD-change event) against a detached / bare / unknown worktree still fires two wasted `gh pr list --head <sentinel>` invocations per event — the gate belongs at the fetch entry point, not duplicated at every caller.
+
+**PR-7.6** The PR polling ticker shall continue to fire while Espalier is not the frontmost application. `gh pr list` is the only detection channel for an open→merged transition that happens on GitHub without a local `git fetch`; pausing while the app is backgrounded leaves the sidebar's PR badge stuck on "open" until the user clicks back into Espalier, even though the merge may have happened many minutes earlier. The cost (one `gh pr list` per worktree every 30s) is negligible compared to the staleness it would otherwise produce.
