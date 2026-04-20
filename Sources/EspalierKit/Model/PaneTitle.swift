@@ -45,6 +45,31 @@ public enum PaneTitle {
         return name.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "_" }
     }
 
+    /// Upper bound on what we'll store for a pane title, measured in
+    /// `Character` (grapheme cluster) units. The sidebar clips rendering
+    /// via `.lineLimit(1)`, but the stored string still sits in
+    /// `TerminalManager.titles` for the pane's lifetime — a misbehaving
+    /// program that pushes a 100 KB title via OSC 2 otherwise bloats the
+    /// app's heap with no upper bound. 200 matches `Attention.textMaxLength`
+    /// so the two surface caps stay in lockstep.
+    public static let maxStoredLength = 200
+
+    /// Gate for an incoming OSC 2 / SET_TITLE payload. Returns the
+    /// original string when it's safe to store, or nil when the caller
+    /// should keep the previously-stored title (matching
+    /// `isLikelyEnvAssignment`'s "preserve last good" semantics).
+    ///
+    /// Reject rules:
+    ///   - `isLikelyEnvAssignment(_:)` — the shell-integration command-
+    ///     echo leak (LAYOUT-2.13).
+    ///   - Length > `maxStoredLength` grapheme clusters — bounds memory
+    ///     against a runaway title setter.
+    public static func sanitize(_ title: String) -> String? {
+        if isLikelyEnvAssignment(title) { return nil }
+        if title.count > maxStoredLength { return nil }
+        return title
+    }
+
     /// Derive a short label from a pane's current working directory.
     /// Returns the directory's basename, or nil when `pwd` is empty, `/`,
     /// or unparseable. The caller renders the view-level "shell" fallback

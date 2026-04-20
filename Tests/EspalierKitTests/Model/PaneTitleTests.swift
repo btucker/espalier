@@ -80,6 +80,67 @@ struct PaneTitleEnvAssignmentTests {
     }
 }
 
+@Suite("PaneTitle.sanitize")
+struct PaneTitleSanitizeTests {
+
+    /// `GHOSTTY_ACTION_SET_TITLE` feeds arbitrary OSC 2 payloads into
+    /// `titles[id]` with no length cap or control-char filter beyond
+    /// the env-assignment leak rejection. A program (malicious or
+    /// buggy) can push a 100 KB title — or worse, one laced with ANSI
+    /// escapes — and that payload sits in the pane's dict for the
+    /// lifetime of the session. The sidebar clips rendering via
+    /// `.lineLimit(1)` but memory pressure and state.json bloat (the
+    /// titles aren't persisted, but transient heap cost is real for a
+    /// long-lived app) are uncapped.
+    ///
+    /// `sanitize` returns nil to reject; the caller keeps the prior
+    /// title (same semantics as `isLikelyEnvAssignment`).
+    @Test func shortValidTitlePassesThrough() {
+        #expect(PaneTitle.sanitize("claude") == "claude")
+        #expect(PaneTitle.sanitize("docker compose up") == "docker compose up")
+    }
+
+    @Test func envAssignmentLeakIsRejected() {
+        #expect(PaneTitle.sanitize("FOO=bar") == nil)
+        #expect(PaneTitle.sanitize("GHOSTTY_ZSH_ZDOTDIR=/x") == nil)
+    }
+
+    @Test func titleAtMaxLengthIsAccepted() {
+        let t = String(repeating: "a", count: PaneTitle.maxStoredLength)
+        #expect(t.count == PaneTitle.maxStoredLength)
+        #expect(PaneTitle.sanitize(t) == t)
+    }
+
+    @Test func titleOverMaxLengthIsRejected() {
+        let t = String(repeating: "a", count: PaneTitle.maxStoredLength + 1)
+        #expect(PaneTitle.sanitize(t) == nil)
+    }
+
+    @Test func hugeTitleIsRejected() {
+        // A 100 KB title from a misbehaving program must not land in
+        // the titles dict. This is the memory-bloat scenario.
+        let t = String(repeating: "b", count: 100_000)
+        #expect(PaneTitle.sanitize(t) == nil)
+    }
+
+    @Test func graphemeClusterLengthGate() {
+        // Swift's `.count` counts grapheme clusters; a ZWJ-emoji family
+        // is one cluster. 199 plain chars + one family emoji should fit
+        // the 200-cluster cap.
+        let t = String(repeating: "a", count: PaneTitle.maxStoredLength - 1) + "👨‍👩‍👧‍👦"
+        #expect(t.count == PaneTitle.maxStoredLength)
+        #expect(PaneTitle.sanitize(t) == t)
+    }
+
+    @Test func emptyTitlePassesThrough() {
+        // The display-layer fallback (LAYOUT-2.14) already handles
+        // empty/whitespace-only. sanitize is a storage gate only; it
+        // doesn't care about blank-vs-content.
+        #expect(PaneTitle.sanitize("") == "")
+        #expect(PaneTitle.sanitize("   ") == "   ")
+    }
+}
+
 @Suite("PaneTitle.basenameLabel")
 struct PaneTitleBasenameTests {
 

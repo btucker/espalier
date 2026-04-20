@@ -693,11 +693,12 @@ final class TerminalManager: ObservableObject {
             guard let id = terminalID(from: target) else { return }
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
             // Drop the env-assignment leak from ghostty's outer-shell
-            // preexec hook (see PaneTitle.isLikelyEnvAssignment). Any
-            // legitimate title pushed by the inner shell later still
-            // wins because we write the filtered value back.
-            if !PaneTitle.isLikelyEnvAssignment(title) {
-                titles[id] = title
+            // preexec hook AND any payload that would bloat the titles
+            // dict past `maxStoredLength`. A legitimate title pushed
+            // by the inner shell later still wins because we write the
+            // filtered value back. See `PaneTitle.sanitize`.
+            if let sanitized = PaneTitle.sanitize(title) {
+                titles[id] = sanitized
             }
 
         case GHOSTTY_ACTION_PWD:
