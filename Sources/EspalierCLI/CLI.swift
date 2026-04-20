@@ -61,13 +61,7 @@ struct PaneList: ParsableCommand {
         switch response {
         case .paneList(let panes):
             for pane in panes {
-                let marker = pane.focused ? "*" : " "
-                let idPadding = String(repeating: " ", count: max(0, 3 - String(pane.id).count))
-                let title = pane.title ?? ""
-                let line = title.isEmpty
-                    ? "\(marker) \(pane.id)\(idPadding)"
-                    : "\(marker) \(pane.id)\(idPadding)\(title)"
-                print(line)
+                print(pane.formattedLine())
             }
         case .error(let msg):
             CLIEnv.printError(msg)

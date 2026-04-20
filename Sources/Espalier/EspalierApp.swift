@@ -108,7 +108,16 @@ struct EspalierApp: App {
                 .environmentObject(webController)
                 .onAppear { startup() }
                 .onChange(of: appState) { _, newState in
-                    try? newState.save(to: AppState.defaultDirectory)
+                    do {
+                        try newState.save(to: AppState.defaultDirectory)
+                    } catch {
+                        // Silently dropping this error means a full disk,
+                        // read-only `$HOME`, or permissions clash silently
+                        // stops persisting every subsequent state mutation
+                        // — and Andy loses his worktree list on next launch
+                        // with no warning. STATE-6.2 / cf. ATTN-2.7.
+                        NSLog("[Espalier] AppState.save failed: %@", String(describing: error))
+                    }
                 }
         }
         // Hide the macOS title bar so the breadcrumb row sits directly
@@ -280,11 +289,12 @@ struct EspalierApp: App {
             }
         }
 
-        // libghostty-spm doesn't expose a reload C API — rebuild the bridge
-        // from the live config object so menu shortcuts stay consistent.
+        // `ghostty_app_update_config` re-reads the config files and swaps
+        // them into the live app; our bridge rebuild happens inside
+        // `reloadGhosttyConfig`. TERM-9.1.
         terminalManager.onReloadConfig = { [tm = terminalManager] in
             MainActor.assumeIsolated {
-                tm.rebuildKeybindBridge()
+                tm.reloadGhosttyConfig()
             }
         }
 
@@ -339,7 +349,19 @@ struct EspalierApp: App {
             }
         }
 
-        try? services.socketServer.start()
+        do {
+            try services.socketServer.start()
+        } catch let error as SocketServerError {
+            // Surface the failure in Console.app AND present a one-time
+            // banner so the user sees it immediately rather than learning
+            // about it later via a "not listening" CLI error (ATTN-3.4).
+            NSLog("[Espalier] SocketServer.start() failed: %@", String(describing: error))
+            DispatchQueue.main.async {
+                NotifySocketBanner.presentIfNeeded(error: error)
+            }
+        } catch {
+            NSLog("[Espalier] SocketServer.start() failed: %@", String(describing: error))
+        }
         // SocketServer already dispatches onMessage to the main queue.
         let binding = $appState
         let tm = terminalManager
@@ -377,7 +399,11 @@ struct EspalierApp: App {
         // for every non-stale worktree. Replaces the legacy 60s Timer and
         // additionally surfaces origin-side drift that WorktreeMonitor's
         // per-worktree HEAD watcher can't see.
-        services.statsStore.startPolling(appState: appState)
+        let statsTicker = PollingTicker(interval: .seconds(5))
+        services.statsStore.start(
+            ticker: statsTicker,
+            getRepos: { [appState] in appState.repos }
+        )
 
         let prTicker = PollingTicker(
             interval: .seconds(5),
@@ -393,49 +419,69 @@ struct EspalierApp: App {
         )
 
         restoreRunningWorktrees()
+
+        // WEB-5.4: feed the web server a snapshot of running sessions on
+        // each GET /sessions request. Binding snapshot is read on the
+        // main actor; worktree names are computed the same way the
+        // sidebar does (displayName amongst siblings) so the picker
+        // disambiguates same-basename worktrees the same way.
+        let appStateBinding = $appState
+        webController.setSessionsProvider {
+            await MainActor.run { () -> [WebServer.SessionInfo] in
+                var sessions: [WebServer.SessionInfo] = []
+                for repo in appStateBinding.wrappedValue.repos {
+                    let siblingPaths = repo.worktrees.map(\.path)
+                    for wt in repo.worktrees where wt.state == .running {
+                        for leafID in wt.splitTree.allLeaves {
+                            let sessionName = ZmxLauncher.sessionName(for: leafID.id)
+                            sessions.append(WebServer.SessionInfo(
+                                name: sessionName,
+                                worktreePath: wt.path,
+                                repoDisplayName: repo.displayName,
+                                worktreeDisplayName: wt.displayName(amongSiblingPaths: siblingPaths)
+                            ))
+                        }
+                    }
+                }
+                return sessions
+            }
+        }
     }
 
     private func reconcileOnLaunch() {
         let binding = $appState
         let statsStore = services.statsStore
+        let prStatusStore = services.prStatusStore
         Task {
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
-                guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { continue }
-                let discoveredPaths = Set(discovered.map(\.path))
-
-                let existingPaths = Set(binding.wrappedValue.repos[repoIdx].worktrees.map(\.path))
-                for d in discovered where !existingPaths.contains(d.path) {
-                    binding.wrappedValue.repos[repoIdx].worktrees.append(
-                        WorktreeEntry(path: d.path, branch: d.branch)
-                    )
+                let discovered: [DiscoveredWorktree]
+                do {
+                    discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+                } catch {
+                    NSLog("[Espalier] reconcileOnLaunch: discover failed for %@: %@",
+                          repoPath, String(describing: error))
+                    continue
                 }
 
-                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                    let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
-                    if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
-                    } else if discoveredPaths.contains(wt.path) && wt.state == .stale {
-                        // Stale entry is back in git's view — resurrect
-                        // to .closed per GIT-3.7. Same rule as the
-                        // `.git/worktrees/`-tick reconcile path.
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-                    }
+                let result = WorktreeReconciler.reconcile(
+                    existing: binding.wrappedValue.repos[repoIdx].worktrees,
+                    discovered: discovered
+                )
+                binding.wrappedValue.repos[repoIdx].worktrees = result.merged
+
+                // GIT-3.13: clear cached stats/PR for newly-stale entries so
+                // stale-via-reconcile matches stale-via-fs-event. Otherwise
+                // the stale entry keeps its cached PR and stats until the
+                // next clear path (Dismiss, Delete) fires.
+                for wt in result.newlyStale {
+                    statsStore.clear(worktreePath: wt.path)
+                    prStatusStore.clear(worktreePath: wt.path)
                 }
 
-                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                    if let match = discovered.first(where: {
-                        $0.path == binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path
-                    }) {
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
-                    }
-                }
-
-                // Kick initial stats refresh for this repo's non-stale
-                // worktrees, after reconciliation has populated new entries
-                // and marked externally-deleted ones stale. This preserves
-                // the pre-migration "reconcile, then refresh" ordering
-                // without blocking startup.
+                // Kick initial stats refresh for non-stale worktrees after
+                // reconciliation. Preserves the pre-migration "reconcile,
+                // then refresh" ordering without blocking startup.
                 for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
                     statsStore.refresh(worktreePath: wt.path, repoPath: repoPath)
                 }
@@ -632,6 +678,13 @@ struct EspalierApp: App {
         guard let wt = appState.wrappedValue.worktree(forPath: path) else {
             return .error("not tracked")
         }
+        // Symmetric with `addPane` / `closePaneByIndex`: a .closed worktree
+        // has no panes by construction, and returning an empty `.paneList`
+        // looks like a silent success to scripts. Surface the state
+        // explicitly instead (ATTN-3.5).
+        guard wt.state == .running else {
+            return .error("worktree not running")
+        }
         let leaves = wt.splitTree.allLeaves
         let panes = leaves.enumerated().map { (i, terminalID) -> PaneInfo in
             // Use the derived label (title → PWD basename → nil) so the
@@ -688,6 +741,12 @@ struct EspalierApp: App {
     ) -> ResponseMessage {
         guard let wt = appState.wrappedValue.worktree(forPath: path) else {
             return .error("not tracked")
+        }
+        // Symmetric with `addPane`. A .closed worktree's splitTree is
+        // empty; the "no pane with id N" error would technically be
+        // correct but misleads about the root cause (ATTN-3.5).
+        guard wt.state == .running else {
+            return .error("worktree not running")
         }
         guard let targetID = wt.splitTree.leaf(atPaneID: index) else {
             return .error("no pane with id \(index) in this worktree")
@@ -1257,7 +1316,7 @@ struct EspalierApp: App {
     }
 
     private func handleReloadConfig() {
-        terminalManager.rebuildKeybindBridge()
+        terminalManager.reloadGhosttyConfig()
     }
 
     // MARK: - View builder for bridge-shortcutted menu buttons
@@ -1370,37 +1429,35 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String) {
         let binding = appState
         let store = statsStore
+        let prStore = prStatusStore
         // `git worktree list --porcelain` is a subprocess wait. Awaiting the
         // now-async `GitWorktreeDiscovery.discover` yields the main actor
         // during the wait so ghostty keystrokes aren't delayed (prior
         // manifestation: intermittent ~1s input/render hangs under fs/
         // indexing pressure).
         Task { @MainActor in
-            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+            let discovered: [DiscoveredWorktree]
+            do {
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+            } catch {
+                NSLog("[Espalier] worktreeMonitorDidDetectChange: discover failed for %@: %@",
+                      repoPath, String(describing: error))
+                return
+            }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
 
-            let existing = binding.wrappedValue.repos[repoIdx].worktrees
-            let existingPaths = Set(existing.map(\.path))
-            let discoveredPaths = Set(discovered.map(\.path))
-            let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
-            let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }
+            let result = WorktreeReconciler.reconcile(
+                existing: binding.wrappedValue.repos[repoIdx].worktrees,
+                discovered: discovered
+            )
+            binding.wrappedValue.repos[repoIdx].worktrees = result.merged
 
-            for d in newlyAdded {
-                let entry = WorktreeEntry(path: d.path, branch: d.branch)
-                binding.wrappedValue.repos[repoIdx].worktrees.append(entry)
-            }
-            for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
-                if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                    binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
-                } else if discoveredPaths.contains(wt.path) && wt.state == .stale {
-                    // Worktree was marked stale but is now back in git's
-                    // view (e.g., a momentary FSEvents delete glitch, a
-                    // `git worktree repair`, or a force-remove+re-add).
-                    // Resurrect to `.closed`; user can click to start
-                    // terminals again per TERM-1.1 / TERM-1.2.
-                    binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-                }
+            // GIT-3.13: newly-stale entries clear cached stats/PR symmetrically
+            // with worktreeMonitorDidDetectDeletion, so the .stale state is
+            // consistent regardless of which FSEvents channel discovered it.
+            for wt in result.newlyStale {
+                store.clear(worktreePath: wt.path)
+                prStore.clear(worktreePath: wt.path)
             }
 
             // watchWorktreePath / watchHeadRef are idempotent, so registering
@@ -1414,13 +1471,9 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
 
             // Existing worktrees' stats are driven by their own HEAD
             // callbacks and the polling loop, so a `.git/worktrees/`
-            // directory tick only needs to seed stats for new entries and
-            // drop stats for newly-stale ones.
-            for d in newlyAdded {
-                store.refresh(worktreePath: d.path, repoPath: repoPath)
-            }
-            for wt in newlyStale {
-                store.clear(worktreePath: wt.path)
+            // directory tick only needs to seed stats for new entries.
+            for wt in result.newlyAdded {
+                store.refresh(worktreePath: wt.path, repoPath: repoPath)
             }
         }
     }
@@ -1475,8 +1528,15 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             guard let repoPath = binding.wrappedValue.repos.first(where: { repo in
                 repo.worktrees.contains(where: { $0.path == worktreePath })
             })?.path else { return }
-            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
-                  let match = discovered.first(where: { $0.path == worktreePath }) else { return }
+            let discovered: [DiscoveredWorktree]
+            do {
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+            } catch {
+                NSLog("[Espalier] worktreeMonitorDidDetectBranchChange: discover failed for %@: %@",
+                      repoPath, String(describing: error))
+                return
+            }
+            guard let match = discovered.first(where: { $0.path == worktreePath }) else { return }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }),
                   let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
             binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch

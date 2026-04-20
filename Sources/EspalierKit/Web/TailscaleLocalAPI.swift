@@ -111,7 +111,14 @@ public struct TailscaleLocalAPI {
         } else {
             return nil
         }
-        guard let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (0..<65536).contains(port) else {
+            // Out-of-range port → return nil so autoDetected falls
+            // through to `.socketUnreachable` cleanly. Without the
+            // range check, a corrupted `ipnport` or a future layout
+            // change writing a larger number would store the bad
+            // value in `.tcpLocalhost(port:)`; `openTCPLocalhost`'s
+            // later `UInt16(port)` would then trap the whole app.
             return nil
         }
         let tokenPath = supportDir + "/sameuserproof-\(port)"

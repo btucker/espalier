@@ -18,6 +18,8 @@ public enum NotifyInputValidation: Equatable {
     case clearAfterTooLarge(max: Int)
     case clearAfterWithClearFlag
     case textTooLong(max: Int)
+    case controlCharactersInText
+    case bidiControlInText
 
     /// Upper bound for notify text. Proxies to `Attention.textMaxLength`
     /// so the CLI's ATTN-1.10 check and the server's STATE-2.10 backstop
@@ -50,8 +52,37 @@ public enum NotifyInputValidation: Equatable {
             if text!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .emptyText
             }
+            // Swift's whitespace trim strips some Cf scalars (ZWSP
+            // U+200B) but not others (BOM U+FEFF). Without this extra
+            // check, `\u{FEFF}` or `\u{200B}\u{FEFF}` passes validation
+            // and renders as a zero-width / invisible badge — same UX
+            // as an empty string. Reject when every scalar is either
+            // whitespace or Unicode Format-category (Cf).
+            if text!.unicodeScalars.allSatisfy({
+                $0.properties.isWhitespace || $0.properties.generalCategory == .format
+            }) {
+                return .emptyText
+            }
             if text!.count > textMaxLength {
                 return .textTooLong(max: textMaxLength)
+            }
+            // ATTN-1.12: the sidebar capsule renders `Text` with
+            // `.lineLimit(1)`, so any control character (LF/CR clip the
+            // render, TAB renders as ?-width, ESC-based ANSI codes land
+            // as literal `[31m` glyphs in SwiftUI Text). Reject the
+            // whole Unicode Cc general category so the user gets clear
+            // feedback instead of a truncated or garbled badge.
+            if text!.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+                return .controlCharactersInText
+            }
+            // ATTN-1.14: reject BIDI-override scalars even when mixed
+            // with visible content. They're Unicode Cf (not Cc) so the
+            // check above doesn't catch them, and the all-Cf-invisible
+            // check above that only rejects when EVERY scalar is Cf.
+            // Mixed `\u{202E}evil` renders RTL-reversed — "Trojan
+            // Source"-style visual deception (CVE-2021-42574).
+            if BidiOverrides.containsAny(text!) {
+                return .bidiControlInText
             }
             // Negative / zero clearAfter is handled server-side per
             // STATE-2.8 (treated as no auto-clear). Only the upper
@@ -88,6 +119,11 @@ public enum NotifyInputValidation: Equatable {
             return "Cannot use --clear-after with --clear; --clear-after applies only to notify messages"
         case .textTooLong(let max):
             return "Notification text exceeds the \(max)-character limit"
+        case .controlCharactersInText:
+            return "Notification text cannot contain control characters (newlines, tabs, ANSI escapes, or other non-printable characters)"
+        case .bidiControlInText:
+            return "Notification text cannot contain bidirectional-override characters (U+202A-U+202E, U+2066-U+2069) — they visually reverse the text in the sidebar"
         }
     }
+
 }

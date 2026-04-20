@@ -29,12 +29,18 @@ enum SocketClient {
             if n <= 0 { break }
             buffer.append(contentsOf: chunk[0..<n])
         }
-        guard let str = String(data: buffer, encoding: .utf8),
-              let line = str.components(separatedBy: "\n").first(where: { !$0.isEmpty }),
-              let data = line.data(using: .utf8) else {
-            throw CLIError.socketError("Empty response from app")
+        switch SocketResponseDecoder.decode(buffer) {
+        case .success(let msg):
+            return msg
+        case .failure(.timeout):
+            // Client SO_RCVTIMEO elapsed, or server closed fd without
+            // a response (`ATTN-2.10`). `.socketTimeout` mirrors the
+            // ATTN-3.3 error shape so the user gets the same cue
+            // regardless of which end of the timeout fired.
+            throw CLIError.socketTimeout
+        case .failure(.unparseable):
+            throw CLIError.socketError("Unparseable response from app")
         }
-        return try JSONDecoder().decode(ResponseMessage.self, from: data)
     }
 
     // MARK: - Internals
@@ -45,7 +51,10 @@ enum SocketClient {
         guard pathBytes <= SocketServer.maxPathBytes else {
             throw CLIError.socketPathTooLong(bytes: pathBytes, maxBytes: SocketServer.maxPathBytes)
         }
-        guard FileManager.default.fileExists(atPath: socketPath) else { throw CLIError.appNotRunning }
+        // Defer the existence check until connect() fails so we can
+        // distinguish "no socket file" from "file exists but no listener"
+        // per ATTN-3.4. A bare fileExists gate would throw .appNotRunning
+        // on the missing-file case and never reach the diagnosis.
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw CLIError.socketError("Failed to create socket") }
@@ -65,9 +74,18 @@ enum SocketClient {
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard result == 0 else {
+            let savedErrno = errno
             close(fd)
-            if errno == ECONNREFUSED || errno == ENOENT { throw CLIError.appNotRunning }
-            throw CLIError.socketTimeout
+            let reason = ControlSocketDiagnosis.classifyConnectFailure(
+                errno: savedErrno,
+                socketExists: FileManager.default.fileExists(atPath: socketPath),
+                path: socketPath
+            )
+            switch reason {
+            case .notRunning: throw CLIError.appNotRunning
+            case .staleSocket(let path): throw CLIError.staleControlSocket(path: path)
+            case .timeout: throw CLIError.socketTimeout
+            }
         }
         return fd
     }
@@ -75,7 +93,14 @@ enum SocketClient {
     private static func writeMessage(_ message: NotificationMessage, to fd: Int32) throws {
         let data = try JSONEncoder().encode(message)
         let jsonLine = String(data: data, encoding: .utf8)! + "\n"
-        jsonLine.withCString { ptr in _ = Darwin.write(fd, ptr, strlen(ptr)) }
+        do {
+            try SocketIO.writeAll(fd: fd, string: jsonLine)
+        } catch let error as SocketIO.WriteError {
+            switch error {
+            case .writeFailed(let errno):
+                throw CLIError.socketError("Failed to send message (errno \(errno))")
+            }
+        }
     }
 
     private static func resolveSocketPath() -> String {

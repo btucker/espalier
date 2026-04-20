@@ -28,6 +28,20 @@ public struct Attention: Codable, Sendable, Equatable {
     public static func isValidText(_ text: String) -> Bool {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         if text.count > textMaxLength { return false }
+        // Match CLI's ATTN-1.12: reject Cc-category scalars so a raw
+        // socket client (`nc -U`, web surface) can't ship ANSI escapes,
+        // tabs, or bells the sidebar would render as garbled glyphs.
+        if text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return false }
+        // ATTN-1.14 / STATE-2.13: BIDI-override scalars are Cf, not Cc
+        // — the control gate above misses them. Reject so raw clients
+        // can't land a Trojan-Source ping past the front door.
+        if BidiOverrides.containsAny(text) { return false }
+        // ATTN-1.13: text made entirely of format (Cf) + whitespace
+        // renders as invisible. Swift's trim strips ZWSP but not BOM,
+        // so this backstop catches the rest.
+        if text.unicodeScalars.allSatisfy({
+            $0.properties.isWhitespace || $0.properties.generalCategory == .format
+        }) { return false }
         return true
     }
 

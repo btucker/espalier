@@ -167,4 +167,158 @@ struct NotifyInputValidationTests {
         // returns emptyText.
         #expect(NotifyInputValidation.validate(text: "", clear: false) == .emptyText)
     }
+
+    // ATTN-1.12: the sidebar capsule renders `Text(attentionText)` with
+    // `.lineLimit(1)` + `.truncationMode(.tail)`. Any control character
+    // (LF, CR, TAB, BEL, ESC, etc.) either clips the render or lands as
+    // a literal glyph like `[31m` from an ANSI escape. Reject all
+    // Cc-category scalars at the CLI so the user gets clear feedback.
+
+    @Test func textWithEmbeddedLineFeedIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\nline2", clear: false)
+        #expect(r == .controlCharactersInText)
+        #expect(r.message?.contains("control characters") == true)
+    }
+
+    @Test func textWithEmbeddedCarriageReturnIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\rline2", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithCRLFIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\r\nline2", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithAnsiEscapeIsInvalid() {
+        // Common: `ls --color=always | head | xargs espalier notify`
+        // pipes text with ESC-based SGR codes. Rendering `[31mred[0m`
+        // as literal text (ESC is invisible in SwiftUI Text) is a
+        // visual defect — the user wanted color, got garbled string.
+        let r = NotifyInputValidation.validate(text: "\u{001B}[31mred\u{001B}[0m", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithTabIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "foo\tbar", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithBellIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "\u{0007}ding", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithNullByteIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "before\u{0000}after", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func textWithDeleteCharIsInvalid() {
+        // DEL (0x7F) is a C0 control via general category.
+        let r = NotifyInputValidation.validate(text: "foo\u{007F}bar", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    @Test func plainSinglelineTextStillValid() {
+        // Regression guard: the widened check must not reject ordinary
+        // single-line text.
+        #expect(NotifyInputValidation.validate(text: "Build failed", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "✓ 42 tests", clear: false) == .valid)
+    }
+
+    @Test func nonControlUnicodeStillValid() {
+        // Emoji, CJK, accented Latin — all outside the Cc category, all
+        // legitimate notify text.
+        #expect(NotifyInputValidation.validate(text: "🚀 deploy", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "日本語 テスト", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "café ✓", clear: false) == .valid)
+    }
+
+    @Test func trailingNewlineIsStillInvalid() {
+        // A trailing `\n` (e.g. from `echo | xargs espalier notify`)
+        // still counts as a control character — erroring here tells
+        // the user what went wrong rather than silently clipping.
+        let r = NotifyInputValidation.validate(text: "Build failed\n", clear: false)
+        #expect(r == .controlCharactersInText)
+    }
+
+    // ATTN-1.13: text made entirely of Unicode Format-category (Cf)
+    // scalars renders as a visually-empty badge — zero-width space,
+    // zero-width joiner, byte-order mark, bidi overrides, etc. These
+    // pass the whitespace-trim check (trimming doesn't strip Cf) and
+    // the control-char check (Cf is distinct from Cc). Reject when
+    // every non-whitespace scalar is Cf; accept when ANY scalar is
+    // something else, so emoji sequences that embed ZWJ (U+200D) for
+    // ligature remain valid.
+
+    @Test func textOfOnlyZeroWidthSpaceIsInvalid() {
+        // U+200B ZERO WIDTH SPACE — invisible, would render as blank.
+        let r = NotifyInputValidation.validate(text: "\u{200B}", clear: false)
+        #expect(r == .emptyText)
+    }
+
+    @Test func textOfOnlyBOMIsInvalid() {
+        // U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM.
+        let r = NotifyInputValidation.validate(text: "\u{FEFF}", clear: false)
+        #expect(r == .emptyText)
+    }
+
+    @Test func textOfMixedFormatScalarsIsInvalid() {
+        // U+200B + U+200C + U+FEFF — all format-category, all invisible.
+        let r = NotifyInputValidation.validate(text: "\u{200B}\u{200C}\u{FEFF}", clear: false)
+        #expect(r == .emptyText)
+    }
+
+    @Test func formatScalarsBracketingContentAreValid() {
+        // Mixed with visible content → accepted. User may have pasted
+        // a Word-mangled string with trailing BOM; as long as *something*
+        // renders, we pass it through.
+        #expect(NotifyInputValidation.validate(text: "\u{200B}a", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "a\u{200B}b", clear: false) == .valid)
+    }
+
+    @Test func emojiWithZWJLigatureIsValid() {
+        // U+200D ZERO WIDTH JOINER builds emoji sequences like family
+        // emoji 👨‍👩‍👧 — the codepoints ARE Cf, but the ligature produces
+        // a visible glyph. Mustn't reject.
+        #expect(NotifyInputValidation.validate(text: "👨\u{200D}👩\u{200D}👧", clear: false) == .valid)
+    }
+
+    // ATTN-1.14: the BIDI-override scalars (U+202A-U+202E, U+2066-U+2069)
+    // are Unicode Format-category (Cf) and so pass both the Cc-control
+    // check (`.controlCharactersInText`) and the all-Cf invisibility
+    // check (`.emptyText`) when interleaved with visible content. Result:
+    // a notify like `\u{202E}evil\u{202C}` stores fine but renders with
+    // reversed text in the sidebar — the "Trojan Source" style of
+    // render distortion (CVE-2021-42574). Low-probability vector in
+    // Andy's flow (he types his own notify text), but consistent with
+    // ATTN-1.12's "reject surprising render distortion" principle.
+
+    @Test func textWithRLOOverrideIsInvalid() {
+        // U+202E RIGHT-TO-LEFT OVERRIDE renders subsequent runs RTL.
+        let r = NotifyInputValidation.validate(text: "\u{202E}evil", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func textWithLRIIsolateIsInvalid() {
+        // U+2066 LEFT-TO-RIGHT ISOLATE — the newer isolate family
+        // (U+2066-U+2069) replaces the older embed family in security
+        // advisories; we reject both.
+        let r = NotifyInputValidation.validate(text: "ok\u{2066}hidden\u{2069}", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func textWithLREEmbedIsInvalid() {
+        // U+202A LEFT-TO-RIGHT EMBEDDING.
+        let r = NotifyInputValidation.validate(text: "ok\u{202A}x\u{202C}", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func plainNonBidiTextStillValid() {
+        // Arabic / Hebrew / RTL-natural text doesn't USE the override
+        // scalars; it just uses RTL-direction characters. Must pass.
+        #expect(NotifyInputValidation.validate(text: "مرحبا", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "שלום world", clear: false) == .valid)
+    }
 }

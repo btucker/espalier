@@ -45,6 +45,50 @@ public enum PaneTitle {
         return name.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "_" }
     }
 
+    /// Upper bound on what we'll store for a pane title, measured in
+    /// `Character` (grapheme cluster) units. The sidebar clips rendering
+    /// via `.lineLimit(1)`, but the stored string still sits in
+    /// `TerminalManager.titles` for the pane's lifetime — a misbehaving
+    /// program that pushes a 100 KB title via OSC 2 otherwise bloats the
+    /// app's heap with no upper bound. Proxies to
+    /// `Attention.textMaxLength` so the two surface caps stay locked
+    /// together (same pattern as `NotifyInputValidation.textMaxLength`).
+    public static var maxStoredLength: Int { Attention.textMaxLength }
+
+    /// Gate for an incoming OSC 2 / SET_TITLE payload. Returns the
+    /// original string when it's safe to store, or nil when the caller
+    /// should keep the previously-stored title (matching
+    /// `isLikelyEnvAssignment`'s "preserve last good" semantics).
+    ///
+    /// Reject rules:
+    ///   - `isLikelyEnvAssignment(_:)` — the shell-integration command-
+    ///     echo leak (LAYOUT-2.13).
+    ///   - Length > `maxStoredLength` grapheme clusters — bounds memory
+    ///     against a runaway title setter (LAYOUT-2.16).
+    ///   - Any Unicode Cc (control) scalar — newlines, tabs, BEL, ANSI
+    ///     escapes, DEL, etc. SwiftUI `Text` with `.lineLimit(1)` clips
+    ///     newlines but renders `\e[31m` as literal `[31m` glyphs (the
+    ///     ESC byte is invisible), producing sidebar garbage. Same
+    ///     class as CLI's `ATTN-1.12` for notify text (LAYOUT-2.17).
+    ///   - Any Unicode bidirectional-override scalar (U+202A-U+202E,
+    ///     U+2066-U+2069). These are Cf-category so the Cc gate
+    ///     misses them; they reverse surrounding text at render time
+    ///     (Trojan Source, CVE-2021-42574). Same class as CLI's
+    ///     `ATTN-1.14` for notify text (LAYOUT-2.18).
+    public static func sanitize(_ title: String) -> String? {
+        if isLikelyEnvAssignment(title) { return nil }
+        if title.count > maxStoredLength { return nil }
+        if title.unicodeScalars.contains(where: {
+            $0.properties.generalCategory == .control
+        }) {
+            return nil
+        }
+        if BidiOverrides.containsAny(title) {
+            return nil
+        }
+        return title
+    }
+
     /// Derive a short label from a pane's current working directory.
     /// Returns the directory's basename, or nil when `pwd` is empty, `/`,
     /// or unparseable. The caller renders the view-level "shell" fallback
@@ -62,8 +106,14 @@ public enum PaneTitle {
     /// PWD basename, and empty string (view draws "shell"). Kept as a
     /// single function so `SidebarView` and the CLI `listPanes` response
     /// agree on the rendered label.
+    ///
+    /// LAYOUT-2.14: a stored title that is whitespace-only falls through
+    /// to the PWD basename rather than rendering as visible blank space.
+    /// Any stored title with real content is preserved verbatim,
+    /// including leading / trailing whitespace the program formatted
+    /// deliberately.
     public static func display(storedTitle: String?, pwd: String?) -> String {
-        if let t = storedTitle, !t.isEmpty { return t }
+        if let t = storedTitle, !t.trimmingCharacters(in: .whitespaces).isEmpty { return t }
         if let pwd, let basename = basenameLabel(pwd: pwd) { return basename }
         return ""
     }

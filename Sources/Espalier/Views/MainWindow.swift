@@ -51,7 +51,7 @@ struct MainWindow: View {
                     repoName: selectedRepo?.displayName,
                     worktreeDisplayName: worktreeDisplayName,
                     worktreePath: selectedWorktree?.path,
-                    branchName: selectedWorktree?.branch,
+                    branchName: selectedWorktree?.displayBranch,
                     isHomeCheckout: isHomeCheckout,
                     prInfo: prInfo,
                     theme: terminalManager.theme,
@@ -338,12 +338,7 @@ struct MainWindow: View {
         let repoPath = repo.path
         let worktreePath = repoPath + "/.worktrees/" + worktreeName
 
-        let startPoint: String?
-        do {
-            startPoint = try await GitOriginDefaultBranch.resolve(repoPath: repoPath)
-        } catch {
-            startPoint = nil
-        }
+        let startPoint: String? = await GitOriginDefaultBranch.resolve(repoPath: repoPath)
 
         let gitError: String?
         do {
@@ -364,9 +359,21 @@ struct MainWindow: View {
         // Run discovery now rather than waiting for FSEvents so the new
         // entry is in appState by the time we call selectWorktree below
         // — otherwise selectWorktree's terminal-launch logic sees no
-        // matching entry and no-ops.
-        if let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
-           let repoIdx = appState.repos.firstIndex(where: { $0.path == repoPath }) {
+        // matching entry and no-ops. If discover fails here, log but
+        // proceed — FSEvents will catch up shortly and the user's
+        // `selectWorktree` call below will still work if the entry
+        // lands before the user notices (GIT-3.12). Not user-hostile
+        // like GIT-1.2 because the worktree creation itself already
+        // succeeded; this is just the eager-reconcile optimization.
+        let discovered: [DiscoveredWorktree]
+        do {
+            discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+        } catch {
+            NSLog("[Espalier] addWorktree: post-success discover failed for %@: %@",
+                  repoPath, String(describing: error))
+            discovered = []
+        }
+        if let repoIdx = appState.repos.firstIndex(where: { $0.path == repoPath }) {
             let existingPaths = Set(appState.repos[repoIdx].worktrees.map(\.path))
             for d in discovered where !existingPaths.contains(d.path) {
                 let entry = WorktreeEntry(path: d.path, branch: d.branch)
@@ -396,7 +403,23 @@ struct MainWindow: View {
     }
 
     func addPath(_ path: String) {
-        guard let detection = try? GitRepoDetector.detect(path: path) else { return }
+        let detection: GitPathType
+        do {
+            detection = try GitRepoDetector.detect(path: path)
+        } catch {
+            // `detect` throws when `.git` exists but can't be read
+            // (permissions glitch, truncated file, FS error). Surface
+            // it to the user — otherwise a dragged folder silently
+            // fails to appear. Same policy as `GIT-1.3` on `discover`.
+            NSLog("[Espalier] addPath: detect failed for %@: %@",
+                  path, String(describing: error))
+            let alert = NSAlert()
+            alert.messageText = "Could not add repository"
+            alert.informativeText = "\(path)\n\n\(String(describing: error))"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
 
         switch detection {
         case .repoRoot(let repoPath):
@@ -455,6 +478,17 @@ struct MainWindow: View {
                 errorAlert.runModal()
                 return
             } catch {
+                // Non-git-exit errors (git binary missing, subprocess launch
+                // failure, etc.). User clicked Delete Worktree; a silent
+                // bail leaves them wondering why nothing happened. Match
+                // the Add Repository path (GIT-1.2) with an alert. GIT-4.11.
+                NSLog("[Espalier] performDeleteWorktree: git launch failed for %@: %@",
+                      worktreePath, String(describing: error))
+                let errorAlert = NSAlert()
+                errorAlert.messageText = "Could not delete worktree"
+                errorAlert.informativeText = "\(error)"
+                errorAlert.alertStyle = .warning
+                errorAlert.runModal()
                 return
             }
 
@@ -510,9 +544,17 @@ struct MainWindow: View {
                 if wt.path == worktreePath && wt.state == .running {
                     let terminalIDs = wt.splitTree.allLeaves
                     if terminalManager.needsConfirmQuit(terminalIDs: terminalIDs) {
+                        // TERM-1.3: the dialog identifies the worktree
+                        // with its sidebar displayName, not the raw
+                        // `wt.branch`. For a detached HEAD that's
+                        // `(detached)` — awkward ("running processes in
+                        // (detached)") — whereas displayName gives the
+                        // directory basename users actually recognise.
+                        let siblingPaths = appState.repos[repoIdx].worktrees.map(\.path)
+                        let label = wt.displayName(amongSiblingPaths: siblingPaths)
                         let alert = NSAlert()
                         alert.messageText = "Stop Worktree?"
-                        alert.informativeText = "There are running processes in \(wt.branch). Stop all terminals?"
+                        alert.informativeText = "There are running processes in \(label). Stop all terminals?"
                         alert.addButton(withTitle: "Stop")
                         alert.addButton(withTitle: "Cancel")
                         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -539,8 +581,26 @@ struct MainWindow: View {
             return
         }
 
-        Task {
-            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+        Task { @MainActor in
+            let discovered: [DiscoveredWorktree]
+            do {
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+            } catch {
+                // User-initiated path: the user picked a folder in the
+                // Add Repository dialog. If git discovery fails (folder
+                // isn't a repo, git binary missing, permissions), a
+                // silent `return` leaves the user wondering why nothing
+                // happened. Surface the failure in an alert so they can
+                // pick a different folder or investigate. GIT-1.2.
+                NSLog("[Espalier] addRepoFromPath: discover failed for %@: %@",
+                      repoPath, String(describing: error))
+                let alert = NSAlert()
+                alert.messageText = "Could not add repository"
+                alert.informativeText = "\(repoPath)\n\n\(String(describing: error))"
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
             let worktrees = discovered.map { WorktreeEntry(path: $0.path, branch: $0.branch) }
             let displayName = URL(fileURLWithPath: repoPath).lastPathComponent
             let repo = RepoEntry(path: repoPath, displayName: displayName, worktrees: worktrees)

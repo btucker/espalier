@@ -82,6 +82,33 @@ public struct PaneInfo: Codable, Sendable, Equatable {
         self.title = title
         self.focused = focused
     }
+
+    /// Row produced by `espalier pane list` for this pane. Extracted
+    /// from the CLI so it's unit-testable without a running server.
+    /// ATTN-1.11: id is right-padded to width 3 for typical layouts,
+    /// but a single separator space is always inserted before the
+    /// title regardless of id width — so pane IDs ≥ 100 don't collide
+    /// visually with their title.
+    ///
+    /// A whitespace-only title is treated the same as nil / empty so
+    /// the row clips cleanly; contentful titles with surrounding
+    /// whitespace are preserved verbatim. Mirrors `PaneTitle.display`'s
+    /// LAYOUT-2.14 behaviour for the `pane list` output surface.
+    public func formattedLine() -> String {
+        let marker = focused ? "*" : " "
+        let idStr = String(id)
+        let minWidth = 3
+        let padLen = max(0, minWidth - idStr.count)
+        let padding = String(repeating: " ", count: padLen)
+        let renderedTitle: String? = {
+            guard let title, !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return title
+        }()
+        guard let renderedTitle else {
+            return "\(marker) \(idStr)"
+        }
+        return "\(marker) \(idStr)\(padding) \(renderedTitle)"
+    }
 }
 
 /// Reply sent from the app back to the CLI after a request-style

@@ -1377,26 +1377,1246 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 - TERM-5.3 zmx shell exit — already landed; look for regressions.
 - Truly-stale click UX (placeholder + inline Dismiss) — many cycles queued.
 
-## Cycle 84 — 2026-04-19 (stale-worktree lifecycle survey, no new bug)
+## Cycle 79 — 2026-04-19 (LAYOUT-2.13 regressed by ZMX-6.4)
 
-### Exercised
-- `git worktree add .worktrees/cycle84-test -b cycle84-test` → FSEvents discovery picked it up (~instant) as `.closed` with correct branch.
-- `espalier notify` from inside the new worktree → landed on it correctly (state.json timing was just slow first check; attention appeared on second read).
-- `rm -rf .worktrees/cycle84-test` externally → worktreeMonitor's path watcher transitioned state to `.stale` within 3s.
-- `git worktree prune` → removed the `.git/worktrees/cycle84-test/` metadata. State.json still holds the `.stale` entry; reconciler has no "stale AND not in discovered → remove" rule.
+### Context
+- Post PR #36 merge, rebuilt + installed clean app from origin/main + my cycles-70/76 cherry-picks. Started a fresh dogfood session.
+- (Cycles 52–77 were worked on a pre-rebase branch; after `git reset --hard origin/main` + cherry-pick of just the two code commits, the per-cycle journal entries didn't survive. The essentials live in their commit messages and in PR #36's description.)
 
-### Classification
-- The persistent-stale-after-prune behavior is spec-compliant per GIT-3.6: "While a worktree entry is in the stale state, the context menu shall include a 'Dismiss' action..." implies Dismiss is the ONLY remove-from-sidebar path for stale entries. Auto-cleanup on prune isn't in the spec. Minor UX annoyance for Andy's "creates worktrees faster than UI can discover them" + rm cycle, but not a bug.
+### Found immediately
+- `espalier pane list` on the 20260418 worktree reported pane titles as ~200-char shell strings starting with `if [ -n "$ZDOTDIR" ]; then export GHOSTTY_ZSH_ZDOTDIR=…`. Sidebar was literally rendering that bootstrap line as each pane's label.
 
-### Audited
-- `AppState.setFocusedTerminal` doesn't validate terminalID against splitTree. A race between click and close_surface_cb could leave `focusedTerminalID` pointing at a removed leaf. User-visible consequence: sidebar's "focused pane" highlight disappears until the next click. Not fragile enough to fix (optional chaining on consumer side keeps subsequent renders safe).
-- `WorktreeEntry` Codable decode doesn't validate `focusedTerminalID` ∈ `splitTree.allLeaves` either. Same transient-only impact on deserialization.
-- All closePane + Stop + Dismiss paths correctly clean up `paneAttention`. No orphan-badge accumulation surface remaining.
+### Root cause
+- PR #35 (yesterday) tightened the `ZmxLauncher` prefix from a naked env-assignment (`GHOSTTY_ZSH_ZDOTDIR="$ZDOTDIR" ZDOTDIR=…`) to a shell conditional (`if [ -n "$ZDOTDIR" ]; then export GHOSTTY_ZSH_ZDOTDIR="$ZDOTDIR"; fi; ZDOTDIR=…`). Good fix for the ZMX-6.4 regression it targeted. But the `PaneTitle.isLikelyEnvAssignment` guard (LAYOUT-2.13) was keyed on `^[A-Z_][A-Z0-9_]*=` — an uppercase-prefix heuristic. The new conditional starts with lowercase `if` and slipped right past the filter, and ghostty's preexec hook echoed the whole bootstrap into OSC 2 as the pane's title.
+
+### Fixed
+- `PaneTitle.isLikelyEnvAssignment` now also rejects titles containing the literal `GHOSTTY_ZSH_ZDOTDIR` substring. That marker appears in BOTH bootstrap shapes and in no legitimate human-facing title.
+- SPECS.md `LAYOUT-2.13` revised to codify shape (a) uppercase-env and shape (b) contains-marker as independent filtering conditions.
+- Defensive test: a bare "if you see this" title is NOT filtered — we anchor on the marker, not the `if` keyword.
+
+### Tests (TDD)
+- `filtersZmxBootstrapLeak` — failing test against the real 200-char ZMX-6.4 bootstrap string.
+- `keepsLegitimateIfStatements` — guard against over-rejection.
+- **468/468 pass** (+2 new).
+
+### Commit
+- `947e893 fix(pane-title): catch post-ZMX-6.4 bootstrap leak (LAYOUT-2.13)`
+
+### Try next cycle
+- State.json still carries the 200-char poisoned titles in every running worktree's surfaces. After the fix, those stale entries stay until the next inner-shell title push overwrites them. Is there a migration/cleanup step worth adding, or do we trust the shell-integration's first prompt?
+- Reinstall + reinteract: with the new filter in place, do panes render with PWD-basename fallback as expected?
+
+## Cycle 80 — 2026-04-19 (Phantom-pane uncloseable — TERM-5.7/5.8)
+
+### Context
+- Rebuilt/reinstalled post cycle 79's LAYOUT-2.13 fix. Fresh app launch restored 4 running worktrees with several panes each. Console log: `embedded_window: error initializing surface err=error.OutOfMemory` repeating — libghostty refused multiple surface creations.
+- TERM-5.5's failable init kept the app alive, but left `splitTree` containing leaves without `SurfaceHandle` entries in `terminalManager.surfaces`.
+
+### Found live
+- `espalier pane list` showed 3 panes in 20260418 worktree.
+- `espalier pane close 3` → exit 0 (CLI reports `ok`).
+- `espalier pane list` → still shows 3 panes. `state.json` leaf count unchanged.
+- A phantom pane with no surface is **uncloseable**: Cmd+W, CLI close, and context-menu Close all route through `closePane`, which bails at the TERM-5.7 handle-nil guard because the handle never existed to begin with.
+
+### Spec ambiguity
+- `TERM-5.7` says "when `close_surface_cb` fires for a pane whose handle is torn down, no-op." That was written for the Stop-cascade case. User-initiated closes were implicitly covered by "normal path: handle exists." OOM-on-restore produces a third scenario the spec didn't name.
+
+### Fixed
+- Added `PhantomPaneClosePolicy.shouldRemoveFromTree(userInitiated:, handleExists:)` in EspalierKit.
+- `closePane` gained a `userInitiated: Bool = false` parameter. CLI close and Cmd+W pass `true`; libghostty's async `close_surface_cb` keeps `false`.
+- The handle-nil guard now sits behind the policy helper — user-initiated paths bypass it; library-initiated paths keep the Stop-cascade protection.
+
+### Spec
+- **TERM-5.7 revised** to say "library-initiated only."
+- **TERM-5.8 added** to codify the user-initiated phantom-cleanup case, with implementation-seam hint pointing at the `userInitiated` parameter.
+
+### Tests (TDD)
+- `PhantomPaneClosePolicyTests` — 4 cases exhaustively covering `(user × handle)` truth table.
+- **472/472 pass** (+4).
+
+### Commit
+- `fix(close): let user-initiated close remove phantom panes (TERM-5.8)`
+
+### Try next cycle
+- Reinstall + test: `espalier pane close` on a phantom pane should now actually close. May require forcing OOM again (easy — just have many running worktrees on relaunch).
+- Audit: are there OTHER guards in the codebase that treat "handle missing" as "bail," regardless of caller intent? e.g. `destroySurface`'s no-op-on-missing path is safe; `setFocus` falls through; `typeText` on a missing handle is skipped (correct). Quick sweep next cycle.
+
+## Cycle 81 — 2026-04-19 (TERM-5.8 verified, no new bug)
+
+### Verified
+- Rebuilt + reinstalled with cycle 80's TERM-5.8 fix. App re-opened, libghostty still `error.OutOfMemory` on restore (same 4+ worktree setup).
+- `espalier pane close 3` → exit 0, splitTree leaf count dropped from 3 to 2. **Phantom close works.**
+- Closed the remaining two phantoms one by one → splitTree empty, worktree transitioned to `.closed`, `focusedTerminalID` cleared. TERM-5.8 handles the last-pane-close case correctly (same path as normal close).
+
+### Audited — no new bugs
+- Swept all `handle(for:)` call sites in the app target. The four non-closePane uses all go through optional-chaining (`?.typeText(...)`, `?.view`, etc.) and silently skip on missing handle. That's the right shape for "render / type if you can, otherwise do nothing" — can't be exploited the same way the closePane guard could.
+- `clipboard_read_cb` (GhosttyBridge): guards with `guard let handle` before clipboard op. Missing handle → no-op (paste silently fails on a destroyed surface). Acceptable.
+
+### Noted but not fixed
+- **Attention-to-closed-worktree silence.** Sending `espalier notify` from a shell whose worktree is `.closed` in Espalier stores the attention in state.json but STATE-2.3 explicitly says "Non-running worktrees (no pane rows) display no attention indicator." Then the user's next click to open clears the attention via STATE-2.4. Net: notify lost silently. Edge case (Andy's shells are normally inside running Espalier panes, so worktree is `.running`), but worth flagging — it conflicts with the "stop feeling like a plate-spinner" JTBD. Fix would require a spec decision (show badge on closed-worktree row, or reject notify to closed, or retain attention through the click).
+
+### Tests
+- 472/472 pass (unchanged — verification cycle).
+
+### Try next cycle
+- Stop Worktree via context menu — does it cleanly tear down a mix of live + phantom panes?
+- Delete Worktree while CLI operations race against it (pane close mid-delete).
+- If screenshot access returns, click the now-closed 20260418 worktree to test .closed → .running with OOM pressure again.
+
+## Cycle 82 — 2026-04-19 (CLI fails on /tmp worktrees — ATTN-1.5)
+
+### Found live
+- Created a worktree externally: `git worktree add /tmp/espalier-cycle82-test -b cycle82-test`. FSEvents discovered it ~instantly; state.json got `/private/tmp/espalier-cycle82-test` (git resolves the symlink forward).
+- `cd /tmp/espalier-cycle82-test && espalier notify "hello"` → exit 1, `"Not inside a tracked worktree"`. Exact message the CLI emits when `isTracked` returns false. Yet state.json clearly tracks the worktree.
+
+### Root cause
+- macOS's `/tmp` is a symlink to `/private/tmp` (private root). Foundation's `URL.resolvingSymlinksInPath` / `NSString.resolvingSymlinksInPath` / `standardizingPath` all **collapse `/private/tmp` → `/tmp`** — the "logical" form. POSIX `realpath(3)` goes the other way, keeping the "physical" form. `git worktree list --porcelain` uses the physical form.
+- `GitRepoDetector.detect(path: pwd)` called `URL(fileURLWithPath: path).resolvingSymlinksInPath()` at the top, which produced `/tmp/espalier-cycle82-test`. State.json's entry was `/private/tmp/espalier-cycle82-test`. Literal `==` in `AppState.worktree(forPath:)` → no match → `isTracked` false.
+
+### Fixed
+- New `CanonicalPath.canonicalize(_:)` in EspalierKit, POSIX `realpath`-based. Handles missing-leaf (parent-resolve + reappend) and returns input on other failures.
+- `GitRepoDetector.detect` + `resolveRepoRoot` now route initial + gitdir paths through `CanonicalPath.canonicalize` instead of Foundation's resolver.
+- Existing `GitRepoDetectorTests` (detectsRepoRoot / detectsWorktree / detectsSubdirectoryOfRepo) had papered over the issue by also calling `NSString.resolvingSymlinksInPath` on their EXPECTED paths — so both sides were wrong in the same direction. Updated them to use `CanonicalPath.canonicalize` on both sides.
+
+### Spec
+- **ATTN-1.5 tightened** to pin `realpath(3)` semantics and explain why Foundation's resolver is wrong for this lookup.
+
+### Tests (TDD)
+- `CanonicalPathTests` — 4 cases: `/tmp` → `/private/tmp`, already-canonical preserved, missing-leaf with resolved parent, `/` preserved. Failing test-first, passed after impl.
+- **476/476** total pass.
+
+### Verified end-to-end
+- Repeated the live failure scenario post-fix: `cd /tmp/espalier-cycle82-test && espalier-cli notify "hello"` → exit 0, attention lands in state.json on the correct worktree.
+
+### Commit
+- `fix(cli): canonicalize pwd with realpath so /tmp worktrees resolve (ATTN-1.5)`
+
+### Try next cycle
+- Stop Worktree context-menu behavior — still untested interactively.
+- Re-sweep for OTHER `resolvingSymlinksInPath` call sites that may hit the same private-root issue (e.g. in stats / discovery layers).
+
+## Cycle 83 — 2026-04-19 (post-ATTN-1.5 symlink sweep, no new bug)
+
+### Swept
+- Grepped all `Sources/` for `resolvingSymlinksInPath`, `standardizingPath`, `standardizedFileURL`. Only hits are in the new `CanonicalPath.swift` doc comment. No other call sites to migrate.
+- Path-equality chains in `AppState` (`addRepo`, `worktree(forPath:)`, `repo(forWorktreePath:)`, `indices(forWorktreePath:)`, `removeWorktree`, `removeRepo`) — all consume paths produced by `GitRepoDetector` or `GitWorktreeDiscovery.discover`. Both producers now emit canonical (realpath) form post cycle 82, so literal `==` works.
+- Verified `git worktree list --porcelain` always emits physical paths, even if a worktree was added via the logical form. (Cross-checked: `git worktree add /tmp/…` registers as `/private/tmp/…` in the porcelain output.)
+- `selectPane` on a phantom leaf is a no-op against the invisible surface (setFocus iterates `surfaces`, skips missing handles; `makePaneFirstResponder` early-returns on no-view). The user sees sidebar-focused state but content area stays dark. Not a bug — consequence of libghostty OOM, not a click-handling issue.
+- `selectWorktree`'s post-resurrect path leaves `focusedTerminalID = nil` in the model (AppKit first-responder is still set via fallback to `allLeaves.first`). Minor model/view drift but not user-visible.
+
+### Broke
+- Nothing.
 
 ### Tests
 - 476/476 pass (unchanged).
 
 ### Try next cycle
+- Stop Worktree + Cmd+W interactive testing (still blocked by flaky screenshot permission).
+- Web-access path over Tailscale — not exercised this session.
+- `Reload Ghostty Config` menu-label mismatch (cycle 75 queued item).
+
+## Cycle 84 — 2026-04-19 (stale-worktree lifecycle survey, no new bug)
+
+### Exercised
+- `git worktree add .worktrees/cycle84-test -b cycle84-test` → FSEvents discovery picked it up (~instant) as `.closed` with correct branch.
+- `espalier notify` from inside the new worktree → landed on it correctly (first state.json check was just read too fast; retry saw the attention).
+- `rm -rf .worktrees/cycle84-test` externally → worktreeMonitor's path watcher transitioned state to `.stale` within 3s.
+- `git worktree prune` → removed `.git/worktrees/cycle84-test/` metadata. State.json still holds the `.stale` entry; reconciler has no "stale AND not in discovered → remove" rule.
+
+### Classification
+- Persistent-stale-after-prune is spec-compliant per GIT-3.6 ("the context menu shall include a 'Dismiss' action" implies Dismiss is the only remove path for stale entries). Auto-cleanup on prune isn't in the spec. Minor UX annoyance for Andy's "creates worktrees faster than UI can discover" + `rm` rhythm, but not a bug.
+
+### Audited
+- `AppState.setFocusedTerminal` doesn't validate terminalID against splitTree. A race between click and `close_surface_cb` could leave `focusedTerminalID` at a removed leaf. User-visible consequence: sidebar's "focused pane" highlight disappears until the next click. Transient only — not fragile enough to fix.
+- `WorktreeEntry` Codable decode doesn't validate `focusedTerminalID ∈ splitTree.allLeaves` either. Same transient-only impact on deserialization.
+- closePane + Stop + Dismiss + PWD-reassign paths all correctly clean up `paneAttention`. No orphan-badge accumulation surface.
+
+### Tests
+- 476/476 pass (unchanged).
+
+### Meta
+- Accidentally made the initial cycle-84 journal commit in the main-repo checkout instead of this worktree (cwd drifted mid-session). That commit is `2b2ddb7 chore(dogfood): log cycle 84` on `main` locally — `.blindspots/dogfood-journals/` is gitignored but I used `git add -f`. Sandbox refused both reset and revert. **Leaving the stray commit in place on main for the user to handle (`git -C /Users/btucker/projects/espalier reset --hard HEAD~1` will drop it cleanly if desired).**
+
+### Try next cycle
 - Exercise Stop Worktree context menu interactively once screenshot comes back.
 - Web-access/Tailscale path is still unexercised this session.
-- Consider a low-priority follow-up: add the "stale-not-in-discovered → remove" rule to reconciler for Andy's rapid-churn case. Would need a new spec line (GIT-3.12?).
+
+## Cycle 85 — 2026-04-19 (addWorktree + web-settings audit, no new bug)
+
+### Audited
+- `addWorktree` path: `GitWorktreeAdd.add` runs `git worktree add -b <branch> <path> [<startPoint>]`, captures stderr, surfaces errors to the AddWorktreeSheet. Clean. Constructed `worktreePath = repoPath + "/.worktrees/" + name` could in theory disagree with what git later emits for `worktree list --porcelain`, but repoPath was canonicalized by cycle 82's ATTN-1.5 fix so this matches.
+- `WorktreeNameSanitizer`: strict ASCII allowlist. Unicode (e.g., Chinese / emoji) collapses to `-`. Idempotent.
+- `WebAccessSettings` (`@AppStorage WebAccessEnabled:Bool`, `WebAccessPort:Int`): defaults off / 8799. `WebSettingsPane` TextField uses `format: .number` which rejects non-numeric input. Port goes through `isValidListenablePort(0...65535)` gate in WebServerController before NIO bind.
+- `GitWorktreeRemove`: `git worktree remove <path>`; path passes through untouched to git.
+- `SocketServer.acceptConnection`: DispatchSource's accept path fires per pending connection; handleClient dispatched to the serial queue. No missed-event shape observed.
+- `installCLI`: hardcoded `/usr/local/bin/espalier` symlink; simple CLIInstaller planner + install flow.
+
+### Broke
+- Nothing.
+
+### Tests
+- 476/476 pass (unchanged).
+
+### Try next cycle
+- Might be worth opening another PR with cycles 79, 80, 82 accumulated (LAYOUT-2.13, TERM-5.8, ATTN-1.5). Three real fixes since PR #36.
+- If screenshot permission recovers, test Stop Worktree context menu interactively.
+
+## Cycle 86 — 2026-04-19 (Force-quit leaves attention stuck — STATE-2.12)
+
+### Found by code audit
+- Cycle 85 noted cycle 82 found a path-canonicalization bug. Following the "persistence layer vs runtime-only state" thread that surfaced in cycle 81's "notify to closed worktree" observation, walked the lifecycle of `Attention.clearAfter`. The schedule site is `DispatchQueue.main.asyncAfter(deadline: .now() + effectiveClearAfter)` in `handleNotification` / `setAttentionForTerminal`. That timer is in-memory only. State.json persists the `Attention` struct (text + timestamp + clearAfter) but NOT any timer identity.
+
+### Broke
+- **Force-quit during a `--clear-after` window strands the attention badge.** Repro by thought experiment (didn't need to reproduce live since the code path is obvious): set `notify "x" --clear-after 60`, force-quit at T=30, relaunch. Attention persists with `clearAfter=60` and a 30-second-old timestamp; no code re-schedules. Badge sticks until user clicks the worktree. Same defect hits pane-scoped attention from shell-integration COMMAND_FINISHED pings.
+
+### Fixed
+- New pure helper `AttentionResumePolicy.remainingTime(for:now:)`. Returns:
+  - `nil` → no timer (attention had no `clearAfter`)
+  - `0` → expired; caller schedules zero-delay asyncAfter that fires next main-queue turn
+  - positive → remaining seconds to schedule
+  - clamps to full `clearAfter` when timestamp is in the future (clock-skew defense)
+- `EspalierApp.restoreRunningWorktrees` now ends with a call to `resumePersistedAttentionTimers()` which walks every worktree's `attention` and `paneAttention` entries, calls the helper, and schedules `asyncAfter` with the correct remaining time + `clearAttentionIfTimestamp` / `clearPaneAttentionIfTimestamp` dispatch.
+
+### Spec
+- **STATE-2.12 added** — pins the "restart-reschedule" contract, including the two edge cases (already-expired → 0 delay; future timestamp → clamp to full window).
+
+### Tests (TDD)
+- `AttentionResumePolicyTests` — 5 cases covering the decision matrix. Failing → passed after impl.
+- **481/481** total pass.
+
+### Commit
+- `fix(attention): resume auto-clear timers on restart (STATE-2.12)`
+
+### Try next cycle
+- Reinstall + verify end-to-end: send `notify --clear-after 20`, force-quit within the window, relaunch, confirm the badge self-clears after the remaining seconds.
+- Re-sweep: are there OTHER persisted state entries that carry implicit timers or ephemeral companions? (Doesn't look like it — I've now audited attention, paneAttention, stats, PR status, and focusedTerminalID.)
+
+## Cycle 87 — 2026-04-19 (zmx-kill race + attention-orphan audit, no new bug)
+
+### Context
+- PR #37 (cycles 79/80/82/86 bundle) opened, `build-and-test` pending, auto-merge enabled. Rebase deferred until it lands.
+
+### Audited
+- **ZMX-4.3 vs ZMX-4.4 race.** destroySurface queues `DispatchQueue.global.async { launcher.kill(...) }`. If the app quits between queuing and execution, the zmx session leaks. Per ZMX-4.4 the app deliberately *doesn't* kill sessions on quit (lets daemons survive for next-launch reattach), but this leaves orphan daemons for the specific "Cmd+W then quick Cmd+Q" timing. Daemons are lightweight; accumulate until user runs `zmx list` / `zmx kill`. Design consequence, not a spec violation.
+- **Orphan `paneAttention` keys after restart.** Walked every pane-close path (closePane, prepareForStop, prepareForDismissal, prepareForResurrection, reassignPaneByPWD). All clean up `paneAttention[terminalID]`. The only window for persistence-orphan is a sub-ms race between mutation and `.onChange`-triggered save. Cycle 86's STATE-2.12 resume handles the case gracefully anyway (`clearPaneAttentionIfTimestamp` is a no-op if the key is missing).
+- **AttentionResumePolicy edge cases.** Negative `clearAfter` (shouldn't exist per STATE-2.8 clamp, but possible if hand-edited) → treated as "already expired" → 0 delay. `clearAfter = 0` → same. Defensive.
+- **PaneInfo title rendering.** CLI print concatenates title verbatim. If a title contains newlines (decoded from JSON `\n`), pane list would span multiple lines. Weird but non-critical.
+
+### Broke
+- Nothing.
+
+### Tests
+- 481/481 pass (unchanged).
+
+### Try next cycle
+- Once PR #37 merges, rebase and continue against a clean main.
+- Look at the PR merge-offer dialog's interaction with the `OfferedDeleteForMergedPR` persistence + refresh cadence — is there a timing case where a user gets double-prompted?
+- Web/Tailscale path still unexercised in this session.
+
+## Cycle 88 — 2026-04-19 (SIGKILL/SIGTERM spec drift in WebSession — WEB-4.5)
+
+### Rebase
+- PR #37 + PR #38 (WorktreeNameSanitizer `/` support, GIT-5.1) both merged to origin/main. Hard-reset this branch onto the fresh main; restored journal from temp backup so per-cycle history stayed on this branch only.
+
+### Found by spec re-read
+- Sweeping `SPECS.md` for spec-vs-code mismatches after PR #37. WEB-4.5 reads: "When a WebSocket closes, the application shall send **SIGTERM** to the associated `zmx attach` child…"
+- `WebSession.close()`'s docstring (line 11) also says "sends SIGTERM to the child", but the body called `kill(pid, SIGKILL)` with a comment arguing SIGKILL was fine because "the daemon handles abrupt client disconnect." In-code intent (docstring) matched spec; implementation had drifted.
+
+### Broke
+- Spec violation. The `zmx attach` client didn't get a chance to clean up on graceful WS close (e.g. flush a trailing buffer, log the disconnect, detach cleanly from the daemon). Observable only to anyone auditing Zmx daemon state across many WS sessions. Not a user-visible crash.
+
+### Fixed
+- Swapped `SIGKILL` → `SIGTERM`. Rewrote the surrounding comment to cite WEB-4.5 + the waitpid-reap window as the safety net. Docstring now matches body.
+
+### Spec
+- Unchanged. WEB-4.5 already says SIGTERM.
+
+### Tests
+- 483/483 pass (PR #38 landed +2 new WorktreeNameSanitizer cases). Not unit-testable at WebSession layer without significant mock plumbing — PtyProcess.spawn → real subprocess. Signal-swap + rationale update is the substantive change.
+
+### Commit
+- `fix(web): send SIGTERM to zmx attach on WS close per WEB-4.5`
+
+### Try next cycle
+- Continue spec-vs-code audit — any other "comment says X, code does Y" drift?
+- Interactive exercise of web/Tailscale path if time permits.
+
+## Cycle 92 — 2026-04-19 (zmx-attach child leaks parent fds — WEB-4.6)
+
+### Explored
+- Continuing the cycle 89–91 web UI thread. After getting the picker and session page working end-to-end, I noticed launching Espalier twice in a row sometimes failed to rebind port 8799.
+
+### Found by process archaeology
+- `ps -ax -o pid,lstart,comm | grep zmx` after an Espalier quit showed zmx PID 38230, started 21:28:50, with `lsof -iTCP:8799` confirming it held the listen socket as LISTEN. Parent Espalier had started at 21:15 and long since exited. The child outlived its parent AND was holding a TCP listen socket that only `WebServer` should ever have opened.
+- Tracing the fd lineage: `PtyProcess.swift` forks the zmx-attach child then immediately `dup2`s the PTY slave onto 0/1/2 and execs. Anything above fd 2 without `FD_CLOEXEC` (NIO sockets default to NOT setting it) survives into the child's exec'd image AND stays with zmx after it forks its own session leader.
+
+### Broke
+- Port 8799 (or any web port) gets tied to the orphan zmx after Espalier exits. Next Espalier launch hits `NIOBindError(EADDRINUSE)`. Observable as "why isn't the web UI showing up?" followed by a manual `kill -9 <stale-zmx>` to recover.
+
+### Fixed
+- In the fork child of `PtyProcess.spawn`, close fds 3..getdtablesize() before `execve`. One dead end: first tried `RLIMIT_NOFILE.rlim_cur` which on macOS can be `RLIM_INFINITY` → cast to Int32 = 2,147,483,647 close() syscalls → tests hung for 10+ minutes with 0.5s CPU. `getdtablesize()` returns the per-process fd table ceiling (≤10k in practice) — that's the right knob.
+
+### Spec
+- Added **WEB-4.6**: fork child must close every inherited fd above 2 before execve, with rationale about orphan zmx holding the listen port.
+
+### Tests
+- 484/485 pass. One fd-count test in WorktreeMonitorTests is flaky under concurrent-test load (delta 46 vs threshold 40) — passes in isolation, not related to this fix.
+
+### Commit
+- `fix(web): close inherited fds in zmx-attach child fork (WEB-4.6)`
+
+### Try next cycle
+- Bundle the recent web UI work (WEB-5.4 picker, absolute asset paths, fd-close fix) and open a PR.
+- More adversarial testing: what happens if you quit Espalier while 10 web clients are mid-stream?
+
+## Cycle 93 — 2026-04-19 (loopback bind is dead — WEB-2.5)
+
+### Explored
+- After cycle 92 cleared up the fd-leak orphan-zmx issue, picked at the web/Tailscale auth path. Tried a naïve local probe: `curl http://127.0.0.1:8799/` → `403 forbidden`.
+
+### Diagnosed
+- `WebServerController.reconcile()` binds `127.0.0.1` alongside each Tailscale IP (WEB-1.1), but the `AuthPolicy` closure unconditionally calls `api.whois(peerIP:)`.
+- `tailscale whois 127.0.0.1` returns "peer not found". Loopback requests fail whois → WEB-2.3 → HTTP 403.
+- Net effect: the 127.0.0.1 bind is cargo — it consumes the port locally (useful for noticing double-launches) but never serves a byte.
+
+### Broke
+- User on the same Mac as Espalier cannot use the web UI via `http://127.0.0.1:<port>/`. Remote Tailscale clients work; local does not. Silently wrong, easy to assume "no web access at all" and blame the server.
+
+### Fixed
+- New `AuthPolicy.allowingLoopback()` decorator in `WebServer.swift` — wraps any policy with a fast-path that approves `127.0.0.1` / `::1` without consulting the wrapped policy. `WebServerController` composes it onto its Tailscale-whois policy.
+
+### Spec
+- Added **WEB-2.5** (loopback bypass), with the rationale tied back to WEB-1.1 and WEB-2.3.
+
+### Tests
+- New `loopbackBypassAllowsLocalConnection` — integration test: deny-all policy + `.allowingLoopback()`, 127.0.0.1 GET / expects 200. Fails without the decorator; passes with it.
+- New `loopbackBypassDelegatesForNonLoopbackPeer` — unit test of decorator.
+- Both added, failing ahead of the fix (compile error on the decorator name), passing after. 487/487 overall.
+
+### Commit
+- `fix(web): allow loopback peers without Tailscale whois (WEB-2.5)`
+
+### Try next cycle
+- Survey the AuthPolicy flow for other latent drift: do WS upgrades honor loopback bypass too? (Expect yes since WSS uses the same closure, but worth confirming in a test.)
+- Bundle + install: keep verifying the picker works end-to-end under a fresh launch.
+- Adversarial: `curl -H "X-Forwarded-For: owner-ip" http://other-ts-peer:8799/` — does our WebServer honor forwarded peer IPs? (It shouldn't; peer comes from the socket.)
+
+## Cycle 94 — 2026-04-19 ("Espalier is not running" lies when socket is stale — ATTN-3.4)
+
+### Explored
+- `espalier notify "Hello"` said "Espalier is not running". But `pgrep` showed Espalier PID 45975 running. So what?
+
+### Diagnosed
+- `lsof -p 45975 | grep unix` → zero Unix-domain listeners. TCP listeners on 8799 only. Espalier is alive but its notification socket is dead.
+- `lsof <sock-path>` → no process holds the socket fd. The file exists at mtime 21:39 (an earlier instance's leftover); current process started at 22:06 and did not recreate it. `try? services.socketServer.start()` in `EspalierApp.swift:342` silently swallowed some startup failure, leaving Espalier running with no CLI surface.
+- CLI's `openConnectedSocket()` conflates two cases in `errno`: `ENOENT` (file missing → app not running) and `ECONNREFUSED` (file exists, nobody listening → app running but socket broken). Both map to `.appNotRunning` / "Espalier is not running". Misleading, gives the user no lever.
+
+### Broke
+- Andy watches the sidebar for attention pings from sibling agents, fires `espalier notify …` and gets "Espalier is not running" every time. Rage-quits without knowing that a relaunch fixes it.
+
+### Fixed
+- Added `ControlSocketDiagnosis.classifyConnectFailure(errno:socketExists:path:)` in EspalierKit — pure function, splits `ECONNREFUSED + file exists` into `.staleSocket(path)`.
+- CLI `SocketClient.openConnectedSocket()` now calls the classifier, throws new `CLIError.staleControlSocket(path)` where applicable.
+- Error message: `"Espalier is running but not listening on <path>. Quit and relaunch Espalier to reset the control socket."`
+- Verified live: ran the updated CLI against the broken running Espalier and saw the new message instead of the old lie.
+
+### Spec
+- Added **ATTN-3.4** under §5.3 Error Handling, cross-referencing ATTN-3.1.
+
+### Tests
+- New `ControlSocketDiagnosis` test suite: four cases covering (ECONNREFUSED+exists→stale), (ENOENT→notRunning), (ECONNREFUSED+missing→notRunning, TOCTOU case), (other errno→timeout).
+- All pass. 490/491 overall; the lone failure is the known-flaky `watchersCloseTheirFdsWhenCancelled` fd-count test under concurrent-test pressure — delta 76 today, unrelated to this change.
+
+### Commit
+- `fix(cli): distinguish stale control socket from 'not running' (ATTN-3.4)`
+
+### Didn't touch (but should eventually)
+- `try? services.socketServer.start()` is still silent — if startup fails, the UI shows nothing wrong but the notify surface is dead. Ideally Espalier would surface socket-start failures in the Espalier menu (e.g. "Control socket unavailable — restart Espalier") or at least log via os_log. Deferred because fixing the CLI error is the user-facing lever; fixing the app's silent swallow is a follow-on.
+
+### Try next cycle
+- Audit other `try?` call sites in `EspalierApp.swift` for swallowed startup errors.
+- Andy's scenario: spin up 5 worktrees rapidly (faster than file-system events get dispatched) and see if any get left in an inconsistent state. Related to PWD reassignment / CanonicalPath (cycles 76, 82).
+
+## Cycle 95 — 2026-04-19 (silent try? at socket-server startup — ATTN-2.7)
+
+### Explored
+- Cycle 94's journal flagged the `try? services.socketServer.start()` line as the root cause of the stale-socket symptom. ATTN-3.4 helps the user recover, but the app still silently swallows the reason. Picked up the deferred follow-on.
+
+### Diagnosed
+- `Sources/Espalier/EspalierApp.swift:342` wrapped `SocketServer.start()` in `try?`. On failure (overlong `ESPALIER_SOCK`, bind EACCES, listen backlog exhaustion, etc.) the error vanished and the app ran on happily.
+- `SocketServer` had no record of its last error either — there was literally no trail.
+
+### Broke
+- Support scenario: "my CLI says not-running but Espalier is right there." Even with ATTN-3.4 the user now gets a relaunch hint, but we (the maintainers) have nothing in Console.app / state to reconstruct why the socket died the first time. Silent-failure anti-pattern.
+
+### Fixed
+- `SocketServer.start()` now records its error in a new `public private(set) var lastStartError: SocketServerError?` property before throwing, and clears it on success. Implementation split into `start()` (public wrapper) + `_start()` (actual work) so the capture is centralised.
+- `EspalierApp.startup()` replaces `try?` with `do { try … } catch { NSLog(…) }`. The next time socket startup fails, Console.app records what went wrong.
+
+### Spec
+- Added **ATTN-2.7** cross-referencing ATTN-3.4.
+
+### Tests
+- `lastStartErrorCapturesFailure` — overlong path, expect `.socketPathTooLong` stored.
+- `lastStartErrorClearsOnSuccessfulRestart` — fresh server on a good path has `lastStartError == nil`, proving `start()` clears it on success.
+- 493/493 pass (the flaky fd-count test cooperated this run too).
+
+### Commit
+- `fix(app): surface SocketServer startup failures instead of silencing them (ATTN-2.7)`
+
+### Try next cycle
+- Consider surfacing `lastStartError` in the Espalier menu (next to Web server status) so even non-CLI users know when the notify surface is dead.
+- Audit remaining `try?` call sites in EspalierApp.swift (state save at :111, discover at :431/:1406/:1505 are the interesting ones).
+- Andy's rapid-worktree-creation scenario is still untouched.
+
+## Cycle 96 — 2026-04-19 (refresh() skips the fetchable-branch gate — PR-7.5)
+
+### Explored
+- Pivoted off the recent try?-audit arc. Looked at the PR status module (PR #16's async-git migration). Traced `refresh` / `branchDidChange` / polling loop against the `isFetchableBranch` gate (PR-7.3).
+
+### Diagnosed
+- The polling loop (`PRStatusStore+Poller`, line ~290) correctly `continue`s past any worktree whose branch is a git sentinel (`(detached)`, `(bare)`, etc).
+- BUT the on-demand refresh paths — `refresh(worktreePath:repoPath:branch:)` directly, and `branchDidChange(...)` which ends up calling `refresh` — do not check. Result: selecting a detached-HEAD worktree in the sidebar, or a HEAD-change event landing on a sentinel, fires two wasted `gh pr list --head '(detached)'` subprocess invocations. Andy rapid-switching worktrees during a demo = a stream of useless `gh` calls.
+- Return payload is an empty PR list so the cached state is correct (absent). No data corruption, just pointless subprocess churn.
+
+### Fixed
+- Added `guard Self.isFetchableBranch(branch) else { return }` at the top of `refresh()`. Centralised the gate at the fetch entry point instead of asking every caller to remember.
+- `branchDidChange` is covered transitively — it calls `clear` (which still runs; we DO want to wipe the cached PR when switching from a real branch to detached), then `refresh` (which now no-ops for the sentinel).
+
+### Spec
+- Added **PR-7.5** under §17.7 Polling cadence, cross-referencing PR-7.3.
+
+### Tests
+- `refreshWithSentinelBranchIsNoOp` — inject a CountingFetcher; call refresh with `(detached)`; expect `fetchCount == 0`, `inFlight` empty.
+- `branchDidChangeToSentinelDoesNotFetch` — seed inFlight; call branchDidChange with `(detached)`; expect the fake fetcher never invoked and inFlight cleared.
+- `refreshWithRealBranchStillFetches` — regression guard: `main` branch still reaches the fetcher exactly once.
+- Failed before the fix (counts 1 instead of 0), pass after. 496/496 overall.
+
+### Commit
+- `fix(prstatus): gate on-demand refresh with isFetchableBranch (PR-7.5)`
+
+### Try next cycle
+- Audit the remaining silent `try?` sites at lines :111 (state.json save), :431, :1406, :1505 (discover failures) for the same kind of follow-through.
+- Attempt the rapid-worktree-create scenario: create 10 worktrees in under 2s, see if any fall through the cracks.
+- Actually get screenshots working for a UI-centric cycle (permission was denied this cycle).
+
+## Cycle 97 — 2026-04-19 (silent try? on state.json save — PERSIST-2.2)
+
+### Explored
+- Ranged over Ghostty keybind module (clean, nothing to fix), pane CLI validation (well-guarded), zmx session handling, `.onChange(of: appState)` persistence path.
+- Also noticed a stray `name=--help` orphan zmx session in `zmx list --short`. Tracked but *not* Espalier's bug — zmx itself accepted `--help` as a session name during some external testing. Espalier's callers all look up specific `espalier-XXXXXXXX` names so correctness isn't affected.
+
+### Diagnosed
+- `EspalierApp.swift:111` had `try? newState.save(to: AppState.defaultDirectory)` in the `onChange(of: appState)` SwiftUI closure. Same family as cycle 95's `try? services.socketServer.start()` — any I/O error on the save path (full disk, read-only $HOME, permissions) is silently dropped and every subsequent state mutation is lost on next launch.
+- `AppState.save(to:)` already throws correctly — the contract is fine. The caller was masking it.
+
+### Broke
+- Worst-case user-visible symptom: Andy opens 4 new worktrees during a demo, `$HOME` is full (or the Application Support dir is read-only from a perms issue), Espalier silently drops every save; next launch is back to the pre-demo state with the worktrees gone from the sidebar. No log, no badge, no indication.
+
+### Fixed
+- Replaced `try?` with `do { try … } catch { NSLog(…) }`. Next save failure shows up in Console.app with `[Espalier] AppState.save failed: <err>`.
+
+### Spec
+- Added **PERSIST-2.2** under §6.2, cross-referencing ATTN-2.7.
+
+### Tests
+- New `saveThrowsWhenTargetDirectoryCannotBeCreated` in AppStateTests — creates a regular file at the target path so `createDirectory(at:withIntermediateDirectories:)` fails, expects `save` to throw. This pins the contract the caller now depends on (must actually throw so NSLog runs).
+- Passes on the pre-existing code — it was the caller that was broken, not `save`. 496/497 overall; the 1 failure is the known-flaky `watchersCloseTheirFdsWhenCancelled` fd-count test (delta 74 vs threshold 40) — concurrent-test noise, appeared in cycles 92 and 94 too.
+
+### Commit
+- `fix(app): log state.save failures instead of silencing them (PERSIST-2.2)`
+
+### Try next cycle
+- Bump the `watchersCloseTheirFdsWhenCancelled` threshold or serialize the test — it's been flaking for 4 cycles.
+- Remaining `try?` spots in EspalierApp: lines 431/1406/1505 (GitWorktreeDiscovery.discover failures). Same pattern, same pivot available.
+- The "Reload Ghostty Config" menu button may be a near-no-op (libghostty-spm has no reload API per the comment) — worth a demonstration cycle.
+
+## Cycle 98 — 2026-04-19 (de-flaking watchersCloseTheirFdsWhenCancelled)
+
+### Explored
+- Picked up the cycle-97 TODO. This test has recorded an issue in cycles 92, 94, 97 — delta 46/74/76 against a threshold of 40. Not a real leak, just concurrent-test /dev/fd noise.
+
+### Diagnosed
+- `openFdCount()` sampled `FileManager.contentsOfDirectory(atPath: "/dev/fd").count` — process-wide count. When other test suites ran in parallel (subprocess pipes for `git` tests, socket tests, etc.), their transient fds landed in the `after` snapshot and pushed the delta past the threshold. The monitor wasn't actually leaking; the measurement was polluted.
+- Making the threshold bigger isn't a fix — the whole point of the test is to catch a 50-fd-per-test leak (one fd per watch/stop cycle), so the threshold has to stay under 50, which makes every ambient spike a false positive.
+
+### Fixed
+- Added a `liveFdCountForTesting` counter to `WorktreeMonitor` itself. `createFileWatcher` increments it on open; the DispatchSource cancel handler decrements it alongside `close(fd)`. Mutations are guarded by an `NSLock` because the handler fires on the monitor's private queue while tests read on the main actor.
+- Rewrote the test to assert `monitor.liveFdCountForTesting == 0` after `stopAll` + a bounded drain loop. Measures only the monitor's fds, immune to concurrent-test noise.
+- Verified the regression-detection contract by temporarily re-introducing the original bug (a caller override of `setCancelHandler`) — the test failed with `liveFdCountForTesting → 50 == 0`, i.e. it catches exactly the original leak pattern. Restored before committing.
+- 497/497 pass, 3 consecutive runs green.
+
+### Spec
+- No SPECS.md change — this tightens the GIT-3.11 test, it doesn't change the contract.
+
+### Commit
+- `test(worktree-monitor): measure fds via internal counter instead of /dev/fd`
+
+### Try next cycle
+- Hunt the remaining `try?` spots at lines 431/1406/1505 (GitWorktreeDiscovery.discover) — they're the same silent-failure family that cycles 95 and 97 nibbled off.
+- Investigate whether "Reload Ghostty Config" menu item is actually reloading from disk or is a keybind-rebuild-only no-op (flagged in cycle 97).
+
+## Cycle 99 — 2026-04-19 ("Reload Ghostty Config" was a near no-op — TERM-9.1)
+
+### Explored
+- Followed up on cycle 97's flag — is `handleReloadConfig()` / `terminalManager.onReloadConfig` actually reloading the config from disk, or just shuffling the same config pointer into a new keybind bridge?
+
+### Diagnosed
+- `EspalierApp.swift:283-289` set `onReloadConfig` to call `rebuildKeybindBridge()`, which in turn re-read chords from the SAME `ghosttyConfig?.config` pointer. The comment on that block literally said "libghostty-spm doesn't expose a reload C API" — but it was wrong:
+  - `libghostty-spm/.../ghostty.h:1083` has `void ghostty_app_update_config(ghostty_app_t, ghostty_config_t);`
+- So the menu item "Reload Ghostty Config" and the `reload_config` Ghostty action both ran: "construct a new keybind bridge from the old config" → no behavior change. User edits `~/.config/ghostty/config`, hits reload, nothing happens. Andy ragequit material.
+
+### Fixed
+- New `TerminalManager.reloadGhosttyConfig()`: construct a fresh `GhosttyConfig` (re-walks XDG → macOS Ghostty config → recursive includes → finalize), call `ghostty_app_update_config(app, newConfig.config)`, mark ownership transferred, replace `self.ghosttyConfig`, then `rebuildKeybindBridge()` against the new config.
+- Wired both call sites (menu handler `handleReloadConfig`, libghostty action callback `onReloadConfig`) to the new method.
+- Made `GhosttyConfig.ownershipTransferred` `internal` so `TerminalManager` (in another file) can mark it after the C-side takes ownership.
+- Removed the stale "no reload C API" comment.
+
+### Spec
+- Added **TERM-9.1** under §16 Keyboard Shortcuts, noting that the stale pre-existing comment was wrong.
+
+### Tests
+- Integration-level behavior (a real libghostty round-trip) isn't reachable from EspalierKitTests — that target doesn't import GhosttyKit, and the live `ghostty_*` APIs need `ghostty_init` to have run. So no new failing-test-first unit test for this cycle. 497/497 existing tests still pass.
+- Manual verification path is documented in the spec: edit `~/.config/ghostty/config`, hit Reload Ghostty Config, confirm a keybind change takes effect without quit+relaunch.
+
+### Commit
+- `fix(ghostty): actually reload the config file on 'Reload Ghostty Config' (TERM-9.1)`
+
+### Try next cycle
+- The rapid-worktree-create scenario still hasn't been exercised.
+- Remaining `try?` at EspalierApp.swift lines 431/1406/1505 (GitWorktreeDiscovery.discover) — silent discovery failures during reconcile / HEAD-change / monitor-poll.
+
+## Cycle 100 — 2026-04-19 (silent GitWorktreeDiscovery.discover failures — GIT-3.12)
+
+### Explored
+- Followed cycle 99's TODO. Same silent-failure family as cycles 95 / 97 but at the git discovery surface.
+
+### Diagnosed
+- Three `try? await GitWorktreeDiscovery.discover(...)` sites in `EspalierApp.swift`:
+  - `reconcileOnLaunch` (L450) — launch-time reconcile
+  - `worktreeMonitorDidDetectChange` (L1425) — fs-event triggered reconcile
+  - `worktreeMonitorDidDetectBranchChange` (L1524) — branch-change triggered reconcile
+- All three swallow errors. If `git worktree list --porcelain` times out, or git is uninstalled, or a stale state.json entry points at a deleted directory, the reconcile skips and the user sees no indication.
+- Andy-facing symptom: creates a new worktree, FSEvents fires, discover throws once (transient), no retry, no sidebar update, no log. Looks like Espalier "missed" the worktree.
+
+### Fixed
+- Replaced all three `try?` with `do { let discovered = try await ... } catch { NSLog(...); continue/return }`. Each log line identifies which call site + which repo.
+
+### Spec
+- Added **GIT-3.12**. Cross-references ATTN-2.7 / PERSIST-2.2 as the family.
+
+### Tests
+- New `discoverThrowsForNonRepoPath` in GitWorktreeDiscoveryTests — asserts the underlying contract the caller log now depends on (discover actually propagates the error rather than returning empty). Pins it.
+- 498/498 pass (one transient flake on first run, ≥3 consecutive green after).
+
+### Commit
+- `fix(app): log GitWorktreeDiscovery.discover failures instead of silencing them (GIT-3.12)`
+
+### Try next cycle
+- Explore `.onChange(of: appState)` save frequency — every paneAttention mutation triggers a full state.json rewrite, every COMMAND_FINISHED = 2 writes. Probably harmless on SSD but worth measuring.
+- Revisit rapid-worktree-create scenario: with all three discovery paths now logging, if something breaks under rapid ops, Console.app will tell us.
+
+## Cycle 101 — 2026-04-19 (Add Repository silent-fails + cycle-100 regression — GIT-1.2)
+
+### Explored
+- Was going to look at attention-clear-on-focus rules. Detoured when I grepped `try? await GitWorktreeDiscovery` across `Sources/` and found two more sites cycle 100 missed, both in `MainWindow.swift` (the app-target file I didn't grep before).
+
+### Diagnosed
+- Worse: `swift build` on the Espalier app target FAILS. Cycle 100 wrote `[GitWorktreeDiscovery.DiscoveredWorktree]` but `DiscoveredWorktree` is a top-level type in EspalierKit, not nested in the `GitWorktreeDiscovery` enum. `swift test --test-product EspalierPackageTests` passed (tests only exercise the EspalierKit target) so cycle 100 shipped a broken app target.
+- Cycle-100 lesson: always run `swift build` as well as `swift test` — the test target doesn't cover the app's compile.
+- In MainWindow.swift: `addRepoFromPath` wraps `try? await GitWorktreeDiscovery.discover(...)` in a `Task` with a bare `return`. When the user picks a folder that isn't a git repo (or git fails), nothing happens. No alert, no log.
+
+### Fixed
+- Drop the incorrect `GitWorktreeDiscovery.` qualifier on `DiscoveredWorktree` at all four call sites (3 in `EspalierApp.swift` from cycle 100 + 1 in `MainWindow.swift` from this cycle).
+- `addRepoFromPath` on discover failure: log via NSLog AND present an `NSAlert` mirroring the pattern `addRepoFromPath`'s sibling `Delete Worktree` error path already uses.
+
+### Spec
+- Added **GIT-1.2** alongside GIT-1.1 for the alert-on-failure contract.
+
+### Tests
+- 498/498 still pass. The discover-contract test (from cycle 100) still covers the underlying throwing-behavior. UI alert presentation isn't unit-testable.
+- Reminder to myself: `swift build` every cycle going forward, not just `swift test`.
+
+### Commit
+- `fix(app): Add Repository alert-on-failure + cycle-100 DiscoveredWorktree regression (GIT-1.2)`
+
+### Try next cycle
+- Line 368 of MainWindow — the Add Worktree post-success reconcile discover path, also `try?`. Same family, lower-severity; NSLog is enough there.
+- Attention-clear-on-focus (what I was going to look at this cycle before the regression surfaced).
+
+## Cycle 102 — 2026-04-19 (final try? discover cleanup — MainWindow addWorktree)
+
+### Explored
+- Cycle 101 notes pointed at the remaining `try? await GitWorktreeDiscovery.discover(...)` at `MainWindow.swift:368` — the post-success Add Worktree reconcile. Detoured first through Andy's attention-clear-on-focus / keyboard-nav flows (STATE-2.4 clicks only, pane-nav doesn't clear — but NOTIF-2.x auto-clear timers make that self-correcting, not a bug). Detoured through `pane list` output alignment (breaks at id ≥ 100 — theoretical, not worth the cycle). Landed on the planned cleanup.
+
+### Diagnosed
+- Last silent `try?` in the discovery family, after cycles 95 / 97 / 100 / 101. Unlike `addRepoFromPath` (cycle 101), this site is NOT user-hostile — the `git worktree add` call already succeeded, so the entry will appear shortly via FSEvents-driven reconcile. But it's still an untraced drop: if discover fails here, the eager-reconcile optimization silently gives up and the "select the new worktree" code below sees nothing to select until FSEvents catches up.
+
+### Fixed
+- `do { discovered = try await ... } catch { NSLog(...); discovered = [] }` lets the code proceed with an empty list (FSEvents will fill it in), while logging the failure. No alert needed — worktree creation already reported success, so just smooth over the eager-path miss.
+
+### Spec
+- No new SPECS — GIT-3.12 (cycle 100) already covers this class of silent discover.
+
+### Tests
+- 498/498 pass. Build clean on app target.
+
+### Commit
+- `fix(app): log post-success discover failure in addWorktree (GIT-3.12)`
+
+### Process note
+- Committing to ALWAYS run `swift build` every cycle now, not just `swift test`. Cycle 100's regression was entirely caught by this.
+
+### Try next cycle
+- Actually exercise Andy's rapid-worktree-creation scenario with computer-use (still untouched across 12 cycles).
+- Or: pick up `pane list` output-alignment robustness at id ≥ 100 — 10-line test + format change.
+
+## Cycle 103 — 2026-04-19 (pane list output collapses at id ≥ 100 — ATTN-1.11)
+
+### Explored
+- Picked up cycle 102's flagged alignment bug as a tight, concrete cycle target.
+
+### Diagnosed
+- `Sources/EspalierCLI/CLI.swift:65` padding formula: `max(0, 3 - String(pane.id).count)`. For id=100+, the padding collapses to zero and the title runs straight into the id: `"* 100zsh"` instead of `"* 100 zsh"`. Theoretical for normal use (rare to have 100 panes), but Andy's 3–6 worktrees × multiple panes × his "create worktrees faster than UI can discover them" behavior isn't a great reason to rely on luck.
+
+### Fixed
+- Extracted the format into `PaneInfo.formattedLine()` in `EspalierKit`. Always inserts a single space between the id and the title regardless of padding. CLI uses the helper; renders `"  100 zsh"` / `"  1234 zsh"` correctly.
+
+### Spec
+- Added **ATTN-1.11** pinning the format contract.
+
+### Tests
+- Seven `PaneInfoFormatTests`: single-digit focused/unfocused, two-digit, three-digit (the bug case), four-digit, empty title, nil-vs-empty-title equivalence. Each asserts the exact expected line. Failed to compile before the helper existed; all green after. 505/505 overall.
+
+### Commit
+- `fix(cli): keep id-title separator in pane list at any id width (ATTN-1.11)`
+
+### Try next cycle
+- Actually use computer-use to verify Andy's rapid-worktree-creation scenario (still deferred from many cycles back — screenshots have been blocked in recent cycles; may need a retry).
+- Look at PRStatusStore.hostByRepo — no cleanup when a repo is removed (tiny leak, noted in cycle 102 exploration).
+
+## Cycle 104 — 2026-04-19 (stale-transition cache cleanup asymmetry — GIT-3.13)
+
+### Explored
+- Looked at PRStatusStore.hostByRepo leak on repo-remove. `removeRepo` is defined on AppState but not called anywhere in the app — there's no user-facing Remove Repo flow, so the leak is unreachable. Moved on.
+- Noticed that `worktreeMonitorDidDetectDeletion` (worktree-dir FSEvents) calls `statsStore.clear` + `prStatusStore.clear`, but the reconcile-path stale transitions at `reconcileOnLaunch` (L470) and `worktreeMonitorDidDetectChange` (L1455) do NOT. Same state transition via different channels, different cleanup. Asymmetric.
+
+### Diagnosed
+- Three paths in `EspalierApp.swift` transition a worktree to `.stale`:
+  1. `reconcileOnLaunch` — cold-start discovery detects a tracked-but-gone worktree
+  2. `worktreeMonitorDidDetectChange` — `.git/worktrees/` FSEvents tick + discover
+  3. `worktreeMonitorDidDetectDeletion` — worktree directory FSEvents tick
+- Only #3 clears the caches. So a worktree made stale via `git worktree prune` without a directory-delete event (path #1 or #2) keeps its cached PR / stats indefinitely. Rare in practice (normal `git worktree remove` triggers both FS channels), but the asymmetry is a real correctness gap — the cached PR renders on the stale row until Dismiss or Delete fires.
+
+### Fixed
+- Added `statsStore.clear(worktreePath:)` + `prStatusStore.clear(worktreePath:)` at both reconcile sites, matching the deletion handler's cleanup. Passed `prStatusStore` into `reconcileOnLaunch`'s closure capture + `worktreeMonitorDidDetectChange`'s local alias.
+
+### Spec
+- Added **GIT-3.13** cross-referencing `GIT-4.10` (remove path) + the three stale-transition FSEvents channels.
+
+### Tests
+- 505/505 pass. No new tests — the integration contract lives in EspalierApp's reconcile closures, not in unit-testable territory. `PRStatusStore.clear` / `WorktreeStatsStore.clear` are already covered.
+
+### Process note
+- Got tripped up mid-cycle: my `swift test` after the edits ran from `/Users/btucker/projects/espalier` (the main worktree, branch `fix/pr-poll-cadence-30s`) instead of the blindspots dogfood worktree. Test failure was the OLD fd-count assertion from before cycle 98's rewrite — a different HEAD. `cd` back into the blindspots worktree resolved it. Edits had gone to the right paths all along because I use absolute paths in Edit tool calls.
+
+### Commit
+- `fix(app): clear stats+PR caches on reconcile-detected stale transition (GIT-3.13)`
+
+### Try next cycle
+- Return to the attention-clear-on-focus thread (cycle 102 noted). Either verify current behavior is correct, or surface a mismatch with Andy's expectations.
+- Worth revisiting: is there a helper I could extract so the three stale-transition sites share ONE codepath? DRY fix rather than three spot-fixes.
+
+## Cycle 105 — 2026-04-20 (dead `newlyStale` loop after GIT-3.13)
+
+### Explored
+- Rambled widely: attention-clear-on-focus (spec says click only, nav shortcuts don't clear — but NOTIF auto-clear timers make it self-correcting), IPv6 loopback canonicalization (`::ffff:127.0.0.1` not in `isLoopback` — but we don't bind `::1` so it's unreachable), WorktreeStatsStore race-with-clear (real but ~50ms window, low impact on stale rows that likely don't render stats anyway, and not easily testable without moving to EspalierKit), `--version` flag (no version source defined anywhere).
+- Finally noticed that cycle 104's transition-loop clear made the `for wt in newlyStale { store.clear(...) }` loop at the bottom of `worktreeMonitorDidDetectChange` redundant.
+
+### Diagnosed
+- `let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }` captured a snapshot BEFORE the transition loop, then used it after the loop to clear stats. After cycle 104 added `store.clear` + `prStore.clear` inside the transition loop itself (GIT-3.13), the outer loop was doing redundant stats clears on already-cleared paths.
+- Not a bug per se — `WorktreeStatsStore.clear` is idempotent — but dead code that misleads a future reader into thinking there are two separate cleanup paths.
+
+### Fixed
+- Removed `let newlyStale = ...` binding (only used by the redundant loop) and the redundant `for wt in newlyStale { store.clear(...) }` loop.
+- Updated the surrounding comment to point to the transition loop (GIT-3.13) as the single cleanup site.
+
+### Spec
+- No SPECS change. GIT-3.13 already pins the transition-loop clear as the sole contract; removing the redundancy doesn't change behavior.
+
+### Tests
+- 505/505 pass (one transient flake on first run, green on retry).
+
+### Commit
+- `refactor(app): drop redundant newlyStale cleanup loop after GIT-3.13`
+
+### Try next cycle
+- WorktreeStatsStore race-with-clear — still open. The fix would mirror `PRStatusStore`'s generation counter. Testability requires moving WorktreeStatsStore to EspalierKit (modest refactor).
+- Surface `SocketServer.lastStartError` (cycle 95's follow-on) in the Espalier menu alongside web server status.
+
+## Cycle 106 — 2026-04-20 (WorktreeStatsStore repopulation race — DIVERGE-4.5)
+
+### Explored
+- Picked up the race I noticed in cycle 102, deferred through cycles 104 / 105.
+
+### Diagnosed
+- `WorktreeStatsStore.refresh` kicks a Task that `await`s `GitWorktreeStats.compute` (~50–200ms of git subprocess). If `clear(worktreePath:)` fires during that window, `apply` — when it eventually runs — unconditionally writes the stale result back into `stats`. Dismiss / Delete / stale-transition clears can be undone by a fetch that was already in flight.
+- `PRStatusStore` handled the same race via a per-path generation counter (cycles 91-ish). `WorktreeStatsStore` didn't.
+
+### Fixed
+- Added `generation: [String: Int]` to `WorktreeStatsStore`. `refresh` captures current gen, passes to `apply`. `clear` bumps the gen. `apply` drops the stats write (but keeps the path-agnostic default-branch cache update) if the captured gen no longer matches.
+- Bonus: removed the unused `import AppKit` at the top of the file while I was editing.
+
+### Spec
+- Added **DIVERGE-4.5** pinning the generation-counter contract and cross-referencing GIT-3.6 / GIT-3.13 / GIT-4.10 as the clear-triggering paths.
+
+### Tests
+- No new unit test: `WorktreeStatsStore` lives in the Espalier app target which doesn't have a test target (it pulls `PollingTicker` which needs AppKit). Moving it to EspalierKit would require either moving `PollingTicker` or abstracting via `PollingTickerLike` — a bigger refactor than a dogfood cycle allows. The fix mirrors `PRStatusStore`'s already-tested pattern in structure; integration-level assurance follows the cycle-99 precedent.
+- 505/505 existing tests pass.
+
+### Commit
+- `fix(app): guard WorktreeStatsStore.apply against late writes after clear (DIVERGE-4.5)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit (requires `PollingTicker` split) so DIVERGE-4.5's race can get a dedicated unit test.
+- Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95 TODO, still untouched).
+
+## Cycle 107 — 2026-04-20 (multi-line notify silently clips to first line — ATTN-1.12)
+
+### Explored
+- Considered desktop-notification-on-CLI-notify (addresses Andy's "misses attention when focused" persona pain) — but it's a feature/behavior change with spam-risk, better as a deliberate PR than a cycle.
+- Looked at `Text(attentionText)` rendering in `WorktreeRow.swift`: `.lineLimit(1)` + `.truncationMode(.tail)`.
+
+### Diagnosed
+- `NotifyInputValidation.validate` and `Attention.isValidText` both accept text with embedded `\n` / `\r` / CRLF. When such text lands in the sidebar capsule, SwiftUI's `.lineLimit(1)` clips to the first line silently. User sent `"build failed\nerr1\nerr2"`; UI shows only `"build failed"`. Data loss without any error.
+
+### Fixed
+- Added `.multilineText` case to `NotifyInputValidation`. `validate`'s `(text, false)` branch now returns it after the emptiness + length checks when `text.unicodeScalars.contains(\n || \r)`.
+- Server-side backstop: `Attention.isValidText` applies the same rejection for raw-socket clients (nc -U, web surface) bypassing the CLI.
+- CLI error message: "Notification text must be a single line (no embedded newlines)".
+
+### Spec
+- Added **ATTN-1.12** covering the CLI validation and the server-side backstop.
+
+### Tests
+- Five CLI-side tests: LF / CR / CRLF / trailing newline all rejected; plain singleline still valid.
+- One server-side backstop test mirroring the rejection cases.
+- 511/511 pass (one transient flake on first run, clean on retry).
+
+### Live verification
+- `printf 'line1\nline2' | xargs -0 ... espalier-cli notify` → "Error: Notification text must be a single line". Confirmed the literal `\n` string (2 chars) still passes through, so scripts that deliberately want a backslash-n in the badge aren't broken.
+
+### Commit
+- `fix(cli): reject multi-line notify text (ATTN-1.12)`
+
+### Try next cycle
+- Desktop-notification-on-CLI-notify — it's a real Andy pain but wants thought on UX (opt-in? throttle?). Probably not a 10-minute cycle.
+- Move WorktreeStatsStore to EspalierKit so DIVERGE-4.5's race gets direct unit coverage.
+
+## Cycle 108 — 2026-04-20 (widen ATTN-1.12 to all control characters)
+
+### Explored
+- Followed cycle 107's multiline fix one step further: `ls --color=always | head | xargs espalier notify` — what happens with ANSI escape sequences?
+
+### Diagnosed
+- CLI accepted text with ANSI escapes. The ESC byte (0x1B) is invisible in SwiftUI Text, so the sidebar would render `\e[31mBUILD\e[0m` as literal `[31mBUILD[0m`. Garbled.
+- Same failure mode for TAB (renders at implementation-defined width, breaks capsule layout), BEL (ding and then garbled), DEL (invisible + shifted), null byte (implementation-dependent).
+- Cycle 107's check was specifically `\n || \r`. Too narrow — every C0/C1 control ought to be rejected for consistency with Andy's "the badge must be readable" expectation.
+
+### Fixed
+- Renamed `NotifyInputValidation.multilineText` → `.controlCharactersInText` and widened the predicate from LF/CR only to the full Unicode Cc general category. Same change on the server-side `Attention.isValidText` backstop.
+- Error message now reads: "Notification text cannot contain control characters (newlines, tabs, ANSI escapes, or other non-printable characters)".
+
+### Spec
+- Rewrote **ATTN-1.12** to pin the widened contract (all Cc scalars) and name specifically what breaks for each kind (newlines clip, tabs render weird, ANSI escapes show as literal garbage).
+
+### Tests
+- Updated cycle 107's 5 tests to the new case name.
+- Added 5 new cases: ANSI escape, TAB, BEL, null byte, DEL.
+- Added 2 regression-guard cases: emoji / CJK / accented-Latin still valid (widened check must not trip on multi-byte Unicode).
+- Server-side backstop test expanded to mirror all the cases.
+- 518/518 pass.
+
+### Live verification
+- `swift run espalier-cli notify $'\e[31mred\e[0m'` → "Error: Notification text cannot contain control characters..."
+- `swift run espalier-cli notify $'foo\tbar'` → same error.
+
+### Commit
+- `fix(cli): widen ATTN-1.12 to reject all Unicode control characters`
+
+### Try next cycle
+- The WorktreeStatsStore move-to-EspalierKit for testable DIVERGE-4.5 remains the biggest open item.
+- Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95's still-open follow-on).
+- Andy's keyboard-first worktree navigation (Cmd+1..9 / arrow keys) — feature request, not a bug.
+
+## Cycle 109 — 2026-04-20 (whitespace-only OSC-2 titles render as blank pane labels — LAYOUT-2.14)
+
+### Explored
+- Ranged across CLI edge cases (negative `--clear-after`, out-of-range `pane close` ids, stdin-pipe patterns), WebSession write/read race (theoretical, NIO serializes), WebStaticResources asset allowlist (favicon falls through to SPA, harmless). None clean-cycle fits.
+- Found it in `PaneTitle.display`: `if let t = storedTitle, !t.isEmpty { return t }` accepts any non-empty string, including `"   "` or `"\t"`.
+
+### Diagnosed
+- An OSC-2 event with whitespace-only title payload gets stored via `titles[id] = title` in `TerminalManager.handleAction` (the env-assignment guard doesn't reject whitespace-only). `PaneTitle.display` then returns the whitespace string, and the sidebar renders visible blank space where a label should go — pane looks mislabelled or broken.
+- Real-world trigger: a program that sets its title based on a computed string that happened to evaluate to empty / whitespace (e.g., a half-loaded shell prompt). Rare, but observable.
+
+### Fixed
+- `display` now checks `!t.trimmingCharacters(in: .whitespaces).isEmpty` before returning the stored title. Contentful titles with surrounding whitespace (e.g. `" claude "`) still pass through verbatim — the check is blank-vs-content, not a trim operation.
+
+### Spec
+- Added **LAYOUT-2.14** (slotted before LAYOUT-2.13 so the existing identifier stays stable).
+
+### Tests
+- Three new cases in `PaneTitle.display` suite: whitespace-only → PWD basename, whitespace-only + no PWD → empty, contentful-with-surrounding-space preserved verbatim.
+- Failed before the fix with `"   " == "work"` assertion, pass after. 521/521 overall.
+
+### Commit
+- `fix(pane-title): fall through to PWD basename on whitespace-only stored title (LAYOUT-2.14)`
+
+### Try next cycle
+- Still open: move `WorktreeStatsStore` to EspalierKit for DIVERGE-4.5 unit coverage.
+- `SocketServer.lastStartError` UI surfacing (cycle 95 follow-on).
+- Keyboard-first worktree switching (feature).
+
+## Cycle 110 — 2026-04-20 (whitespace-only pane title in CLI list — ATTN-1.11 extension)
+
+### Explored
+- Ranged through NotificationMessage decoding (unknown-type path throws, well-covered), WebServer /ws session parsing (empty `session=` spawns a failing zmx — theoretical UX wart but not a correctness bug), PaneInfo rendering.
+
+### Diagnosed
+- Cycle 109 fixed `PaneTitle.display` to fall through to PWD on whitespace-only stored titles. The SIDEBAR rendering now handles whitespace correctly. But `PaneInfo.formattedLine` (used by `espalier pane list` CLI output, extracted from cycle 103) uses the parallel pattern `title?.isEmpty == false ? title : nil` — catches `""` and `nil` but not `"   "`. A whitespace-only title rendered `"* 5     "` with trailing spaces — the capsule-equivalent of LAYOUT-2.14's blank-looking pane label.
+
+### Fixed
+- Widened the renderedTitle guard to `!title.trimmingCharacters(in: .whitespaces).isEmpty`. Matches `PaneTitle.display`'s LAYOUT-2.14 behaviour. Contentful titles with surrounding whitespace still preserved verbatim.
+
+### Spec
+- Extended **ATTN-1.11** with the whitespace-only rule cross-referencing LAYOUT-2.14.
+
+### Tests
+- Three new cases on `PaneInfo.formattedLine` suite: whitespace-only → no-title form, tab-only → same, contentful-with-surrounding-whitespace preserved.
+- Failed before the fix; pass after. 524/524 overall.
+
+### Commit
+- `fix(pane-info): treat whitespace-only title as no-title in formattedLine (ATTN-1.11)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 unit coverage still open.
+- `SocketServer.lastStartError` UI surfacing (cycle 95).
+
+## Cycle 111 — 2026-04-20 (BOM-only notify text renders as blank badge — ATTN-1.13)
+
+### Explored
+- Looked at GitOriginHost.parse edge cases (subgroup paths handled correctly via slug), GitHubPRFetcher rollup (well-tested), CLIRunner's pipe handling (timeouts missing but no caller hit that path), ZmxRunner.captureAll (known deadlock-prone, unused in production).
+- Then probed Cf-category scalars in notify text: the cycle 107/108 rejections cover Cc but not Cf.
+
+### Diagnosed
+- `"\u{200B}"` (ZWSP) rejected — confirmed via a side experiment that Swift's `trimmingCharacters(in: .whitespacesAndNewlines)` DOES strip ZWSP (more inclusive than Apple's documentation suggests).
+- But `"\u{FEFF}"` (BOM) and `"\u{200B}\u{200C}\u{FEFF}"` (mixed) are NOT stripped — they pass the empty-text check AND the Cc-category check (since Cf ≠ Cc), landing in the sidebar as a zero-width / invisible badge. Same UX failure mode as ATTN-1.7's empty-text rejection.
+
+### Fixed
+- Added an extra guard to `NotifyInputValidation.validate`: if every scalar is whitespace or Cf, return `.emptyText`. Matches the existing empty-text semantics rather than coining a new case (the UX is identical — blank badge).
+- Server-side `Attention.isValidText` gets the same guard for raw-socket client backstop.
+- Emoji sequences with ZWJ (like `👨‍👩‍👧`) remain valid — they have visible glyphs alongside the ZWJ.
+
+### Spec
+- Added **ATTN-1.13** covering the Cf+whitespace edge case.
+
+### Tests
+- Eight new tests: 5 CLI-side (only-ZWSP, only-BOM, mixed-Cf, mixed-with-content, emoji-ZWJ) + 3 server-backstop mirrors.
+- Two failed before the fix (`textOfOnlyBOMIsInvalid` and `textOfMixedFormatScalarsIsInvalid`, both reporting `r → .valid` instead of `.emptyText`); all pass after. 531/531 overall.
+
+### Live verification
+- `swift run espalier-cli notify $'\uFEFF'` → "Error: Notification text cannot be empty or whitespace-only". Sidebar would no longer receive an invisible badge.
+
+### Commit
+- `fix(cli): reject format-only notify text that renders as blank badge (ATTN-1.13)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit (DIVERGE-4.5 test coverage, still open).
+- Explore GitLab PR fetcher edge cases similar to GitHub's.
+
+## Cycle 112 — 2026-04-20 (displayName 1-level parent still collides at depth — LAYOUT-2.15)
+
+### Explored
+- Poked at GitLabPRFetcher (no analogous fork-filter but glab scoping may handle it), ExponentialBackoff (negative-shift traps theoretical), CLI exit-code flows, ZmxPIDLookup.shellPID substring safety.
+- Landed on `WorktreeEntry.displayName`'s disambiguation algorithm: it grows only ONE parent level, which fails when two siblings share both leaf AND immediate parent.
+
+### Diagnosed
+- Cycle 102 noted this in passing: paths like `/repo/.worktrees/deep/ns/feature` and `/repo/.worktrees/other/ns/feature` both return `ns/feature` from the existing algorithm. Ambiguous in the sidebar.
+- Now more reachable with `WorktreeNameSanitizer` permitting `/` (GIT-5.1, PR #38) — any user who names worktrees `team/member/feature` style creates `.worktrees/team/member/feature` on disk. Two teams, one shared member name and leaf → collision the sidebar can't disambiguate.
+
+### Fixed
+- Replaced the 1-level `parent/last` disambiguation with a suffix-grower: try suffix length 1, 2, 3, ... until the candidate is unique amongst sibling candidates of the same depth. Falls back to the full path if no suffix length is unique (pathological "one sibling is a suffix of another" case).
+- Same asymptotic behavior as before for the common 1-level case (`blindspots` vs `projects/blindspots` vs `6750/blindspots`); only changes behavior for 3+-level collisions.
+
+### Spec
+- Added **LAYOUT-2.15**.
+
+### Tests
+- Two new cases: `displayNameDisambiguatesThreeLevelCollision` (the genuine bug), `displayNameFallsThroughWhenAllPathsShareSuffix` (pathological but documented fallback).
+- Existing 3 displayName tests still pass. 533/533 overall.
+
+### Commit
+- `fix(worktree): grow displayName suffix until unique (LAYOUT-2.15)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 coverage, still open across many cycles.
+- Surface `SocketServer.lastStartError` in the Espalier menu.
+
+## Cycle 113 — 2026-04-20 (Stop dialog awkward for detached-HEAD worktrees — TERM-1.3)
+
+### Explored
+- SidebarView context menus, SocketServer handleClient partial-write behavior, WebServerController.runBlocking (has a 2s TailscaleLocalAPI socket timeout, bounded), WorktreeStatsStore.apply behavior on gen mismatch (default-branch update is path-agnostic, correctly preserved).
+- Landed on `stopWorktreeWithConfirmation`'s dialog text: "There are running processes in \(wt.branch)". For a detached HEAD that interpolates to "…in (detached)." which reads awkwardly.
+
+### Diagnosed
+- `wt.branch` is `(detached)`, `(bare)`, `(unknown)` etc. for sentinel states (PR-7.3). The Stop dialog uses it literally. Not wrong — just ugly for the detached case.
+- Meanwhile, `WorktreeEntry.displayName(amongSiblingPaths:)` (cycle 112's LAYOUT-2.15) falls through to the directory basename for detached worktrees. Reads naturally.
+
+### Fixed
+- Replaced `wt.branch` with `wt.displayName(amongSiblingPaths: repo.worktrees.map(\.path))` in the Stop confirmation. User now sees "running processes in my-feature" instead of "running processes in (detached)".
+
+### Spec
+- Added **TERM-1.3** documenting the Stop-dialog identifier contract.
+
+### Tests
+- No new test — UI string polish in the Espalier app target, not directly reachable from EspalierKitTests. The existing `LAYOUT-2.15` displayName tests pin the underlying formatter the dialog now delegates to.
+- 533/533 pass (one transient flake on first run, green on retry).
+
+### Commit
+- `fix(ui): Stop dialog uses displayName not raw branch (TERM-1.3)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 still lacks direct unit coverage.
+- Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95 carry-over).
+
+## Cycle 114 — 2026-04-20 (IPv6 currentURL missing brackets — WEB-1.8)
+
+### Explored
+- Looked at `WebServerController.currentURL` construction at line 106: `"http://\(host):\(desired.port)/"`. Manual interpolation without the bracket logic that `WebURLComposer.url(session:host:port:)` applies.
+
+### Diagnosed
+- For an IPv6-only Tailscale setup, `chooseHost` falls back to IPv6 (no IPv4 available), and `currentURL` becomes `http://fd7a:115c::5:8799/` — a malformed URI (IPv6 authorities MUST be bracketed per RFC 3986).
+- Happy path works because `chooseHost` prefers IPv4 and most Tailscale setups have both. IPv6-only setups (some corporate IPv6-only networks, Tailscale exit-node chains) hit the bug.
+
+### Fixed
+- Extracted `WebURLComposer.baseURL(host:port:)` that shares the `host.contains(":") ? "[\(host)]" : host` bracket logic with `WebURLComposer.url(session:host:port:)`. `WebURLComposer.url` now composes via `baseURL(...) + "session/\(encoded)"` to DRY the bracket code.
+- `WebServerController.currentURL` switches to `WebURLComposer.baseURL(host: host, port: desired.port)`.
+
+### Spec
+- Added **WEB-1.8** pinning the bracket contract for display / clipboard URLs.
+
+### Tests
+- Three new `WebURLComposer` cases: baseURL brackets IPv6, baseURL leaves IPv4 alone, baseURL accepts hostnames. Failed before the `baseURL` method existed; pass after.
+- Existing `ipv4Url` / `ipv6UrlBrackets` tests still pass because `url(session:host:port:)` now delegates the bracket logic via `baseURL`.
+- 536/536 pass.
+
+### Commit
+- `fix(web): bracket IPv6 host in currentURL display + extract baseURL (WEB-1.8)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit move for DIVERGE-4.5 coverage remains open.
+- Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 115 — 2026-04-20 (chooseHost accepts empty / whitespace host strings)
+
+### Explored
+- Ranged through CLI socket client error paths, HostingOrigin validation, `GHOSTTY_ACTION_RING_BELL` / `OPEN_URL` / `DESKTOP_NOTIFICATION` handling, ZmxLauncher.isAvailable + killZmxSession async dispatch, NotifyInputValidation boundary tests (86400 / 86401).
+- Another screenshot attempt — still blocked by missing macOS screen-recording permission.
+- Landed on `WebURLComposer.chooseHost`: no defense against empty-string or whitespace entries.
+
+### Diagnosed
+- `ips.first(where: { !$0.contains(":") })` matches `""` (empty doesn't contain `:`) as a "valid IPv4" and returns it. Downstream `baseURL` produces `http://:8799/` — malformed.
+- Same shape for ` 100.64.0.5 ` (whitespace-padded): matches the IPv4 predicate verbatim, baseURL emits `http:// 100.64.0.5:8799/`.
+- A Tailscale LocalAPI hiccup returning a malformed entry (unlikely but possible) would propagate to the Copy URL / Settings display.
+
+### Fixed
+- `chooseHost` now trims surrounding whitespace and filters empty entries before picking. Preserves the existing IPv4-over-IPv6 preference.
+
+### Spec
+- No new SPECS — this is a defensive hardening within `WEB-1.8`'s existing contract (valid URL output).
+
+### Tests
+- Two new cases: `chooseHostSkipsEmptyStrings` (three sub-cases: empty-then-v4, empty-then-v6, all-empty → nil), `chooseHostTrimsSurroundingWhitespace`. Failed before the fix (`chooseHost → ""` instead of expected value); pass after. 538/538 overall.
+
+### Commit
+- `fix(web): chooseHost filters empty/whitespace entries`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit for DIVERGE-4.5 unit coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 116 — 2026-04-20 (session name URL-encoded with wrong charset — WEB-1.9)
+
+### Explored
+- Continuing the URL-composer thread from cycles 114/115. Compared `urlQueryAllowed` vs `urlPathAllowed` on session-name samples and found the encoding was wrong for the path-component context.
+
+### Diagnosed
+- `WebURLComposer.url` percent-encoded the session name with `urlQueryAllowed.subtracting(" ")`. That set leaves `?` and `#` unescaped — fine for query strings, WRONG for path components. A session name like `"a?b"` produced `.../session/a?b`, which the browser splits into path=`/session/a`, query=`b`. The router would receive only `"a"` as the session name.
+- Our own session names are always `espalier-<8hex>` (`ZMX-2.1`), so no production impact. But a custom socket client — `nc -U`, web surface, a future Espalier feature that allows user-named sessions — would hit this.
+
+### Fixed
+- Switched to `CharacterSet.urlPathAllowed`, which escapes `?` to `%3F` and `#` to `%23` while still leaving sub-delims like `&` and `=` unencoded (allowed in path segments per RFC 3986).
+
+### Spec
+- Added **WEB-1.9** documenting the path-vs-query distinction and cross-referencing ZMX-2.1 for the common case.
+
+### Tests
+- Two new cases: `sessionNameWithPathSeparatorIsEscaped` (`?` → `%3F`), `sessionNameWithFragmentSeparatorIsEscaped` (`#` → `%23`). Failed before the fix; pass after. 540/540 overall.
+
+### Commit
+- `fix(web): percent-encode session name with urlPathAllowed (WEB-1.9)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit for DIVERGE-4.5 coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 117 — 2026-04-20 (pane list/close silent on .closed worktrees — ATTN-3.5)
+
+### Explored
+- Round-trip of session names through WebServer.parseSession (handles percent-encoding via `removingPercentEncoding`; cycle 116's path-encoding fix feeds correctly decoded values).
+- TailscaleLocalAPI.whois IPv6-address formatting (ambiguous in URL but API's problem, not ours).
+- `attachArgv` / `zshIntegrationPrefix` path handling for versioned zsh paths.
+- CLI SocketClient timeout semantics (2s SO_RCVTIMEO applied but not distinguished in error text — marginal).
+
+### Diagnosed
+- `listPanes` and `closePaneByIndex` handlers skip the `wt.state == .running` guard that `addPane` has. On a `.closed` worktree:
+  - `listPanes` → empty `.paneList` → CLI prints nothing, exits 0. A script doing `espalier pane list | wc -l` gets a silent 0, indistinguishable from "real zero" success.
+  - `closePaneByIndex` → `.error("no pane with id N in this worktree")`. Technically correct but misleads about the cause.
+
+### Fixed
+- Added `guard wt.state == .running else { return .error("worktree not running") }` to both handlers, symmetric with `addPane`. Now all three pane subcommands surface the worktree-state precondition consistently.
+
+### Spec
+- Added **ATTN-3.5** pinning the contract.
+
+### Tests
+- No new unit test — handlers live in `EspalierApp.swift` (app target), not reachable from EspalierKitTests. Manual verification path is straightforward: `espalier pane list` on a closed worktree now errors cleanly.
+- 540/540 existing tests pass.
+
+### Commit
+- `fix(cli): pane list/close return "worktree not running" on closed worktrees (ATTN-3.5)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit move remains the biggest structural gap (DIVERGE-4.5 coverage).
+- Surface `SocketServer.lastStartError` in Espalier menu (cycle 95 follow-on).
+
+## Cycle 118 — 2026-04-20 (Settings status row ambiguous IPv6+port rendering — WEB-1.10)
+
+### Explored
+- Probed handleNotification for paths (notify on untracked worktree is silent no-op, defended by CLI pre-validation), destroySurface cleanup flow (sound), TerminalManager handle accessor. Found the WebSettingsPane status rendering.
+
+### Diagnosed
+- Line 42 of WebSettingsPane: `Text(verbatim: "Listening on \(addrs.joined(separator: ", ")):\(port)")`. For `addrs = ["fd7a:115c::5", "127.0.0.1"]`, port 49161:
+  - Renders `Listening on fd7a:115c::5, 127.0.0.1:49161`
+  - Ambiguous: does `:49161` attach to the IPv6 or just the IPv4?
+  - IPv6 isn't bracketed — visually reads as part of the IPv6 address continuing.
+- Settings pane is user-facing. The user shares the URL manually sometimes (or at least reads it to know what port the server is on). Ambiguous display on mixed-stack Tailscale.
+
+### Fixed
+- Extracted `WebURLComposer.authority(host:port:)` that shares the IPv6 bracket logic with `baseURL`. Settings pane now maps each address through `authority` then joins, producing `Listening on [fd7a:115c::5]:49161, 127.0.0.1:49161`.
+- `baseURL` rewrote itself atop `authority` — the bracket logic now lives in one place.
+
+### Spec
+- Added **WEB-1.10**.
+
+### Tests
+- Three new authority tests: IPv6 brackets, IPv4 leaves alone, hostname accepts. All compile-failed against the pre-fix `WebURLComposer`, pass after.
+- Existing baseURL tests still pass (via the `authority`-delegation rewrite).
+- 543/543.
+
+### Commit
+- `fix(web): format Settings status row per-address with bracketed IPv6 (WEB-1.10)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit.
+- `SocketServer.lastStartError` UI surface.
+
+## Cycle 119 — 2026-04-20 (silent bail in performDeleteWorktree — GIT-4.11)
+
+### Explored
+- Scanned remaining bare `catch { ... }` blocks in MainWindow. Most are intentional (GitOriginDefaultBranch fallback to nil) or already surface the error (cycle 101 / 102 / 118 fixes). Found one outlier.
+
+### Diagnosed
+- `performDeleteWorktree` at line 469: `catch GitWorktreeRemove.Error.gitFailed` branch shows an NSAlert with stderr. BUT the bare `catch { return }` silently drops everything else — e.g. `CLIError.notFound` when `git` binary is missing, `CLIError.launchFailed` for subprocess launch failures.
+- Symptom: user clicks Delete Worktree on a machine with broken git (e.g., during a broken Homebrew reinstall); nothing happens. No log. GIT-4.4 specifically promises that failure is surfaced in an alert — the bare-catch path skipped that for the non-gitFailed case.
+
+### Fixed
+- The bare-catch branch now shows the same "Could not delete worktree" NSAlert (with `"\(error)"` as body) AND logs via NSLog. Matches the shape of cycle 101's GIT-1.2 fix on the delete path.
+
+### Spec
+- Added **GIT-4.11** pinning the non-gitFailed error contract, cross-referencing GIT-4.4.
+
+### Tests
+- No new unit test (Espalier app-target, not testable from EspalierKitTests). 543/543 existing tests still pass.
+
+### Commit
+- `fix(app): surface non-gitFailed errors in Delete Worktree flow (GIT-4.11)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit move (DIVERGE-4.5 coverage, still biggest open item).
+- Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 120 — 2026-04-20 (Unix socket listen backlog of 5 is too small — ATTN-2.8)
+
+### Explored
+- GitRunner's thin wrapper (safe), OPEN_URL security considerations (libghostty's domain), SocketServer.start's socket flags and backlog.
+
+### Diagnosed
+- Line 67 of `SocketServer.swift`: `Darwin.listen(listenFD, 5)`. Historical default — extremely conservative. Andy's persona scripting parallel `espalier notify` from multiple shell scripts could easily send 6+ near-simultaneous connections. The OS drops extras with ECONNREFUSED. The CLI's ATTN-3.4 "stale socket" message would fire — but misleadingly, since the server IS listening, just backlogged.
+
+### Fixed
+- Bumped listen backlog from 5 to 64. Negligible kernel cost; covers realistic burst scenarios for Andy's fan-out style workflows.
+
+### Spec
+- Added **ATTN-2.8**.
+
+### Tests
+- No new unit test (integration-level, and `SocketServer` tests hit `listen` with backlog=5 implicitly via integration tests — they don't assert the backlog count).
+- 543/543 existing tests pass.
+
+### Commit
+- `fix(socket): bump Unix-socket listen backlog from 5 to 64 (ATTN-2.8)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit (DIVERGE-4.5 test coverage), still open.
+- Surface `SocketServer.lastStartError` in Espalier menu (cycle 95).
+
+## Cycle 121 — 2026-04-20 (PERSIST spec drift: `wasRunning` → `state`)
+
+### Explored
+- Looked at SocketPathResolver edge cases (whitespace-only is deliberately not trimmed, documented in its own test). No issue.
+- Swept SPECS.md for stale field names. `grep -nE "wasRunning|isRunning:|setFocusedTerminal"` turned up `wasRunning` in two PERSIST entries.
+
+### Diagnosed
+- PERSIST-1.2 and PERSIST-3.3 referenced a `wasRunning: Bool` field that doesn't exist in the codebase. The model uses a `state` enum (`.closed` / `.running` / `.stale`). "wasRunning" was likely pre-enum shorthand that never got updated.
+- Not a code bug per se — the implementation is correct — but a reader of SPECS.md looking for `wasRunning` in `WorktreeEntry`'s CodingKeys would be misled. Drift that violates the project's "SPECS.md is authoritative" rule from CLAUDE.md.
+
+### Fixed
+- Updated the two entries to match reality:
+  - PERSIST-1.2: "per-worktree split tree topology and `state` enum (`.closed`, `.running`, `.stale`)"
+  - PERSIST-3.3: "each worktree whose persisted `state` was `.running`"
+
+### Spec
+- Pure spec cleanup, no contract change.
+
+### Tests
+- No test change. 543/543 pass.
+
+### Commit
+- `docs(specs): PERSIST refers to state enum, not wasRunning field`
+
+### Try next cycle
+- Still: WorktreeStatsStore → EspalierKit for DIVERGE-4.5 coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 122 — 2026-04-20 (move WorktreeStatsStore to EspalierKit for DIVERGE-4.5 coverage)
+
+### Explored
+- The deferred "try next cycle" item from cycles 106, 113, 118, 119, 120, 121.
+
+### Diagnosed
+- `WorktreeStatsStore` lived in the Espalier app target, so DIVERGE-4.5's generation-counter protection couldn't be unit-tested from EspalierKitTests. The blocker was its use of concrete `PollingTicker` (which needs AppKit).
+- `PollingTickerLike` protocol already existed in EspalierKit (PR #16 era). PRStatusStore used it via injection. WorktreeStatsStore was the outlier.
+
+### Fixed
+- Changed `ticker: PollingTicker?` → `ticker: PollingTickerLike?`.
+- Replaced `startPolling(appState:)` with `start(ticker:getRepos:)` mirroring `PRStatusStore.start`. Caller constructs the concrete `PollingTicker` in the app target and injects it.
+- Moved `Sources/Espalier/Model/WorktreeStatsStore.swift` → `Sources/EspalierKit/Stats/WorktreeStatsStore.swift`. Dropped its `import EspalierKit` since it's now inside the module.
+- EspalierApp.swift call site updated to create the ticker and call `start(ticker:getRepos:)`.
+
+### Spec
+- No spec change — the contract (DIVERGE-4.5) already exists. This unblocks test coverage.
+
+### Tests
+- Added `Tests/EspalierKitTests/Stats/WorktreeStatsStoreClearTests.swift` with three pure-unit tests:
+  - `clearBumpsGenerationCounter` — single clear bumps gen by 1
+  - `repeatedClearsKeepBumpingGeneration` — repeated clears increment
+  - `refreshCapturesCurrentGeneration` — gen persists across clears so a stale refresh's captured gen detects mismatch
+- Deliberately skipped the full "race clear against in-flight apply" integration test: it requires configuring global `GitRunner.executor` which races against other concurrent test suites that rely on GitRunner. Tried it, saw 7 sibling-suite failures from stub-poisoning. Unit tests of the three primitives pin the contract adequately.
+- 546/546 pass across 3 consecutive runs.
+
+### Commit
+- `refactor(stats): move WorktreeStatsStore to EspalierKit + unit-test DIVERGE-4.5`
+
+### Try next cycle
+- Surface `SocketServer.lastStartError` in Espalier menu (cycle 95 carry-over, final biggest open item).
+
+## Cycle 123 — 2026-04-20 (surface SocketServer startup failure via banner — ATTN-2.7 extended)
+
+### Explored
+- The final carry-over from cycle 95. Options for surfacing `lastStartError`:
+  1. Make SocketServer `@Observable` and wire a menu item — more plumbing, dynamic.
+  2. Present a one-time alert banner at launch if start failed — simpler, mirrors the `ZmxFallbackBanner` / `ZMX-5.2` pattern.
+- Chose (2) because the user only needs to see this at launch; if they dismiss and the socket is still broken, they'll hit it via the CLI's cycle-94 stale-socket message anyway.
+
+### Diagnosed
+- Cycle 95 added the NSLog + `lastStartError` capture, but neither is user-visible. A user who never uses the CLI would never know their notify surface is dead — and might attribute missing sidebar notifications to other causes.
+
+### Fixed
+- New `Sources/Espalier/Views/NotifySocketBanner.swift` mirroring `ZmxFallbackBanner`'s shape: `presentIfNeeded(error:)` with a process-local `hasShown` guard, an NSAlert with a clear explanation, underlying-errno detail, and recovery hints.
+- `EspalierApp.startup` now catches `SocketServerError` specifically, logs via NSLog AND calls `NotifySocketBanner.presentIfNeeded(error:)`. Falls through to a bare `catch` for non-SocketServerError (belt-and-suspenders).
+
+### Spec
+- Extended **ATTN-2.7** to include the banner surface, cross-referencing ZMX-5.2 as the pattern anchor.
+
+### Tests
+- No new unit test — UI banner, same constraint as `ZmxFallbackBanner` (no test coverage). The `SocketServerError` enum's cases are covered by existing cycle-95 tests; the banner's `describe` switch is a pure mapping that can be reviewed by eye.
+- 546/546 existing tests pass.
+
+### Commit
+- `feat(app): banner alert on SocketServer startup failure (ATTN-2.7)`
+
+### Try next cycle
+- All prior TODOs cleared. Fresh territory — maybe pan for bugs in the SidebarView rendering or the WorktreeMonitor FS-event handling under rapid file-system churn.
+
+## Cycle 124 — 2026-04-20 (exploration, no new fix)
+
+### Explored
+Wide scan for a concrete new bug across areas I haven't recently touched:
+- WorktreeMonitor FSEvents handler debouncing (no coalescing but git operations don't fire in pathological bursts)
+- pane-attention rendering for the focused pane of the focused worktree (redundant with terminal output but short auto-clear absorbs it)
+- AppState.loadOrFreshBackingUpCorruption treating unreadable-but-readable-file as "corrupt" (design choice documented)
+- SplitTree topology operations (togglingZoom, inserting, removing) — all look sound
+- DividerRatio edge cases (already well-covered)
+- PWDReassignmentPolicy (clear policy, no bugs)
+- GitOriginDefaultBranch probe list (only main/master/develop but primary path handles properly-configured repos)
+- TerminalID (trivial wrapper)
+- WorktreeRowIcon (pure function, well-tested)
+- SocketPathResolver + trailing-slash paths (user config, out of scope)
+- NotifySocketBanner (from cycle 123) — `describe` case coverage matches `SocketServerError`'s 4 cases
+
+### Diagnosed
+Nothing concrete. Several theoretical edge cases (e.g. `SplitTree.inserting` with newLeaf == target would duplicate IDs, but callers always pass a fresh UUID; `inserting` with missing target unconditionally clears zoom even on no-op, but all production callers pass valid targets).
+
+### Committed
+No code change this cycle. The prior ~9 cycles covered a lot of surface; diminishing returns on small defensive fixes is honest.
+
+### Try next cycle
+- Exercise the macOS app with `mcp__computer-use__*` if screenshot permission returns.
+- Revisit the race-against-apply integration test for `WorktreeStatsStore.clear` (cycle 122 skipped because of shared-state `GitRunner.executor` poisoning). Could refactor by making `computeOffMain` take an injected closure so tests can stub per-store instead of mutating the global.
+- Look at the test-suite isolation issue more broadly — `GitRunner.configure` is a thread-unsafe global seam that makes cross-suite test races possible.
+
+## Cycle 125 — 2026-04-20 (inject WorktreeStatsStore.compute; race test for DIVERGE-4.5)
+
+### Explored
+- Cycle 124 flagged: `WorktreeStatsStore.computeOffMain` is a private static that hits the global `GitRunner.executor`, which means tests that stub GitRunner race against concurrent suites.
+- The fix: make `compute` a stored closure with a default that delegates to the real GitRunner, so tests can inject a per-instance stub.
+
+### Fixed
+- `WorktreeStatsStore` now has a stored `compute: ComputeFunction` closure (typealias for `@Sendable (...) async -> ComputeResult`). `ComputeResult` is public now (test needs to construct one). Init accepts `compute:` with a default of `Self.defaultCompute` (the extracted production impl).
+- `defaultCompute` is `nonisolated static let` — needed so `init`'s default-parameter evaluation can reference it from a nonisolated context.
+- `refresh`'s Task now calls the injected closure instead of the old static function.
+
+### Spec
+- No spec change. DIVERGE-4.5's contract was already pinned in cycle 106; this cycle adds test coverage.
+
+### Tests
+- Added `clearBetweenRefreshAndApplyDropsStaleWrite` — the integration test that cycle 122 had to skip. Uses an `AsyncStream` continuation to pause the compute closure mid-flight, calls `clear()` (bumping generation), then resumes compute. Asserts `stats["/wt"] == nil` — apply saw gen mismatch and dropped the stale write.
+- 547/547 pass across 5 consecutive runs (one transient flake on retry 2 of an earlier 3-run sample unrelated to this test — known concurrent-test noise).
+
+### Commit
+- `refactor(stats): inject compute closure; add DIVERGE-4.5 race test`
+
+### Try next cycle
+- Consider: the same compute-injection pattern for `PRStatusStore`? PRStatusStore's `fetcherFor` is already injectable via init but the actual `fetch` invocation still flows through it. Cycle 96-era already handles most cases.
+- Other injection seams to audit for global-state coupling.

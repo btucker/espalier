@@ -38,8 +38,14 @@ struct WebSettingsPane: View {
             case .listening(let addrs, let port):
                 // `verbatim:` because `Text("…\(port)")` goes through
                 // LocalizedStringKey, which formats `Int` with the
-                // locale's grouping separator (e.g., `12,345`).
-                Text(verbatim: "Listening on \(addrs.joined(separator: ", ")):\(port)")
+                // locale's grouping separator (e.g., `12,345`). Format
+                // each address with its port via `authority(...)` so
+                // IPv6 gets bracketed and the port isn't ambiguously
+                // floating off the last address (WEB-1.10).
+                let joined = addrs
+                    .map { WebURLComposer.authority(host: $0, port: port) }
+                    .joined(separator: ", ")
+                Text(verbatim: "Listening on \(joined)")
                     .foregroundStyle(.green)
             case .disabledNoTailscale:
                 Text("Tailscale unavailable").foregroundStyle(.orange)

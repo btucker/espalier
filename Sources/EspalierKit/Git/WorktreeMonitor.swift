@@ -12,6 +12,20 @@ public final class WorktreeMonitor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.espalier.worktree-monitor")
     public weak var delegate: WorktreeMonitorDelegate?
 
+    /// Test-only: count of fds opened by `createFileWatcher` that have
+    /// not yet been closed by their DispatchSource cancel handler. Reads
+    /// after `stopAll` should be zero; a non-zero residue means a caller
+    /// has overridden `setCancelHandler` (the `GIT-3.11` regression).
+    /// Mutated under `fdCounterLock` because the cancel handler runs on
+    /// `queue` while test reads happen on the main actor.
+    private let fdCounterLock = NSLock()
+    private var _liveFdCount: Int = 0
+    public var liveFdCountForTesting: Int {
+        fdCounterLock.lock()
+        defer { fdCounterLock.unlock() }
+        return _liveFdCount
+    }
+
     public init() {}
 
     deinit { stopAll() }
@@ -86,7 +100,20 @@ public final class WorktreeMonitor: @unchecked Sendable {
     }
 
     public func stopWatching(repoPath: String) {
-        let keysToRemove = sources.keys.filter { $0.contains(repoPath) }
+        // Keys have the shape `<tag>:<path>` where path is either the
+        // repoPath itself (for repo-scoped watchers like `worktrees:` /
+        // `originrefs:`) or a descendant (for worktree-scoped watchers
+        // `path:` / `head:`). A plain `key.contains(repoPath)` would
+        // also match sibling repos whose path is a proper prefix — e.g.
+        // stopping `/projects/foo` would wrongly cancel watchers for
+        // `/projects/foobar` too, because the stringified key
+        // `"worktrees:/projects/foobar"` contains `"/projects/foo"` as
+        // a substring. Test: `stopWatchingDoesNotAffectPrefixCollidingSiblingRepos`.
+        let keysToRemove = sources.keys.filter { key in
+            guard let colonIdx = key.firstIndex(of: ":") else { return false }
+            let path = key[key.index(after: colonIdx)...]
+            return path == repoPath || path.hasPrefix(repoPath + "/")
+        }
         for key in keysToRemove {
             sources[key]?.cancel()
             sources.removeValue(forKey: key)
@@ -105,8 +132,15 @@ public final class WorktreeMonitor: @unchecked Sendable {
     private func createFileWatcher(path: String, events: DispatchSource.FileSystemEvent) -> DispatchSourceFileSystemObject? {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return nil }
+        fdCounterLock.lock(); _liveFdCount += 1; fdCounterLock.unlock()
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: events, queue: queue)
-        source.setCancelHandler { close(fd) }
+        let lock = fdCounterLock
+        source.setCancelHandler { [weak self] in
+            close(fd)
+            lock.lock()
+            self?._liveFdCount -= 1
+            lock.unlock()
+        }
         return source
     }
 

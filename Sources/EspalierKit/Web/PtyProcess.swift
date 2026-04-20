@@ -104,6 +104,26 @@ public enum PtyProcess {
             _ = dup2(slave, 2)
             if slave > 2 { close(slave) }
             close(master)
+            // Close every OTHER inherited fd before execve. Without this,
+            // any parent-opened file or socket without FD_CLOEXEC leaks
+            // into the zmx child, which still holds them after Espalier
+            // quits. Observed live: the `WebServer` listen socket leaked
+            // into zmx-attach children, so after Espalier died the port
+            // stayed bound to an orphan zmx process and the next Espalier
+            // launch couldn't rebind.
+            //
+            // `getdtablesize()` returns the per-process fd table ceiling
+            // (currently open OR available) — NOT `RLIMIT_NOFILE.rlim_cur`
+            // which can be `RLIM_INFINITY` (effectively Int32.max → 2-billion
+            // close() calls, which hung our tests indefinitely on the first
+            // attempt). The dtable size is typically ≤10k, closing 3..that
+            // is a few ms of syscalls.
+            let maxFd = getdtablesize()
+            var fd: Int32 = 3
+            while fd < maxFd {
+                close(fd)
+                fd += 1
+            }
             _ = argvPointers.withUnsafeMutableBufferPointer { argvBuf in
                 envPointers.withUnsafeMutableBufferPointer { envBuf in
                     execve(argvBuf.baseAddress![0], argvBuf.baseAddress, envBuf.baseAddress)
