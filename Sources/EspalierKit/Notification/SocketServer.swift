@@ -64,7 +64,13 @@ public final class SocketServer: @unchecked Sendable {
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in Darwin.bind(listenFD, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard bindResult == 0 else { close(listenFD); throw SocketServerError.bindFailed(errno: errno) }
-        guard Darwin.listen(listenFD, 5) == 0 else { close(listenFD); throw SocketServerError.listenFailed(errno: errno) }
+        // Listen backlog of 64 (ATTN-2.8): small enough to not over-commit
+        // kernel resources, large enough that a user running parallel
+        // `espalier notify` invocations from several shell scripts won't
+        // start hitting ECONNREFUSED under burst load. The prior backlog
+        // of 5 was the historical `listen(2)` default and had effectively
+        // no headroom.
+        guard Darwin.listen(listenFD, 64) == 0 else { close(listenFD); throw SocketServerError.listenFailed(errno: errno) }
 
         let src = DispatchSource.makeReadSource(fileDescriptor: listenFD, queue: queue)
         src.setEventHandler { [weak self] in self?.acceptConnection() }

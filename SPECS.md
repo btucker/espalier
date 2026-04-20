@@ -330,6 +330,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-2.7** When `SocketServer.start()` fails during application startup, the application shall log the error via `NSLog` (surfacing it in Console.app) and `SocketServer` shall retain the error in its `lastStartError` property for in-process introspection, rather than silently continuing without a notify surface. The app shell historically wrapped `start()` in `try?`, producing a running Espalier with a dead control socket and no diagnostic trail — ATTN-3.4 recovers this case at the CLI side, ATTN-2.7 surfaces the root cause at the app side.
 
+**ATTN-2.8** The application's Unix-domain socket server shall call `listen(2)` with a backlog of 64, not the historical default of 5. A user scripting parallel `espalier notify` invocations (e.g. from a hook that fans out across a monorepo) can easily exceed 5 pending connections, and the extra backlog entries cost negligible kernel resources while preventing spurious `ECONNREFUSED` for the later clients.
+
 ### 5.3 Error Handling
 
 **ATTN-3.1** If the application is not running, then the CLI shall print "Espalier is not running" and exit with code 1.

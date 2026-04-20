@@ -2455,3 +2455,28 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - `WorktreeStatsStore` → EspalierKit move (DIVERGE-4.5 coverage, still biggest open item).
 - Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 120 — 2026-04-20 (Unix socket listen backlog of 5 is too small — ATTN-2.8)
+
+### Explored
+- GitRunner's thin wrapper (safe), OPEN_URL security considerations (libghostty's domain), SocketServer.start's socket flags and backlog.
+
+### Diagnosed
+- Line 67 of `SocketServer.swift`: `Darwin.listen(listenFD, 5)`. Historical default — extremely conservative. Andy's persona scripting parallel `espalier notify` from multiple shell scripts could easily send 6+ near-simultaneous connections. The OS drops extras with ECONNREFUSED. The CLI's ATTN-3.4 "stale socket" message would fire — but misleadingly, since the server IS listening, just backlogged.
+
+### Fixed
+- Bumped listen backlog from 5 to 64. Negligible kernel cost; covers realistic burst scenarios for Andy's fan-out style workflows.
+
+### Spec
+- Added **ATTN-2.8**.
+
+### Tests
+- No new unit test (integration-level, and `SocketServer` tests hit `listen` with backlog=5 implicitly via integration tests — they don't assert the backlog count).
+- 543/543 existing tests pass.
+
+### Commit
+- `fix(socket): bump Unix-socket listen backlog from 5 to 64 (ATTN-2.8)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit (DIVERGE-4.5 test coverage), still open.
+- Surface `SocketServer.lastStartError` in Espalier menu (cycle 95).
