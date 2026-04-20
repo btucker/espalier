@@ -1478,6 +1478,13 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             }
             store.clear(worktreePath: worktreePath)
             prStore.clear(worktreePath: worktreePath)
+            // `GIT-3.15`: drop the path / head / content watchers for
+            // the deleted worktree so a subsequent `git worktree add`
+            // at the same path (detected by the repo-level watcher)
+            // re-arms fresh fds on the new inode, rather than the
+            // reconciler's "idempotent" re-register skipping over
+            // zombie fds bound to the reaped inode.
+            monitor.stopWatchingWorktree(worktreePath)
         }
     }
 

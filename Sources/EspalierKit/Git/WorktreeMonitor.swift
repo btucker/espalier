@@ -72,6 +72,24 @@ public final class WorktreeMonitor: @unchecked Sendable {
         sources[key] = source
     }
 
+    /// Drop the path / head / content watchers for `worktreePath` and
+    /// close their fds. Narrower than `stopWatching(repoPath:)`: matches
+    /// exactly the three worktree-scoped keys (`path:` / `head:` /
+    /// `content:`), leaving repo-scoped watchers (`worktrees:` /
+    /// `originrefs:`) alone.
+    ///
+    /// Called by the app's `worktreeMonitorDidDetectDeletion` handler
+    /// so a subsequent `git worktree add` at the same path (reconcile
+    /// → resurrect) reopens fresh fds rather than re-register-no-op'ing
+    /// against zombie fds bound to the reaped inode. `GIT-3.15`.
+    public func stopWatchingWorktree(_ worktreePath: String) {
+        for tag in ["path", "head", "content"] {
+            let key = "\(tag):\(worktreePath)"
+            sources.removeValue(forKey: key)?.cancel()
+            contentStreams.removeValue(forKey: key)?.cancel()
+        }
+    }
+
     /// Watches the HEAD reflog (`logs/HEAD`) rather than the HEAD file itself:
     /// `git commit` updates the branch ref via atomic rename and leaves HEAD's
     /// inode/mtime alone, so a `.write` watcher on HEAD silently misses local
