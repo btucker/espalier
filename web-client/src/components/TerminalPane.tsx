@@ -3,9 +3,10 @@ import { init, Terminal, FitAddon } from 'ghostty-web';
 
 type Status = 'connecting' | 'disconnected' | 'error' | string;
 
-// Shared across all TerminalPane instances: ghostty-web's `init()` loads the
-// inlined WASM once and stores a process-wide Ghostty instance. Calling it
-// multiple times from parallel pane mounts would race, so we memoize the promise.
+const textEncoder = new TextEncoder();
+
+// ghostty-web's `init()` loads the inlined WASM once into a process-wide
+// Ghostty instance. Memoize the promise so parallel pane mounts don't race.
 let ghosttyReady: Promise<void> | null = null;
 function ensureGhostty() {
   if (!ghosttyReady) ghosttyReady = init();
@@ -16,7 +17,6 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
   const [status, setStatus] = useState<Status>('connecting');
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -28,11 +28,17 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
       `${proto}//${window.location.host}/ws?session=${encodeURIComponent(sessionName)}`,
     );
     ws.binaryType = 'arraybuffer';
-    wsRef.current = ws;
+    const abort = new AbortController();
 
     ws.onopen = () => setStatus(sessionName);
     ws.onclose = () => setStatus('disconnected');
     ws.onerror = () => setStatus('error');
+
+    const sendResize = (cols: number, rows: number) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    };
 
     ensureGhostty()
       .then(() => {
@@ -56,28 +62,17 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
 
         term.onData((data) => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(new TextEncoder().encode(data));
+            ws.send(textEncoder.encode(data));
           }
         });
-        term.onResize(({ cols, rows }) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-          }
-        });
+        term.onResize(({ cols, rows }) => sendResize(cols, rows));
 
-        // Push initial size to the server so zmx spawns the PTY with the
-        // terminal's actual dimensions (FitAddon runs before the first
-        // onResize event that would normally carry this).
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        } else {
-          ws.addEventListener(
-            'open',
-            () =>
-              ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })),
-            { once: true },
-          );
-        }
+        // FitAddon resolves dimensions synchronously here, so onResize has
+        // already fired by now. Push once more to cover the ws-not-yet-open
+        // case: either send immediately or once the socket reaches OPEN.
+        const pushCurrent = () => sendResize(term.cols, term.rows);
+        if (ws.readyState === WebSocket.OPEN) pushCurrent();
+        else ws.addEventListener('open', pushCurrent, { once: true, signal: abort.signal });
 
         ws.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
@@ -103,8 +98,8 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
 
     return () => {
       disposed = true;
+      abort.abort();
       ws.close();
-      wsRef.current = null;
       termRef.current?.dispose();
       termRef.current = null;
     };
