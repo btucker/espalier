@@ -480,6 +480,60 @@ struct EspalierApp: App {
            let target = wt.focusedTerminalID ?? wt.splitTree.allLeaves.first {
             terminalManager.setFocus(target)
         }
+
+        // STATE-2.12: resume auto-clear timers for any persisted attention
+        // that carried a `clearAfter`. The timer is in-memory only when
+        // first set (handleNotification / setAttentionForTerminal schedule
+        // a `DispatchQueue.main.asyncAfter`), so a force-quit mid-window
+        // leaves the attention stuck in state.json with no live timer.
+        // Without this resume step, the badge persists until the user
+        // clicks the worktree (STATE-2.4).
+        resumePersistedAttentionTimers()
+    }
+
+    @MainActor
+    private func resumePersistedAttentionTimers() {
+        let now = Date()
+        for repoIdx in appState.repos.indices {
+            for wtIdx in appState.repos[repoIdx].worktrees.indices {
+                let wt = appState.repos[repoIdx].worktrees[wtIdx]
+                let path = wt.path
+
+                if let attention = wt.attention,
+                   let remaining = AttentionResumePolicy.remainingTime(for: attention, now: now) {
+                    let stamp = attention.timestamp
+                    let appStateBinding = $appState
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) {
+                        for ri in appStateBinding.wrappedValue.repos.indices {
+                            for wi in appStateBinding.wrappedValue.repos[ri].worktrees.indices {
+                                if appStateBinding.wrappedValue.repos[ri].worktrees[wi].path == path {
+                                    appStateBinding.wrappedValue.repos[ri].worktrees[wi]
+                                        .clearAttentionIfTimestamp(stamp)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for (terminalID, attention) in wt.paneAttention {
+                    guard let remaining = AttentionResumePolicy.remainingTime(for: attention, now: now) else {
+                        continue
+                    }
+                    let stamp = attention.timestamp
+                    let appStateBinding = $appState
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) {
+                        for ri in appStateBinding.wrappedValue.repos.indices {
+                            for wi in appStateBinding.wrappedValue.repos[ri].worktrees.indices {
+                                if appStateBinding.wrappedValue.repos[ri].worktrees[wi].path == path {
+                                    appStateBinding.wrappedValue.repos[ri].worktrees[wi]
+                                        .clearPaneAttentionIfTimestamp(stamp, for: terminalID)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @MainActor
