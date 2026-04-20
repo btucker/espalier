@@ -186,24 +186,48 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
     /// component (e.g. `/Users/ben/projects/blindspots` AND
     /// `/Users/ben/.codex/worktrees/6750/blindspots` — common with tools
     /// that auto-create worktrees in namespaced directories), the label
-    /// would be ambiguous. Fall back to `parent/last` to disambiguate.
+    /// would be ambiguous. Grow the suffix one component at a time until
+    /// it's unique among siblings. LAYOUT-2.15: this recurses — the
+    /// pre-fix 1-level version stopped at `parent/last` and still
+    /// collided for layouts like `<root>/.worktrees/<ns>/<ns>/feature`
+    /// sharing both leaf and immediate parent. Falls back to the full
+    /// path when no suffix length produces a unique candidate (e.g. one
+    /// sibling's path is a strict suffix of another's).
     ///
-    /// `siblingPaths` must include this worktree's own path; the count
-    /// tells us whether there's a collision.
+    /// `siblingPaths` must include this worktree's own path; everything
+    /// else is compared against the self candidate of the same depth.
     public func displayName(amongSiblingPaths siblingPaths: [String]) -> String {
-        let lastComponent = (path as NSString).lastPathComponent
-        let fallback = lastComponent.isEmpty ? branch : lastComponent
+        let selfComponents = WorktreeEntry.significantComponents(path)
+        let fallback: String = selfComponents.last ?? branch
 
-        // Is there any OTHER worktree in the repo with the same last
-        // component? If so, disambiguate.
-        let collides = siblingPaths.contains { siblingPath in
-            siblingPath != path &&
-            (siblingPath as NSString).lastPathComponent == lastComponent
+        let othersComponents = siblingPaths
+            .filter { $0 != path }
+            .map(WorktreeEntry.significantComponents)
+
+        guard !selfComponents.isEmpty else { return fallback }
+
+        for suffixLen in 1...selfComponents.count {
+            let candidate = selfComponents.suffix(suffixLen).joined(separator: "/")
+            let collides = othersComponents.contains { other in
+                // Sibling must have at least as many components to produce
+                // the same candidate; shorter siblings with the same
+                // suffix CAN'T match at this depth.
+                other.count >= suffixLen
+                    && other.suffix(suffixLen).joined(separator: "/") == candidate
+            }
+            if !collides { return candidate }
         }
-        guard collides else { return fallback }
+        // Exhausted: no suffix is unique. Could happen if a sibling's
+        // full path equals ours (git prevents this) OR if one sibling's
+        // path is strictly contained in another. Fall back to the full
+        // path so SOMETHING distinguishes them.
+        return path
+    }
 
-        let parent = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
-        guard !parent.isEmpty else { return fallback }
-        return "\(parent)/\(lastComponent)"
+    /// Path split into components with `/` (root separator) dropped,
+    /// matching NSString.pathComponents semantics minus the leading `/`
+    /// entry. An empty input produces an empty array.
+    private static func significantComponents(_ path: String) -> [String] {
+        (path as NSString).pathComponents.filter { $0 != "/" }
     }
 }

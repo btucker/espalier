@@ -36,6 +36,39 @@ struct WorktreeEntryTests {
         #expect(wt.displayName(amongSiblingPaths: [""]) == "fallback-branch")
     }
 
+    /// LAYOUT-2.15: 1-level parent disambiguation still collides when
+    /// two worktrees share BOTH their leaf AND their immediate parent.
+    /// Common under `git worktree add -B team/member/feature` style
+    /// layouts where `WorktreeNameSanitizer` allows `/` (GIT-5.1) — the
+    /// resulting worktree dir is `.worktrees/team/member/feature`, and
+    /// two such paths from different roots share "member/feature".
+    /// Recurse until the suffix is unique.
+    @Test func displayNameDisambiguatesThreeLevelCollision() {
+        let a = WorktreeEntry(path: "/repo/.worktrees/deep/ns/feature", branch: "ns/feature")
+        let b = WorktreeEntry(path: "/repo/.worktrees/other/ns/feature", branch: "ns/feature")
+        let siblings = [a.path, b.path]
+
+        // Before the fix, BOTH return "ns/feature" (ambiguous).
+        #expect(a.displayName(amongSiblingPaths: siblings) == "deep/ns/feature")
+        #expect(b.displayName(amongSiblingPaths: siblings) == "other/ns/feature")
+    }
+
+    @Test func displayNameFallsThroughWhenAllPathsShareSuffix() {
+        // Pathological: one sibling's path is a strict suffix of another
+        // (impossible in git but defensive). The longer path should fall
+        // through to its full form; the shorter one takes what it has.
+        let shorter = WorktreeEntry(path: "/a/b/c", branch: "x")
+        let longer = WorktreeEntry(path: "/z/a/b/c", branch: "x")
+        let siblings = [shorter.path, longer.path]
+
+        // Shorter path has 3 components; at suffixLen=3 candidate is
+        // "a/b/c", longer's suffixLen=3 is "a/b/c" — collide. Shorter
+        // has exhausted its components, so falls back to full path.
+        // Longer at suffixLen=4 becomes "z/a/b/c" — unique.
+        #expect(shorter.displayName(amongSiblingPaths: siblings) == "/a/b/c")
+        #expect(longer.displayName(amongSiblingPaths: siblings) == "z/a/b/c")
+    }
+
     @Test func attentionCanBeSet() {
         var entry = WorktreeEntry(path: "/tmp/worktree", branch: "main")
         entry.attention = Attention(text: "Build failed", timestamp: Date())

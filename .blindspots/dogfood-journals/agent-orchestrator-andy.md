@@ -2233,3 +2233,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Move `WorktreeStatsStore` to EspalierKit (DIVERGE-4.5 test coverage, still open).
 - Explore GitLab PR fetcher edge cases similar to GitHub's.
+
+## Cycle 112 — 2026-04-20 (displayName 1-level parent still collides at depth — LAYOUT-2.15)
+
+### Explored
+- Poked at GitLabPRFetcher (no analogous fork-filter but glab scoping may handle it), ExponentialBackoff (negative-shift traps theoretical), CLI exit-code flows, ZmxPIDLookup.shellPID substring safety.
+- Landed on `WorktreeEntry.displayName`'s disambiguation algorithm: it grows only ONE parent level, which fails when two siblings share both leaf AND immediate parent.
+
+### Diagnosed
+- Cycle 102 noted this in passing: paths like `/repo/.worktrees/deep/ns/feature` and `/repo/.worktrees/other/ns/feature` both return `ns/feature` from the existing algorithm. Ambiguous in the sidebar.
+- Now more reachable with `WorktreeNameSanitizer` permitting `/` (GIT-5.1, PR #38) — any user who names worktrees `team/member/feature` style creates `.worktrees/team/member/feature` on disk. Two teams, one shared member name and leaf → collision the sidebar can't disambiguate.
+
+### Fixed
+- Replaced the 1-level `parent/last` disambiguation with a suffix-grower: try suffix length 1, 2, 3, ... until the candidate is unique amongst sibling candidates of the same depth. Falls back to the full path if no suffix length is unique (pathological "one sibling is a suffix of another" case).
+- Same asymptotic behavior as before for the common 1-level case (`blindspots` vs `projects/blindspots` vs `6750/blindspots`); only changes behavior for 3+-level collisions.
+
+### Spec
+- Added **LAYOUT-2.15**.
+
+### Tests
+- Two new cases: `displayNameDisambiguatesThreeLevelCollision` (the genuine bug), `displayNameFallsThroughWhenAllPathsShareSuffix` (pathological but documented fallback).
+- Existing 3 displayName tests still pass. 533/533 overall.
+
+### Commit
+- `fix(worktree): grow displayName suffix until unique (LAYOUT-2.15)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 coverage, still open across many cycles.
+- Surface `SocketServer.lastStartError` in the Espalier menu.
