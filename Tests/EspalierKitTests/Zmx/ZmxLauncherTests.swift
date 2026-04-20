@@ -369,6 +369,66 @@ struct ZmxLauncherUnitTests {
         #expect(env["ZMX_DIR"] == "/tmp/ours")
     }
 
+    // MARK: sanitizeProcessEnvironment — surface-spawn env leak fix (ZMX-7.4)
+    //
+    // User-reported regression: creating a new worktree via the UI
+    // attached the new pane's Claude session to an OLDER worktree's
+    // still-running zmx session. Root cause: Espalier.app was launched
+    // from a terminal that already lived inside a zmx session, so the
+    // app process inherited `ZMX_SESSION=<old-name>`. libghostty
+    // spawns each new pane's shell with Espalier.app's env + the small
+    // overlay `ghostty_surface_config_s.env_vars` carries. That env
+    // overlay doesn't strip ZMX_SESSION, so the spawned shell's
+    // `exec zmx attach 'espalier-<new-hex>' <shell>` line hit zmx with
+    // `$ZMX_SESSION = <old-name>`, and zmx prefers the env var over
+    // the positional arg — attaching to the OLD session.
+    //
+    // `subprocessEnv` already solves this for inline subprocess spawns
+    // (CLI uses `ProcessInfo.processInfo.environment`), but surface
+    // spawns use libghostty's env overlay which Espalier can't feed
+    // through `subprocessEnv` before the spawn. Cleanest fix:
+    // `unsetenv("ZMX_SESSION")` in `EspalierApp.init()` so NOTHING
+    // downstream sees it, regardless of spawn mechanism.
+    //
+    // `sanitizeProcessEnvironment()` calls `unsetenv` for the names
+    // in `leakyEnvKeysToStrip`. Test surface: verify the key list
+    // contains `ZMX_SESSION` and that the impure sweep actually
+    // unsets a set value.
+
+    @Test func leakyEnvKeysIncludesZmxSession() {
+        #expect(ZmxLauncher.leakyEnvKeysToStripAtAppLaunch.contains("ZMX_SESSION"))
+    }
+
+    @Test func leakyEnvKeysIncludesGitDir() {
+        // `GIT_DIR` inherited from the launch shell would redirect every
+        // Espalier git invocation (`GitRunner.run(at: repoPath)`) to the
+        // shell's .git dir instead of the target repo's. CLIRunner sets
+        // `process.currentDirectoryURL` correctly but git's env-var-wins
+        // rule trumps CWD. Same leak class as ZMX_SESSION.
+        #expect(ZmxLauncher.leakyEnvKeysToStripAtAppLaunch.contains("GIT_DIR"))
+    }
+
+    @Test func leakyEnvKeysIncludesGitWorkTree() {
+        // Companion hijack to GIT_DIR. Less commonly set, but together
+        // they let a tainted launch shell redirect every worktree
+        // discovery / stats fetch.
+        #expect(ZmxLauncher.leakyEnvKeysToStripAtAppLaunch.contains("GIT_WORK_TREE"))
+    }
+
+    @Test func sanitizeProcessEnvironmentUnsetsZmxSession() {
+        setenv("ZMX_SESSION", "espalier-leaked-from-parent", 1)
+        defer { unsetenv("ZMX_SESSION") }
+        ZmxLauncher.sanitizeProcessEnvironment()
+        #expect(getenv("ZMX_SESSION") == nil)
+    }
+
+    @Test func sanitizeProcessEnvironmentUnsetsGitDir() {
+        setenv("GIT_DIR", "/some/other/repo/.git", 1)
+        defer { unsetenv("GIT_DIR") }
+        ZmxLauncher.sanitizeProcessEnvironment()
+        #expect(getenv("GIT_DIR") == nil)
+    }
+
     // MARK: isSessionMissing
     //
     // The contract: when zmx itself can't answer (binary missing,

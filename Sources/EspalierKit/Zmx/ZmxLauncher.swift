@@ -179,6 +179,47 @@ public final class ZmxLauncher: Sendable {
         ["ZMX_DIR": zmxDir.path]
     }
 
+    /// Env vars whose inherited value, if allowed to leak into any
+    /// downstream spawn (libghostty shell, CLIRunner subprocess, zmx
+    /// attach), would hijack that spawn to operate on the *parent
+    /// shell's* scope instead of the one Espalier asked for. Stripped
+    /// once at `EspalierApp.init()` so every spawn mechanism — direct
+    /// or libghostty-mediated — sees a clean env.
+    ///
+    /// - `ZMX_SESSION`: zmx's `attach <positional>` silently prefers
+    ///   `$ZMX_SESSION` over its positional arg. Leaked from a parent
+    ///   shell that lived inside a zmx session, every new pane's
+    ///   `exec zmx attach 'espalier-<new-hex>' <shell>` hijacks to the
+    ///   parent session. User-reported as "new worktree's Claude
+    ///   swapped to an older worktree's Claude" (`ZMX-7.4`).
+    /// - `GIT_DIR` / `GIT_WORK_TREE`: git's env-var-wins rule trumps
+    ///   `currentDirectoryURL`. Every `GitRunner.run(at: repoPath)`
+    ///   would redirect to the parent shell's `.git` dir, breaking
+    ///   worktree discovery, stats, and PR resolution.
+    ///
+    /// `subprocessEnv` additionally strips `ZMX_SESSION` for inline
+    /// subprocess calls; this sweep covers libghostty-spawned panes
+    /// (which can't route through `subprocessEnv`) and all other
+    /// consumers of `ProcessInfo.processInfo.environment`.
+    public static let leakyEnvKeysToStripAtAppLaunch: Set<String> = [
+        "ZMX_SESSION",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+    ]
+
+    /// Unset the env vars named in `leakyEnvKeysToStripAtAppLaunch`
+    /// from the current process. Intended to be called exactly once,
+    /// at `EspalierApp.init()`, before any surface spawns. Modifies
+    /// global process state (`unsetenv`), so callers beyond app
+    /// startup should think twice — the point is that downstream
+    /// `ProcessInfo.processInfo.environment` reads and libghostty's
+    /// env inheritance both see the cleaned value (`ZMX-7.4`).
+    public static func sanitizeProcessEnvironment() {
+        for key in leakyEnvKeysToStripAtAppLaunch {
+            _ = unsetenv(key)
+        }
+    }
+
     /// Produce a zmx-ready environment from `base`: applies `envAdditions`
     /// and strips `ZMX_SESSION`.
     ///

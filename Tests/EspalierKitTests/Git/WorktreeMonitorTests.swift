@@ -39,6 +39,58 @@ struct WorktreeMonitorTests {
         try await waitUntil(timeout: 2.0) { recorder.didFire }
     }
 
+    // GIT-3.11: WorktreeMonitor's file-descriptor lifecycle.
+    // `createFileWatcher` opens an fd via `open(path, O_EVTONLY)` and
+    // installs a DispatchSource cancel handler that `close`s the fd.
+    // Pre-fix, every `watch*` method IMMEDIATELY overrode that cancel
+    // handler with `source.setCancelHandler {}` — a redundant empty
+    // closure that silently replaced the fd-close. Result: every
+    // watcher leaked its fd on `stopAll` / `stopWatching` / deinit.
+    // Over enough add/remove-repo cycles (or a long-running session
+    // with churning worktree set), Espalier would hit macOS's 256-fd
+    // ulimit and every subsequent `open` would fail.
+    //
+    // This test opens many watchers, cancels them, and verifies the
+    // process's open-fd count returns to baseline rather than growing
+    // monotonically. Uses `/dev/fd/` — the macOS-visible enumeration of
+    // a process's open file descriptors.
+    @Test func watchersCloseTheirFdsWhenCancelled() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("espalier-fdleak-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Baseline fd count BEFORE any monitor activity.
+        let baseline = openFdCount()
+
+        // Each watchWorktreePath opens one fd for the watch. With the
+        // pre-fix leak, 50 watch/stop cycles stack 50 fds. With the
+        // fix, the per-cycle delta is zero.
+        for _ in 0..<50 {
+            let monitor = WorktreeMonitor()
+            monitor.watchWorktreePath(tmp.path)
+            monitor.stopAll()
+        }
+
+        // Let the DispatchSource cancel handlers drain on their queue.
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let after = openFdCount()
+        // Allow headroom for concurrent test execution — other suites
+        // running in parallel open fds (subprocess pipes, sockets,
+        // temp files) that land in this process's /dev/fd between our
+        // baseline and after snapshots. Pre-fix, the per-test delta
+        // was ≥50 (one fd leaked per watch/stop cycle). Post-fix, the
+        // delta should be << 50; a threshold of 40 cleanly separates
+        // "fixed" from "broken" even under parallel-test load.
+        #expect(after - baseline < 40,
+                "fd count grew by \(after - baseline) — WorktreeMonitor is leaking fds")
+    }
+
+    private func openFdCount() -> Int {
+        (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0
+    }
+
     @Test func branchChangeFiresOnCommit() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-monitor-\(UUID().uuidString)")

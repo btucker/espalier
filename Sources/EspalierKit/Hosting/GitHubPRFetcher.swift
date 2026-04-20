@@ -11,7 +11,15 @@ public struct GitHubPRFetcher: PRFetcher {
 
     public func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
         if let open = try await fetchOne(origin: origin, branch: branch, state: "open") {
-            let checks = try await fetchChecks(origin: origin, number: open.number)
+            // PR-5.4: `gh pr checks` is a SEPARATE call from `gh pr list`.
+            // If list succeeded but checks fails (auth hiccup, rate
+            // limit, gh version mismatch on the subcommand), we still
+            // know the PR exists — surface its identity with neutral
+            // checks rather than throwing and making the caller
+            // (PRStatusStore) drop the cached PRInfo entirely, which
+            // would hide the `#<number>` sidebar badge (PR-3.2) + the
+            // breadcrumb PR button until the next successful poll.
+            let checks = (try? await fetchChecks(origin: origin, number: open.number)) ?? .none
             return PRInfo(
                 number: open.number,
                 title: open.title,

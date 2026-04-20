@@ -134,6 +134,12 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **TERM-5.4** When an auto-closed pane was the last pane in its worktree, the application shall transition the worktree entry to the closed state, matching the user-initiated close behavior.
 
+**TERM-5.5** If `ghostty_surface_new` returns null (libghostty resource exhaustion, malformed config, or any internal rejection) when the application tries to create a terminal surface, the application shall skip the failed leaf and propagate a nil result to the caller rather than trap via `fatalError`. Callers shall treat nil as "surface creation failed": `splitPane` shall roll back its split-tree mutation so no dangling leaf is left behind; `addPane` (CLI `espalier pane add`) shall return a socket `.error("split failed")`; `createSurfaces` (worktree open) shall leave the leaf's surface dict entry empty so the view renders the `Color.black + ProgressView` fallback without crashing the app. Observed pre-fix: `espalier pane add --command ...` triggered a SIGTRAP inside `SurfaceHandle.init` whenever libghostty couldn't build the surface.
+
+**TERM-5.6** When a terminal pane is removed (user close via Cmd+W, shell exit, CLI `espalier pane close`), the application shall promote `focusedTerminalID` to `remainingTree.allLeaves.first` ONLY if the removed pane was the currently-focused one. If a different pane was focused, `focusedTerminalID` shall stay on that pane — it's still present in the remaining tree, and the user's keystrokes should continue to route there. Pre-fix behavior (unconditional promotion to the first leaf) silently jumped focus whenever the user closed a pane other than their focused one, mirroring Andy's "furious when any tool kills a long-running shell unexpectedly" pain point in the focus-redirection dimension.
+
+**TERM-5.7** When libghostty's `close_surface_cb` fires for a pane whose `SurfaceHandle` has already been torn down by Espalier (e.g. via `terminalManager.destroySurfaces(...)` during a `Stop Worktree` action), the application's close-event handler shall observe the missing surface handle and no-op rather than modifying the worktree's `splitTree`. Without this guard, the async close-event cascade that follows `Stop` would re-enter `closePane` for each leaf and strip them from the preserved split tree, emptying `splitTree` and violating `TERM-1.2`'s "re-open recreates the saved layout" contract. The guard is simple: `guard terminalManager.handle(for: targetID) != nil else { return }` before any tree mutation.
+
 ### 3.6 Stopping a Worktree
 
 **TERM-6.1** When the user triggers "Stop" on a running worktree, if any terminal surface has a running process, then the application shall display a confirmation dialog before proceeding.
@@ -222,6 +228,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 **GIT-3.9** When resurrecting a worktree entry that was stale-while-running (per `GIT-3.4`, which kept surfaces alive across the stale transition), the application shall tear down every terminal surface in the entry's previous split tree *before* creating the fresh surface for the resurrected entry, so the old surfaces' render/IO/kqueue threads stop rather than running orphaned — orphaned surfaces have been observed to corrupt libghostty's internal `os_unfair_lock` during window resize and SIGKILL the app.
 
 **GIT-3.10** When the user triggers "Dismiss" on a stale worktree whose surfaces are still alive per `GIT-3.4` (stale-while-running), the application shall tear down every terminal surface in the entry's split tree before removing the entry from the model, and shall clear `selectedWorktreePath` if the dismissed worktree was currently selected. Skipping the surface teardown is the same orphan-surfaces shape as `GIT-3.9` (different entry point) and has the same crash signature.
+
+**GIT-3.11** `WorktreeMonitor`'s `DispatchSource` watchers (one per watched worktree-directory, worktree-path, HEAD reflog, and origin-refs directory) shall release their underlying file descriptors on cancel. Specifically: `createFileWatcher` installs `source.setCancelHandler { close(fd) }`, and no `watch*` method shall override that handler — DispatchSource allows only one cancel handler per source, and an override silently leaks the fd. A long-running session that churns repos (add/remove, stale/resurrect) would otherwise monotonically grow its open-fd count and eventually hit macOS's 256-fd ulimit, failing every subsequent `open` (including socket accepts, terminal PTYs, and config reloads).
 
 ### 4.4 Deleting a Worktree
 
@@ -560,6 +568,13 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ZMX-7.3** When `close_surface_cb` fires for a pane, the application shall always route to the close-pane path (remove from the split tree, free the surface) regardless of the zmx session's liveness. The mid-flight "rebuild surface in place" recovery explored in an earlier design was withdrawn because the available signals (session-missing + no Espalier-initiated close) cannot distinguish a clean user `exit` from an external daemon kill, and the rebuild path regressed `TERM-5.3`. Recovery from daemon loss while Espalier is running is deferred until a zmx-side signal disambiguates the two cases.
 
+**ZMX-7.4** At application launch, before any terminal surface is spawned, the application shall `unsetenv(...)` a known list of "leaky" environment variables from its own process so every downstream spawn (libghostty surface shells, CLIRunner subprocesses, zmx attach) sees a clean env regardless of the shell Espalier was launched from. The list shall include at minimum:
+
+- `ZMX_SESSION` — zmx's `attach <positional>` silently prefers `$ZMX_SESSION` over its positional argument. A parent shell that itself lived inside a zmx session would otherwise hijack every new pane's attach to the parent's session. User-visible as "created a new worktree, its Claude swapped out for an older worktree's Claude".
+- `GIT_DIR` and `GIT_WORK_TREE` — git's env-var-wins rule trumps `currentDirectoryURL`. A parent shell with either set would redirect every `GitRunner.run(at: repoPath)` invocation (worktree discovery, stats, PR resolution) to the parent shell's `.git` dir instead of the target repo.
+
+The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additionally strips `ZMX_SESSION` from inline subprocess envs as belt-and-suspenders, but the process-level sweep is the primary defense — it also covers libghostty's surface env overlay, which cannot be routed through `subprocessEnv` before the spawn.
+
 ## 14. Distribution
 
 ### 14.1 Build Bundle
@@ -735,6 +750,8 @@ its Ghostty-config-derived menu shortcuts without requiring a restart.
 **PR-5.1** For GitHub origins, the application shall fetch open PRs via `gh pr list --repo <owner>/<repo> --head <branch> --state open --limit 5 --json number,title,url,state,headRefName,headRepositoryOwner` and take the first result whose `headRepositoryOwner.login` matches the origin owner. Merged PRs shall use the same shape with `--state merged` and the additional `mergedAt` JSON field. The limit is 5 (rather than 1) so a fork PR returned first by `gh`'s default sort cannot crowd out a same-repo PR that the owner filter would otherwise accept.
 
 **PR-5.2** For GitHub origins, the application shall fetch per-check status via `gh pr checks <number> --repo <owner>/<repo> --json name,state,bucket`. The `bucket` field (values `pass`/`fail`/`pending`/`skipping`/`cancel`) is the canonical verdict; `conclusion` is not a field `gh` emits from this command.
+
+**PR-5.4** When `gh pr list` succeeds but the subsequent `gh pr checks` call for the resolved PR fails (auth hiccup, rate limit, subcommand regression, network blip), the application shall still surface the PR's identity with `.none` check status rather than propagating the checks error out of the fetch. The `#<number>` sidebar badge (`PR-3.2`) and the breadcrumb PR button shall remain visible — losing them because checks couldn't be resolved produces worse UX than displaying them with neutral check state.
 
 **PR-5.3** For GitLab origins, the application shall fetch merge requests via `glab mr list --repo <path> --source-branch <branch> --state <opened|merged> --per-page 1 -F json`. Per-pipeline status is derived from the MR's `head_pipeline.status` field in the same response.
 

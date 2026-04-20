@@ -40,6 +40,18 @@ struct EspalierApp: App {
         // relaunches.
         Self.terminateIfAnotherInstanceIsRunning()
 
+        // ZMX-7.4: If Espalier.app was launched from a terminal that
+        // was itself inside a zmx session, `ZMX_SESSION=<parent-name>`
+        // is in the app's env — and libghostty inherits it when
+        // spawning every new pane's shell. That shell's
+        // `exec zmx attach 'espalier-<new-hex>' <shell>` then hits zmx
+        // with $ZMX_SESSION set, which zmx prefers over the positional
+        // arg, so the new pane attaches to the PARENT's session
+        // instead. User-reported as "created a new worktree, its
+        // Claude swapped out for an older worktree's Claude". Strip
+        // before any surface spawns.
+        ZmxLauncher.sanitizeProcessEnvironment()
+
         let loaded = AppState.loadOrFreshBackingUpCorruption(from: AppState.defaultDirectory)
         _appState = State(initialValue: loaded)
 
@@ -681,7 +693,16 @@ struct EspalierApp: App {
                     newTree = wt.splitTree.insertingBefore(newID, at: targetID, direction: direction)
                 }
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = newTree
-                _ = terminalManager.createSurface(terminalID: newID, worktreePath: wt.path)
+                // TERM-5.5: createSurface can now fail gracefully
+                // (libghostty returned null). Roll back the split-tree
+                // mutation so we don't leave a dangling leaf that renders
+                // forever as `Color.black + ProgressView`. Returning nil
+                // propagates to callers like `addPane` which emit a
+                // readable socket `.error`.
+                guard terminalManager.createSurface(terminalID: newID, worktreePath: wt.path) != nil else {
+                    appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = wt.splitTree
+                    return nil
+                }
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = newID
                 terminalManager.setFocus(newID)
                 return newID
@@ -1006,6 +1027,19 @@ struct EspalierApp: App {
                 let wt = appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
                 guard wt.splitTree.containsLeaf(targetID) else { continue }
 
+                // TERM-5.7: Stop-cascade guard. `worktree Stop` calls
+                // `terminalManager.destroySurfaces(allLeaves)` followed by
+                // `prepareForStop()` which deliberately PRESERVES
+                // splitTree per TERM-1.2. libghostty then asynchronously
+                // fires close_surface_cb for each just-closed surface,
+                // routing back here via `onCloseRequest → closePane`. By
+                // that point, the surface has already been torn down
+                // (`surfaces[id]` is nil) — so `handle(for: targetID)` is
+                // nil. Without this guard, the late-firing close-event
+                // would re-modify splitTree, emptying it and violating
+                // TERM-1.2's re-open-restores-layout contract.
+                guard terminalManager.handle(for: targetID) != nil else { continue }
+
                 terminalManager.destroySurface(terminalID: targetID)
                 let newTree = wt.splitTree.removing(targetID)
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = newTree
@@ -1018,9 +1052,24 @@ struct EspalierApp: App {
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = nil
                 } else {
-                    let newFocus = newTree.allLeaves.first
+                    // TERM-5.6: only promote focus when the CLOSED pane
+                    // was the focused one. Pre-fix, this branch always
+                    // reassigned focus to `newTree.allLeaves.first`,
+                    // silently jumping focus away from whatever pane the
+                    // user was typing in if they closed a different pane.
+                    let previousFocus = wt.focusedTerminalID
+                    let newFocus = SplitTree.focusAfterRemoving(
+                        currentFocus: previousFocus,
+                        removed: targetID,
+                        remainingTree: newTree
+                    )
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].focusedTerminalID = newFocus
-                    if let newFocus { terminalManager.setFocus(newFocus) }
+                    // Only push focus to libghostty if it actually
+                    // changed — otherwise we're re-raising the same
+                    // surface for no reason.
+                    if let newFocus, newFocus != previousFocus {
+                        terminalManager.setFocus(newFocus)
+                    }
                 }
                 return
             }

@@ -367,7 +367,11 @@ final class TerminalManager: ObservableObject {
         for terminalID in splitTree.allLeaves where surfaces[terminalID] == nil {
             clearRehydratedIfDaemonGone(terminalID, liveSessions: liveSessions)
             let (zmxInitialInput, zmxDir) = resolveZmxSpawn(for: terminalID)
-            let handle = SurfaceHandle(
+            // TERM-5.5: SurfaceHandle.init is failable now — ghostty_surface_new
+            // can return null under libghostty resource exhaustion. Skip the
+            // leaf rather than crash the app; the pane renders the Color.black
+            // + ProgressView fallback until it's re-created.
+            guard let handle = SurfaceHandle(
                 terminalID: terminalID,
                 app: app,
                 worktreePath: worktreePath,
@@ -375,7 +379,7 @@ final class TerminalManager: ObservableObject {
                 zmxInitialInput: zmxInitialInput,
                 zmxDir: zmxDir,
                 terminalManager: self
-            )
+            ) else { continue }
             surfaces[terminalID] = handle
             created[terminalID] = handle
             trackForPWDPoll(terminalID: terminalID, initialPWD: worktreePath)
@@ -396,7 +400,9 @@ final class TerminalManager: ObservableObject {
         clearRehydratedIfDaemonGone(terminalID, liveSessions: nil)
 
         let (zmxInitialInput, zmxDir) = resolveZmxSpawn(for: terminalID)
-        let handle = SurfaceHandle(
+        // TERM-5.5: failable init returns nil on libghostty rejection;
+        // propagate that to the caller instead of crashing.
+        guard let handle = SurfaceHandle(
             terminalID: terminalID,
             app: app,
             worktreePath: worktreePath,
@@ -404,7 +410,7 @@ final class TerminalManager: ObservableObject {
             zmxInitialInput: zmxInitialInput,
             zmxDir: zmxDir,
             terminalManager: self
-        )
+        ) else { return nil }
         surfaces[terminalID] = handle
         trackForPWDPoll(terminalID: terminalID, initialPWD: worktreePath)
         return handle
