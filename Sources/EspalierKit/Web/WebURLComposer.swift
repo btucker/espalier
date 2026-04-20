@@ -24,9 +24,16 @@ public enum WebURLComposer {
     }
 
     /// Prefer the first IPv4 address; fall back to the first IPv6 only
-    /// if no IPv4 is present. `nil` when the input is empty.
+    /// if no IPv4 is present. `nil` when the input is empty or every
+    /// entry is blank. Whitespace-only / empty entries are defensively
+    /// skipped; surrounding whitespace on otherwise-valid entries is
+    /// trimmed — protects against a Tailscale LocalAPI hiccup that
+    /// would otherwise propagate to a malformed `http://:8799/`.
     public static func chooseHost(from ips: [String]) -> String? {
-        if let v4 = ips.first(where: { !$0.contains(":") }) { return v4 }
-        return ips.first
+        let cleaned = ips
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if let v4 = cleaned.first(where: { !$0.contains(":") }) { return v4 }
+        return cleaned.first
     }
 }

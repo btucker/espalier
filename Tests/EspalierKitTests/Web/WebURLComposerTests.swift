@@ -29,6 +29,23 @@ struct WebURLComposerTests {
         #expect(WebURLComposer.chooseHost(from: []) == nil)
     }
 
+    @Test func chooseHostSkipsEmptyStrings() {
+        // Defensive: a Tailscale LocalAPI hiccup that returned an empty
+        // `tailscaleIPs` entry would otherwise make chooseHost pick `""`
+        // (empty has no `:`, matches the IPv4 predicate) and downstream
+        // produce `http://:8799/` — malformed URI.
+        #expect(WebURLComposer.chooseHost(from: ["", "100.64.0.5"]) == "100.64.0.5")
+        #expect(WebURLComposer.chooseHost(from: ["", "fd7a:115c::5"]) == "fd7a:115c::5")
+        #expect(WebURLComposer.chooseHost(from: ["", ""]) == nil)
+    }
+
+    @Test func chooseHostTrimsSurroundingWhitespace() {
+        // Also defensive: protects against accidental whitespace from
+        // parsing. Returns the trimmed value, not the padded one, so
+        // the downstream URL composition doesn't produce `http:// 100.64.0.5:8799/`.
+        #expect(WebURLComposer.chooseHost(from: [" 100.64.0.5 "]) == "100.64.0.5")
+    }
+
     @Test func sessionNameIsPercentEscaped() {
         // Session names with unusual chars shouldn't happen today, but
         // we encode defensively.

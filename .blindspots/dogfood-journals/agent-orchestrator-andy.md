@@ -2316,3 +2316,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - `WorktreeStatsStore` → EspalierKit move for DIVERGE-4.5 coverage remains open.
 - Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 115 — 2026-04-20 (chooseHost accepts empty / whitespace host strings)
+
+### Explored
+- Ranged through CLI socket client error paths, HostingOrigin validation, `GHOSTTY_ACTION_RING_BELL` / `OPEN_URL` / `DESKTOP_NOTIFICATION` handling, ZmxLauncher.isAvailable + killZmxSession async dispatch, NotifyInputValidation boundary tests (86400 / 86401).
+- Another screenshot attempt — still blocked by missing macOS screen-recording permission.
+- Landed on `WebURLComposer.chooseHost`: no defense against empty-string or whitespace entries.
+
+### Diagnosed
+- `ips.first(where: { !$0.contains(":") })` matches `""` (empty doesn't contain `:`) as a "valid IPv4" and returns it. Downstream `baseURL` produces `http://:8799/` — malformed.
+- Same shape for ` 100.64.0.5 ` (whitespace-padded): matches the IPv4 predicate verbatim, baseURL emits `http:// 100.64.0.5:8799/`.
+- A Tailscale LocalAPI hiccup returning a malformed entry (unlikely but possible) would propagate to the Copy URL / Settings display.
+
+### Fixed
+- `chooseHost` now trims surrounding whitespace and filters empty entries before picking. Preserves the existing IPv4-over-IPv6 preference.
+
+### Spec
+- No new SPECS — this is a defensive hardening within `WEB-1.8`'s existing contract (valid URL output).
+
+### Tests
+- Two new cases: `chooseHostSkipsEmptyStrings` (three sub-cases: empty-then-v4, empty-then-v6, all-empty → nil), `chooseHostTrimsSurroundingWhitespace`. Failed before the fix (`chooseHost → ""` instead of expected value); pass after. 538/538 overall.
+
+### Commit
+- `fix(web): chooseHost filters empty/whitespace entries`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit for DIVERGE-4.5 unit coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.
