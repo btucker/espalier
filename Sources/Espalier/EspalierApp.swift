@@ -371,32 +371,41 @@ struct EspalierApp: App {
         for repo in appState.repos {
             services.worktreeMonitor.watchWorktreeDirectory(repoPath: repo.path)
             services.worktreeMonitor.watchOriginRefs(repoPath: repo.path)
-            for wt in repo.worktrees {
+            for wt in repo.worktrees where wt.state != .stale {
                 services.worktreeMonitor.watchWorktreePath(wt.path)
                 services.worktreeMonitor.watchHeadRef(worktreePath: wt.path, repoPath: repo.path)
+                services.worktreeMonitor.watchWorktreeContents(worktreePath: wt.path)
             }
         }
 
         reconcileOnLaunch()
 
-        // Start the stats poller: a 5s ticker that, per-repo, periodically
-        // `git fetch`es the default branch and recomputes divergence stats
-        // for every non-stale worktree. Replaces the legacy 60s Timer and
-        // additionally surfaces origin-side drift that WorktreeMonitor's
-        // per-worktree HEAD watcher can't see.
-        let statsTicker = PollingTicker(interval: .seconds(5))
+        // Start the stats poller: a 5s ticker that, per-repo, gates
+        // both the 5-minute `git fetch` cadence (DIVERGE-4.3) and the
+        // per-worktree 30s local recompute cadence (DIVERGE-4.6). Keeps
+        // polling while Espalier is backgrounded — the user's Claude /
+        // editor session is often in a different frontmost app, and
+        // that's exactly when a `git add` in an external shell or a
+        // merge on origin needs to show up in the sidebar without
+        // requiring a click back into Espalier first.
+        let statsTicker = PollingTicker(
+            interval: .seconds(5),
+            pauseWhenInactive: { false }
+        )
         services.statsStore.start(
             ticker: statsTicker,
             getRepos: { [appState] in appState.repos }
         )
 
+        // Same reasoning for the PR poller: open→merged transitions
+        // happen on GitHub while Espalier is backgrounded, and the only
+        // signal channel is `gh pr list`. Previously we paused unless
+        // CI was pending, which meant a PR that merged after CI went
+        // green (the common case) stayed visibly "open" in the sidebar
+        // until the user clicked back into the app.
         let prTicker = PollingTicker(
             interval: .seconds(5),
-            pauseWhenInactive: { [prStatusStore = services.prStatusStore] in
-                // Keep polling when at least one tracked PR has pending CI, so the
-                // "green light" arrives even while the user is in another app.
-                !prStatusStore.infos.values.contains(where: { $0.checks == .pending })
-            }
+            pauseWhenInactive: { false }
         )
         services.prStatusStore.start(
             ticker: prTicker,
@@ -1422,13 +1431,15 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                 prStore.clear(worktreePath: wt.path)
             }
 
-            // watchWorktreePath / watchHeadRef are idempotent, so registering
-            // for the whole repo is cheap; this is how newly-discovered
-            // worktrees (external `git worktree add`) start getting HEAD
-            // tracking without an app restart. Includes resurrected entries.
+            // watchWorktreePath / watchHeadRef / watchWorktreeContents are
+            // idempotent, so registering for the whole repo is cheap; this
+            // is how newly-discovered worktrees (external `git worktree
+            // add`) start getting HEAD + working-tree tracking without an
+            // app restart. Includes resurrected entries.
             for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
                 monitor.watchWorktreePath(wt.path)
                 monitor.watchHeadRef(worktreePath: wt.path, repoPath: repoPath)
+                monitor.watchWorktreeContents(worktreePath: wt.path)
             }
 
             // Existing worktrees' stats are driven by their own HEAD
@@ -1469,12 +1480,38 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     nonisolated func worktreeMonitorDidDetectOriginRefChange(_ monitor: WorktreeMonitor, repoPath: String) {
         let binding = appState
         let prStore = prStatusStore
+        let statsStore = statsStore
         Task { @MainActor in
             guard let repo = binding.wrappedValue.repos.first(where: { $0.path == repoPath }) else { return }
             for wt in repo.worktrees where wt.state != .stale {
+                // Origin-ref movement can shift every worktree's ahead /
+                // behind counts vs. origin/<default>, not just the PR
+                // state — e.g. a local `git fetch` in another terminal
+                // advances `origin/main` and every feature-branch
+                // worktree now has a new "behind" count. Refresh stats
+                // symmetrically with PR so the sidebar doesn't need a
+                // full poll cycle to catch up.
+                statsStore.refresh(worktreePath: wt.path, repoPath: repoPath)
                 guard PRStatusStore.isFetchableBranch(wt.branch) else { continue }
                 prStore.refresh(worktreePath: wt.path, repoPath: repoPath, branch: wt.branch)
             }
+        }
+    }
+
+    /// GIT-2.6: working-tree content change (edit, stage, untracked-file
+    /// add) fired through FSEvents. Drives the dirty-state indicator
+    /// without waiting for the 30s local poll (DIVERGE-4.6). Idempotent
+    /// — `statsStore.refresh` self-dedups via `inFlight`, and the
+    /// generation counter guards against a late compute writing to a
+    /// worktree that was just dismissed.
+    nonisolated func worktreeMonitorDidDetectContentChange(_ monitor: WorktreeMonitor, worktreePath: String) {
+        let binding = appState
+        let store = statsStore
+        Task { @MainActor in
+            guard let repoPath = binding.wrappedValue.repos.first(where: { repo in
+                repo.worktrees.contains(where: { $0.path == worktreePath && $0.state != .stale })
+            })?.path else { return }
+            store.refresh(worktreePath: worktreePath, repoPath: repoPath)
         }
     }
 
