@@ -2721,3 +2721,37 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - `PRStatusStore.lastFetch` has similar semantics — a failed fetch still sets lastFetch = Date(), which drives the PR-7.2 backoff. That's deliberate and not a bug.
 - Look at GIT-*, LAYOUT-*, ZMX-* for similar "swallow and cache failure" patterns in stores I haven't audited yet.
+
+## Cycle 153 — 2026-04-20 (WebServer EADDRINUSE classifier miss — WEB-1.11)
+
+### Explored
+- Opened Espalier Preferences → Web Access. Saw status row rendering the raw NIO error: "Error: bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)". User-hostile + stray `)` from NIO's format string.
+- Traced WebServer.swift:176: `ns.domain.contains("posix") || "\(error)".contains("EADDRINUSE")`. Neither pattern matches the live error shape.
+
+### Broke
+- Wrote `WebServerPortInUseTests.secondBindOnSamePortReportsPortUnavailable` — binds first server to an ephemeral port, second to the same port. Expected `second.status == .portUnavailable`; got `.error("bind(...): Address already in use) (errno: 48)")`. Bug in classification.
+
+### Diagnosed
+- NIO's error description contains "Address already in use" (human string), NOT "EADDRINUSE" (C macro). The bridged NSError domain is exactly `NSPOSIXErrorDomain`, not a substring of anything.
+- WebServerController's catch ALSO overwrote whatever WebServer.start set, with `.error("\(error)")`. Two-bug alignment.
+
+### Spec
+- Added **WEB-1.11** pinning the typed status + shared classifier.
+
+### Fixed
+- Extracted `WebServer.isAddressInUse(_:)` that checks:
+  - `NSPOSIXErrorDomain` + `EADDRINUSE` errno code (locale-stable)
+  - fallback: string `.contains("Address already in use")` or the C macro name
+- `WebServer.start` uses it instead of inline checks.
+- `WebServerController`'s catch uses the SAME classifier so renderer sees `.portUnavailable` regardless of which of the two set it.
+
+### Tests
+- `WebServerPortInUseTests.secondBindOnSamePortReportsPortUnavailable` — classic double-bind.
+- 616/616 overall.
+
+### Commit
+- `fix(web): classify EADDRINUSE as .portUnavailable, not .error (WEB-1.11)` (2eef12d)
+
+### Try next cycle
+- Now that port-in-use shows "Port in use" text, add an actionable hint — the text says "Port in use" but doesn't tell the user to stop the conflicting process or change the port. Could add a secondary line.
+- Preferences shows "Port: 8,799" with a localization-grouped number — weird (matches WEB-1.7 concern for the status row but this is the INPUT field). Verify the editable field saves correctly.

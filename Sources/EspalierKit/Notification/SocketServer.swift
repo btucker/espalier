@@ -32,6 +32,16 @@ public final class SocketServer: @unchecked Sendable {
     /// forever. Tests can override; production takes the default.
     public var onRequestTimeout: DispatchTimeInterval = .seconds(5)
 
+    /// Upper bound on how many bytes the server reads from a single
+    /// accepted client before giving up and closing the fd. `ATTN-2.9`
+    /// comments peg a well-behaved JSON notify/pane message at ≤~1 KB;
+    /// 1 MB is 1000× that headroom. Without a cap, a local writer that
+    /// keeps the pipe continuously full (`cat /dev/urandom | nc -U`)
+    /// never trips `SO_RCVTIMEO` — the read loop grew the buffer
+    /// without bound until process memory was exhausted. Tests can
+    /// shrink this to keep runtime bounded. `ATTN-2.11`.
+    public var maxPerClientBytes: Int = 1 * 1024 * 1024
+
     /// Maximum path length for a Unix domain socket on macOS. `sockaddr_un.sun_path`
     /// is 104 bytes — accounting for the null terminator, the path must be ≤103
     /// bytes when encoded as UTF-8.
@@ -115,8 +125,11 @@ public final class SocketServer: @unchecked Sendable {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let bytesRead = Darwin.read(fd, &chunk, 4096)
+        let cap = maxPerClientBytes
+        while buffer.count < cap {
+            let remaining = cap - buffer.count
+            let toRead = min(chunk.count, remaining)
+            let bytesRead = Darwin.read(fd, &chunk, toRead)
             if bytesRead <= 0 { break }
             buffer.append(contentsOf: chunk[0..<bytesRead])
         }
