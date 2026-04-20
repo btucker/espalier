@@ -447,7 +447,14 @@ struct EspalierApp: App {
         Task {
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
-                guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { continue }
+                let discovered: [GitWorktreeDiscovery.DiscoveredWorktree]
+                do {
+                    discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+                } catch {
+                    NSLog("[Espalier] reconcileOnLaunch: discover failed for %@: %@",
+                          repoPath, String(describing: error))
+                    continue
+                }
                 let discoveredPaths = Set(discovered.map(\.path))
 
                 let existingPaths = Set(binding.wrappedValue.repos[repoIdx].worktrees.map(\.path))
@@ -1422,7 +1429,14 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
         // manifestation: intermittent ~1s input/render hangs under fs/
         // indexing pressure).
         Task { @MainActor in
-            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath) else { return }
+            let discovered: [GitWorktreeDiscovery.DiscoveredWorktree]
+            do {
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+            } catch {
+                NSLog("[Espalier] worktreeMonitorDidDetectChange: discover failed for %@: %@",
+                      repoPath, String(describing: error))
+                return
+            }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
 
             let existing = binding.wrappedValue.repos[repoIdx].worktrees
@@ -1521,8 +1535,15 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             guard let repoPath = binding.wrappedValue.repos.first(where: { repo in
                 repo.worktrees.contains(where: { $0.path == worktreePath })
             })?.path else { return }
-            guard let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
-                  let match = discovered.first(where: { $0.path == worktreePath }) else { return }
+            let discovered: [GitWorktreeDiscovery.DiscoveredWorktree]
+            do {
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+            } catch {
+                NSLog("[Espalier] worktreeMonitorDidDetectBranchChange: discover failed for %@: %@",
+                      repoPath, String(describing: error))
+                return
+            }
+            guard let match = discovered.first(where: { $0.path == worktreePath }) else { return }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }),
                   let wtIdx = binding.wrappedValue.repos[repoIdx].worktrees.firstIndex(where: { $0.path == worktreePath }) else { return }
             binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch

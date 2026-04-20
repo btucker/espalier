@@ -53,6 +53,22 @@ struct GitWorktreeDiscoveryTests {
         #expect(entries[0].branch == "(bare)")
     }
 
+    /// GIT-4.7 regression guard: `discover` throws when asked to inspect
+    /// a path that isn't a git repository. The app-level callers wrap
+    /// this in `try?` historically — cycle 100's fix makes them log via
+    /// NSLog instead; that behavior depends on `discover` actually
+    /// surfacing the failure rather than returning empty.
+    @Test func discoverThrowsForNonRepoPath() async {
+        let bogus = FileManager.default.temporaryDirectory
+            .appendingPathComponent("espalier-non-repo-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: bogus, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bogus) }
+
+        await #expect(throws: Error.self) {
+            _ = try await GitWorktreeDiscovery.discover(repoPath: bogus.path)
+        }
+    }
+
     @Test func discoverFromRealRepo() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-discover-\(UUID().uuidString)")

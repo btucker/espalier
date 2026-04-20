@@ -1885,3 +1885,33 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - The rapid-worktree-create scenario still hasn't been exercised.
 - Remaining `try?` at EspalierApp.swift lines 431/1406/1505 (GitWorktreeDiscovery.discover) — silent discovery failures during reconcile / HEAD-change / monitor-poll.
+
+## Cycle 100 — 2026-04-19 (silent GitWorktreeDiscovery.discover failures — GIT-3.12)
+
+### Explored
+- Followed cycle 99's TODO. Same silent-failure family as cycles 95 / 97 but at the git discovery surface.
+
+### Diagnosed
+- Three `try? await GitWorktreeDiscovery.discover(...)` sites in `EspalierApp.swift`:
+  - `reconcileOnLaunch` (L450) — launch-time reconcile
+  - `worktreeMonitorDidDetectChange` (L1425) — fs-event triggered reconcile
+  - `worktreeMonitorDidDetectBranchChange` (L1524) — branch-change triggered reconcile
+- All three swallow errors. If `git worktree list --porcelain` times out, or git is uninstalled, or a stale state.json entry points at a deleted directory, the reconcile skips and the user sees no indication.
+- Andy-facing symptom: creates a new worktree, FSEvents fires, discover throws once (transient), no retry, no sidebar update, no log. Looks like Espalier "missed" the worktree.
+
+### Fixed
+- Replaced all three `try?` with `do { let discovered = try await ... } catch { NSLog(...); continue/return }`. Each log line identifies which call site + which repo.
+
+### Spec
+- Added **GIT-3.12**. Cross-references ATTN-2.7 / PERSIST-2.2 as the family.
+
+### Tests
+- New `discoverThrowsForNonRepoPath` in GitWorktreeDiscoveryTests — asserts the underlying contract the caller log now depends on (discover actually propagates the error rather than returning empty). Pins it.
+- 498/498 pass (one transient flake on first run, ≥3 consecutive green after).
+
+### Commit
+- `fix(app): log GitWorktreeDiscovery.discover failures instead of silencing them (GIT-3.12)`
+
+### Try next cycle
+- Explore `.onChange(of: appState)` save frequency — every paneAttention mutation triggers a full state.json rewrite, every COMMAND_FINISHED = 2 writes. Probably harmless on SSD but worth measuring.
+- Revisit rapid-worktree-create scenario: with all three discovery paths now logging, if something breaks under rapid ops, Console.app will tell us.
