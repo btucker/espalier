@@ -2,7 +2,14 @@ import Testing
 import Foundation
 @testable import EspalierKit
 
-@Suite("Socket Integration Tests")
+// `.serialized` because `slowOnRequestClosesClientFDAtTimeout` and
+// `silentClientDoesNotBlockOtherClients` both deliberately block the
+// main dispatch queue for a handful of seconds to simulate the hang
+// conditions they cover. Letting them run in parallel with peer
+// tests in this suite causes those peers' `DispatchQueue.main.async`
+// callbacks to stall past their `try await Task.sleep` windows and
+// fail spuriously.
+@Suite("Socket Integration Tests", .serialized)
 struct SocketIntegrationTests {
     @Test func serverReceivesMessage() async throws {
         // Use /tmp (short path) to keep the socket path under the 104-byte
@@ -295,6 +302,81 @@ struct SocketIntegrationTests {
 
         try await Task.sleep(for: .milliseconds(100))
         #expect(received.value != nil)
+    }
+
+    /// `onRequest` runs on the main queue; if the main queue stalls
+    /// (modal dialog, long synchronous work, a main-actor reentrancy
+    /// bug), `semaphore.wait()` on the socket queue blocks forever and
+    /// pins every subsequent request behind it — same serial-queue
+    /// pile-up shape as `silentClientDoesNotBlockOtherClients` but at
+    /// the request/response path.
+    ///
+    /// The server shall cap its wait with a bounded timeout and, on
+    /// expiry, close the client fd without a response. The CLI's
+    /// client-side `ATTN-3.3` 2s timeout then surfaces that as
+    /// `socketTimeout` to the user. Observable: client's `read()` sees
+    /// EOF within the server's timeout window + small margin, not after
+    /// onRequest's full duration.
+    @Test func slowOnRequestClosesClientFDAtTimeout() async throws {
+        let dir = URL(fileURLWithPath: "/tmp").appendingPathComponent("espalier-slow-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let socketPath = dir.appendingPathComponent("s").path
+
+        let server = SocketServer(socketPath: socketPath)
+        server.onRequestTimeout = .seconds(1)
+        // onRequest blocks main on a gate the test releases at the
+        // end. This emulates a stalled main queue (modal / heavy work)
+        // without Thread.sleep-ing for the full duration — which
+        // would pin main past the end of this test and interfere with
+        // peer tests in the suite that also dispatch to main.
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        server.onRequest = { _ in
+            _ = gate.wait(timeout: .now() + 10)
+            return .ok
+        }
+        try server.start()
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(100))
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        socketPath.withCString { ptr in
+            withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
+                pathPtr.withMemoryRebound(to: CChar.self, capacity: 104) { dest in _ = strlcpy(dest, ptr, 104) }
+            }
+        }
+        _ = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        // Client-side read timeout of 3s — if server doesn't close
+        // within that, we'd see EAGAIN (-1) rather than EOF (0).
+        var rcvTimeout = timeval(tv_sec: 3, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvTimeout, socklen_t(MemoryLayout<timeval>.size))
+
+        let msg = #"{"type":"notify","path":"/tmp/wt","text":"slow"}"# + "\n"
+        msg.withCString { ptr in _ = Darwin.write(fd, ptr, strlen(ptr)) }
+        // Half-close write side so the server's read loop exits
+        // immediately (EOF) rather than waiting out its 2s
+        // SO_RCVTIMEO (cycle 131 ATTN-2.9). Keep read side open so
+        // we can observe EOF from server-initiated close.
+        shutdown(fd, Int32(SHUT_WR))
+
+        let start = Date()
+        var buf = [UInt8](repeating: 0, count: 1024)
+        let n = Darwin.read(fd, &buf, 1024)
+        let elapsed = Date().timeIntervalSince(start)
+
+        // EOF = 0 means server closed the fd. Pre-fix: wait the full
+        // 10s for onRequest to finish (or client-side 3s timeout
+        // fires first as EAGAIN). Post-fix: server times out at 1s
+        // and closes fd, so n == 0 within ~1.5s.
+        #expect(n == 0, "Server must close fd at timeout, not wait for onRequest")
+        #expect(elapsed < 2.0, "Server must honor its 1s timeout, not wait for onRequest's 10s (elapsed: \(elapsed)s)")
     }
 
     /// A silent client that connects but never writes or closes must not

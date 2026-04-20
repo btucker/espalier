@@ -21,6 +21,17 @@ public final class SocketServer: @unchecked Sendable {
     /// the handler if your state requires it.
     public var onRequest: ((NotificationMessage) -> ResponseMessage?)?
 
+    /// Upper bound on how long the socket worker waits for an `onRequest`
+    /// handler (which runs on the main queue) to return. If the main
+    /// queue stalls — modal dialog, long synchronous work, reentrancy
+    /// bug — the previous unbounded `semaphore.wait()` pinned the
+    /// socket queue and every subsequent client behind it. Capping at
+    /// 5s means the server closes the fd without a response on stall;
+    /// the CLI's 2s client-side timeout (`ATTN-3.3`) then surfaces that
+    /// as a clean `socketTimeout` to the user instead of hanging
+    /// forever. Tests can override; production takes the default.
+    public var onRequestTimeout: DispatchTimeInterval = .seconds(5)
+
     /// Maximum path length for a Unix domain socket on macOS. `sockaddr_un.sun_path`
     /// is 104 bytes — accounting for the null terminator, the path must be ≤103
     /// bytes when encoded as UTF-8.
@@ -120,13 +131,21 @@ public final class SocketServer: @unchecked Sendable {
             // result so the reply is written before we close the fd.
             if let onRequest {
                 let semaphore = DispatchSemaphore(value: 0)
-                var response: ResponseMessage?
+                let responseBox = ResponseBox()
                 DispatchQueue.main.async {
-                    response = onRequest(message)
+                    responseBox.value = onRequest(message)
                     semaphore.signal()
                 }
-                semaphore.wait()
-                if let response, let encoded = try? JSONEncoder().encode(response) {
+                // Cap the wait at onRequestTimeout so a stalled main
+                // queue can't pin this serial socket queue and block
+                // every subsequent client behind it. On timeout, we
+                // drop the response (the closure may still complete
+                // later — its signal() goes into the retained
+                // semaphore harmlessly).
+                let waitResult = semaphore.wait(timeout: .now() + onRequestTimeout)
+                if waitResult == .success,
+                   let response = responseBox.value,
+                   let encoded = try? JSONEncoder().encode(response) {
                     var payload = encoded
                     payload.append(0x0A) // '\n'
                     payload.withUnsafeBytes { buf in
@@ -136,6 +155,17 @@ public final class SocketServer: @unchecked Sendable {
             }
         }
     }
+}
+
+/// Heap-allocated box for the onRequest response. Necessary because the
+/// closure dispatched to main needs to write the response where the
+/// socket worker can read it AFTER the semaphore signals success. A
+/// plain `var response: ResponseMessage?` captured by the closure would
+/// race the worker's read against the closure's write on timeout
+/// reclaim; a class gives us a known reference the closure writes
+/// under a happens-before edge with `signal() → wait() == .success`.
+private final class ResponseBox: @unchecked Sendable {
+    var value: ResponseMessage?
 }
 
 public enum SocketServerError: Error {
