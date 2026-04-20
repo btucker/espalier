@@ -40,6 +40,15 @@ echo "→ copy binaries"
 cp "$BIN_DIR/Espalier" "$APP/Contents/MacOS/Espalier"
 cp "$BIN_DIR/espalier-cli" "$APP/Contents/Helpers/espalier"
 
+# Copy SwiftPM resource bundles. `Bundle.module` resolves relative to
+# Bundle.main.resourceURL first, which maps to Contents/Resources/ for an
+# .app. Without this, WebStaticResources and anything else using
+# Bundle.module fails at runtime inside the installed app.
+for b in "$BIN_DIR"/*_EspalierKit.bundle "$BIN_DIR"/*_EspalierCLI.bundle; do
+    [[ -e "$b" ]] || continue
+    cp -R "$b" "$APP/Contents/Resources/$(basename "$b")"
+done
+
 echo "→ install bundled zmx"
 # zmx is the per-pane PTY child for every Espalier terminal, providing
 # session persistence so shells survive app quits. The binary is vendored
