@@ -1640,3 +1640,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Continue spec-vs-code audit — any other "comment says X, code does Y" drift?
 - Interactive exercise of web/Tailscale path if time permits.
+
+## Cycle 92 — 2026-04-19 (zmx-attach child leaks parent fds — WEB-4.6)
+
+### Explored
+- Continuing the cycle 89–91 web UI thread. After getting the picker and session page working end-to-end, I noticed launching Espalier twice in a row sometimes failed to rebind port 8799.
+
+### Found by process archaeology
+- `ps -ax -o pid,lstart,comm | grep zmx` after an Espalier quit showed zmx PID 38230, started 21:28:50, with `lsof -iTCP:8799` confirming it held the listen socket as LISTEN. Parent Espalier had started at 21:15 and long since exited. The child outlived its parent AND was holding a TCP listen socket that only `WebServer` should ever have opened.
+- Tracing the fd lineage: `PtyProcess.swift` forks the zmx-attach child then immediately `dup2`s the PTY slave onto 0/1/2 and execs. Anything above fd 2 without `FD_CLOEXEC` (NIO sockets default to NOT setting it) survives into the child's exec'd image AND stays with zmx after it forks its own session leader.
+
+### Broke
+- Port 8799 (or any web port) gets tied to the orphan zmx after Espalier exits. Next Espalier launch hits `NIOBindError(EADDRINUSE)`. Observable as "why isn't the web UI showing up?" followed by a manual `kill -9 <stale-zmx>` to recover.
+
+### Fixed
+- In the fork child of `PtyProcess.spawn`, close fds 3..getdtablesize() before `execve`. One dead end: first tried `RLIMIT_NOFILE.rlim_cur` which on macOS can be `RLIM_INFINITY` → cast to Int32 = 2,147,483,647 close() syscalls → tests hung for 10+ minutes with 0.5s CPU. `getdtablesize()` returns the per-process fd table ceiling (≤10k in practice) — that's the right knob.
+
+### Spec
+- Added **WEB-4.6**: fork child must close every inherited fd above 2 before execve, with rationale about orphan zmx holding the listen port.
+
+### Tests
+- 484/485 pass. One fd-count test in WorktreeMonitorTests is flaky under concurrent-test load (delta 46 vs threshold 40) — passes in isolation, not related to this fix.
+
+### Commit
+- `fix(web): close inherited fds in zmx-attach child fork (WEB-4.6)`
+
+### Try next cycle
+- Bundle the recent web UI work (WEB-5.4 picker, absolute asset paths, fd-close fix) and open a PR.
+- More adversarial testing: what happens if you quit Espalier while 10 web clients are mid-stream?

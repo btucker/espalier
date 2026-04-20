@@ -671,6 +671,8 @@ This serves the SPA fallback for client-side-routed URLs such as
 
 **WEB-4.5** When a WebSocket closes, the application shall send SIGTERM to the associated `zmx attach` child, leaving the zmx daemon alive.
 
+**WEB-4.6** When the application forks a `zmx attach` child for a web WebSocket, the child shall close every inherited file descriptor above 2 before `execve`. Rationale: without this, parent-opened sockets (notably the `WebServer` listen socket) without `FD_CLOEXEC` leak into the zmx child and survive the parent. After Espalier quits, the listen port stays bound to an orphan zmx process and the next Espalier launch cannot rebind.
+
 ### 15.5 Client
 
 **WEB-5.1** The bundled client shall render a single terminal (wterm) that attaches to the session indicated by the `/session/<name>` URL path. If a client arrives at the root path `/` with a `?session=<name>` query parameter, the client shall redirect to `/session/<name>` (backward compatibility).
