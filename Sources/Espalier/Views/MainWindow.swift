@@ -364,9 +364,21 @@ struct MainWindow: View {
         // Run discovery now rather than waiting for FSEvents so the new
         // entry is in appState by the time we call selectWorktree below
         // — otherwise selectWorktree's terminal-launch logic sees no
-        // matching entry and no-ops.
-        if let discovered = try? await GitWorktreeDiscovery.discover(repoPath: repoPath),
-           let repoIdx = appState.repos.firstIndex(where: { $0.path == repoPath }) {
+        // matching entry and no-ops. If discover fails here, log but
+        // proceed — FSEvents will catch up shortly and the user's
+        // `selectWorktree` call below will still work if the entry
+        // lands before the user notices (GIT-3.12). Not user-hostile
+        // like GIT-1.2 because the worktree creation itself already
+        // succeeded; this is just the eager-reconcile optimization.
+        let discovered: [DiscoveredWorktree]
+        do {
+            discovered = try await GitWorktreeDiscovery.discover(repoPath: repoPath)
+        } catch {
+            NSLog("[Espalier] addWorktree: post-success discover failed for %@: %@",
+                  repoPath, String(describing: error))
+            discovered = []
+        }
+        if let repoIdx = appState.repos.firstIndex(where: { $0.path == repoPath }) {
             let existingPaths = Set(appState.repos[repoIdx].worktrees.map(\.path))
             for d in discovered where !existingPaths.contains(d.path) {
                 let entry = WorktreeEntry(path: d.path, branch: d.branch)

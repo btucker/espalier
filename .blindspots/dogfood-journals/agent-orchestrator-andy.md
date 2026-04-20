@@ -1943,3 +1943,30 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Line 368 of MainWindow — the Add Worktree post-success reconcile discover path, also `try?`. Same family, lower-severity; NSLog is enough there.
 - Attention-clear-on-focus (what I was going to look at this cycle before the regression surfaced).
+
+## Cycle 102 — 2026-04-19 (final try? discover cleanup — MainWindow addWorktree)
+
+### Explored
+- Cycle 101 notes pointed at the remaining `try? await GitWorktreeDiscovery.discover(...)` at `MainWindow.swift:368` — the post-success Add Worktree reconcile. Detoured first through Andy's attention-clear-on-focus / keyboard-nav flows (STATE-2.4 clicks only, pane-nav doesn't clear — but NOTIF-2.x auto-clear timers make that self-correcting, not a bug). Detoured through `pane list` output alignment (breaks at id ≥ 100 — theoretical, not worth the cycle). Landed on the planned cleanup.
+
+### Diagnosed
+- Last silent `try?` in the discovery family, after cycles 95 / 97 / 100 / 101. Unlike `addRepoFromPath` (cycle 101), this site is NOT user-hostile — the `git worktree add` call already succeeded, so the entry will appear shortly via FSEvents-driven reconcile. But it's still an untraced drop: if discover fails here, the eager-reconcile optimization silently gives up and the "select the new worktree" code below sees nothing to select until FSEvents catches up.
+
+### Fixed
+- `do { discovered = try await ... } catch { NSLog(...); discovered = [] }` lets the code proceed with an empty list (FSEvents will fill it in), while logging the failure. No alert needed — worktree creation already reported success, so just smooth over the eager-path miss.
+
+### Spec
+- No new SPECS — GIT-3.12 (cycle 100) already covers this class of silent discover.
+
+### Tests
+- 498/498 pass. Build clean on app target.
+
+### Commit
+- `fix(app): log post-success discover failure in addWorktree (GIT-3.12)`
+
+### Process note
+- Committing to ALWAYS run `swift build` every cycle now, not just `swift test`. Cycle 100's regression was entirely caught by this.
+
+### Try next cycle
+- Actually exercise Andy's rapid-worktree-creation scenario with computer-use (still untouched across 12 cycles).
+- Or: pick up `pane list` output-alignment robustness at id ≥ 100 — 10-line test + format change.
