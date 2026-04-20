@@ -88,6 +88,57 @@ struct WorktreeMonitorTests {
                 "\(monitor.liveFdCountForTesting) fds still open on WorktreeMonitor — cancel handlers leaked")
     }
 
+    /// `stopWatching(repoPath:)` previously filtered by
+    /// `key.contains(repoPath)` — plain substring match. When two repos
+    /// share a path prefix (e.g. `/projects/foo` and `/projects/foobar`),
+    /// removing the shorter one would inadvertently stop watchers for
+    /// the longer one too because `"worktrees:/projects/foobar"` still
+    /// contains `"/projects/foo"` as a substring.
+    ///
+    /// The fix is a path-boundary match: a key belongs to `repoPath`
+    /// iff its `<tag>:` prefix is followed by exactly `repoPath` or by
+    /// a descendant (`repoPath + "/"` prefix). This test creates two
+    /// prefix-colliding repos, watches both, stops one, and asserts the
+    /// other's fd is still live.
+    @Test func stopWatchingDoesNotAffectPrefixColidingSiblingRepos() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("espalier-prefix-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Two repos that share a path prefix: `/tmp/<id>/foo` and
+        // `/tmp/<id>/foobar`. Strict-prefix is the classic bug shape.
+        let foo = tmp.appendingPathComponent("foo")
+        let foobar = tmp.appendingPathComponent("foobar")
+        try FileManager.default.createDirectory(at: foo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: foobar, withIntermediateDirectories: true)
+        // Each needs a .git directory for `watchWorktreeDirectory` to open.
+        try FileManager.default.createDirectory(
+            at: foo.appendingPathComponent(".git/worktrees"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: foobar.appendingPathComponent(".git/worktrees"), withIntermediateDirectories: true)
+
+        let monitor = WorktreeMonitor()
+        monitor.watchWorktreeDirectory(repoPath: foo.path)
+        monitor.watchWorktreeDirectory(repoPath: foobar.path)
+        #expect(monitor.liveFdCountForTesting == 2)
+
+        // Stop the shorter-prefix repo. With the substring bug, this
+        // ALSO cancels the foobar watcher; with the fix, foobar remains.
+        monitor.stopWatching(repoPath: foo.path)
+
+        // Let the DispatchSource cancel handler drain; liveFdCount drops
+        // by the count actually cancelled.
+        for _ in 0..<50 {
+            if monitor.liveFdCountForTesting <= 1 { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(monitor.liveFdCountForTesting == 1,
+                "stopWatching('/foo') wrongly cancelled '/foobar' (liveFdCount=\(monitor.liveFdCountForTesting))")
+
+        monitor.stopAll()
+    }
+
     @Test func branchChangeFiresOnCommit() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("espalier-monitor-\(UUID().uuidString)")

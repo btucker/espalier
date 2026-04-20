@@ -100,7 +100,20 @@ public final class WorktreeMonitor: @unchecked Sendable {
     }
 
     public func stopWatching(repoPath: String) {
-        let keysToRemove = sources.keys.filter { $0.contains(repoPath) }
+        // Keys have the shape `<tag>:<path>` where path is either the
+        // repoPath itself (for repo-scoped watchers like `worktrees:` /
+        // `originrefs:`) or a descendant (for worktree-scoped watchers
+        // `path:` / `head:`). A plain `key.contains(repoPath)` would
+        // also match sibling repos whose path is a proper prefix — e.g.
+        // stopping `/projects/foo` would wrongly cancel watchers for
+        // `/projects/foobar` too, because the stringified key
+        // `"worktrees:/projects/foobar"` contains `"/projects/foo"` as
+        // a substring. Test: `stopWatchingDoesNotAffectPrefixCollidingSiblingRepos`.
+        let keysToRemove = sources.keys.filter { key in
+            guard let colonIdx = key.firstIndex(of: ":") else { return false }
+            let path = key[key.index(after: colonIdx)...]
+            return path == repoPath || path.hasPrefix(repoPath + "/")
+        }
         for key in keysToRemove {
             sources[key]?.cancel()
             sources.removeValue(forKey: key)
