@@ -189,15 +189,15 @@ struct SidebarView: View {
         )
     }
 
-    /// The sidebar label for a worktree, special-cased so the main checkout
-    /// shows just its branch name (no disambiguation noise — the sidebar
-    /// icon differentiates it from linked worktrees), while linked
-    /// worktrees show their collision-aware directory name.
+    /// Thin wrapper over `SidebarWorktreeLabel.text` so the sidebar
+    /// selection row, "Move to <name>" menu item, and submenu entries
+    /// share one source of truth for the displayed name.
     private func label(for worktree: WorktreeEntry, in repo: RepoEntry) -> String {
-        if worktree.path == repo.path {
-            return worktree.branch
-        }
-        return worktree.displayName(amongSiblingPaths: repo.worktrees.map(\.path))
+        SidebarWorktreeLabel.text(
+            for: worktree,
+            inRepoAtPath: repo.path,
+            siblingPaths: repo.worktrees.map(\.path)
+        )
     }
 
     @ViewBuilder

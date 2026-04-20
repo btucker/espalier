@@ -2857,3 +2857,35 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - The `DispatchSource` event-handler path that fires the delegate multiple times on rapid FSEvent bursts (e.g. `git worktree add` twice in quick succession) spawns overlapping discover Tasks. Non-debounced; relies on each call producing the same appState result. Worth a closer look — may be safe in practice.
 - The CLI-side ATTN-3.6 buffer cap still pending after the cycle-155 socketpair fiasco. Retry with a cleaner design (maybe a synchronous file-fd test).
+
+## Cycle 158 — 2026-04-20 (same relative-gitdir bug in the drag-to-add path — GIT-1.4)
+
+### Explored
+- Scanned for other places that read a worktree's `.git` file and resolve `gitdir:` paths, after fixing `WorktreeMonitor.resolveHeadLogPath` in cycle 157.
+
+### Broke
+- Found `GitRepoDetector.resolveRepoRoot(fromGitDir:)` with the same bug: it feeds `gitDir` to `realpath(3)` via `CanonicalPath.canonicalize`, which resolves relative paths against process cwd rather than the worktree dir.
+- Reproduced via a tempdir-based test: built `<tmp>/wt/.git` containing `gitdir: ../repo/.git/worktrees/wt`, called `detect(path: <tmp>/wt)`. Pre-fix returned `repoPath=/Users/btucker/projects/espalier/.worktrees/blindspots/dogfood/repo` (i.e. `<cwd>/../repo`). Expected `<tmp>/repo`.
+- User-visible path: drag a linked worktree onto Espalier (user has `worktree.useRelativePaths=true` set globally — git ≥ 2.52 feature). The detector attaches the worktree to the wrong repo, or finds nothing and shows "Not a Git Repository".
+
+### Diagnosed
+- `Sources/EspalierKit/Git/GitRepoDetector.swift:43-51`. `resolveRepoRoot(fromGitDir:)` has no awareness of where the `.git` file lived.
+
+### Spec
+- Added **GIT-1.4** pinning the resolution rule, cross-referencing GIT-3.14.
+
+### Fixed
+- Added `worktreePath` parameter to `resolveRepoRoot`. When `gitDir` is relative, resolve against `URL(fileURLWithPath: worktreePath).appendingPathComponent(gitDir).standardized` before canonicalization.
+- Absolute gitdir goes through unchanged (same codepath as before).
+
+### Tests
+- `GitRepoDetectorTests.detectsWorktreeWithRelativeGitdir` — manually builds the dir structure instead of calling `git worktree add`, so test doesn't depend on local git version / config.
+- 623/623 overall.
+
+### Commit
+- `fix(git): resolve relative gitdir against worktree dir in detector (GIT-1.4)` (e7885c3)
+
+### Try next cycle
+- Any MORE places that read gitdir? Grep: `grep -n "gitdir: " Sources/ -r` — done; all handled.
+- CLI-side ATTN-3.6 cap (carried over from cycles 155/156) still open.
+- Look for spec-drift in the PaneTitle surface vs. what the renderer actually supports.
