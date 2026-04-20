@@ -128,6 +128,47 @@ struct TailscaleLocalAPIAutoDetectTests {
         }
     }
 
+    /// `detectMacsysTCP` hands its port down to `openTCPLocalhost`
+    /// which does `UInt16(port)` — a signed-overflow trap when the
+    /// file-sourced Int is outside [0, 65535]. A corrupted `ipnport`,
+    /// a user hand-edit, or a future Tailscale layout change writing
+    /// a larger number would then crash Espalier the first time the
+    /// web-access code path hits the Tailscale LocalAPI.
+    ///
+    /// Treat an out-of-range port as "not detected" at the parse
+    /// boundary so autoDetected falls through cleanly to
+    /// `.socketUnreachable` instead of storing a ticking-bomb port
+    /// in the transport enum.
+    @Test func outOfRangePortIsNotDetected() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "70000".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "token-xyz".write(
+            toFile: tmp + "/sameuserproof-70000", atomically: true, encoding: .utf8
+        )
+        #expect(throws: TailscaleLocalAPI.Error.socketUnreachable) {
+            _ = try TailscaleLocalAPI.autoDetected(
+                socketPaths: ["/does/not/exist/tailscaled.socket"],
+                macsysSupportDir: tmp
+            )
+        }
+    }
+
+    @Test func negativePortIsNotDetected() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try "-1".write(toFile: tmp + "/ipnport", atomically: true, encoding: .utf8)
+        try "token-xyz".write(
+            toFile: tmp + "/sameuserproof--1", atomically: true, encoding: .utf8
+        )
+        #expect(throws: TailscaleLocalAPI.Error.socketUnreachable) {
+            _ = try TailscaleLocalAPI.autoDetected(
+                socketPaths: ["/does/not/exist/tailscaled.socket"],
+                macsysSupportDir: tmp
+            )
+        }
+    }
+
     @Test func missingTokenFileIsNotDetected() throws {
         let tmp = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: tmp) }
