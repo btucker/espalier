@@ -354,7 +354,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **PERSIST-1.1** The application shall store all persistent state in `~/Library/Application Support/Espalier/`.
 
-**PERSIST-1.2** The application shall persist state to a `state.json` file containing: the ordered list of repositories and their worktrees, per-worktree split tree topology and `wasRunning` flag, selected worktree, window frame, and sidebar width.
+**PERSIST-1.2** The application shall persist state to a `state.json` file containing: the ordered list of repositories and their worktrees, per-worktree split tree topology and `state` enum (`.closed`, `.running`, `.stale`), selected worktree, window frame, and sidebar width.
 
 ### 6.2 Save Triggers
 
@@ -368,7 +368,7 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **PERSIST-3.2** When the application launches, it shall restore the saved split tree topology for each worktree.
 
-**PERSIST-3.3** When the application launches, it shall automatically start fresh terminal surfaces for each worktree that had `wasRunning: true`.
+**PERSIST-3.3** When the application launches, it shall automatically start fresh terminal surfaces for each worktree whose persisted `state` was `.running`.
 
 **PERSIST-3.4** When the application launches, it shall restore the window frame position, size, and sidebar width.
 

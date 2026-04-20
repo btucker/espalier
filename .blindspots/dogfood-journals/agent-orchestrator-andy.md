@@ -2480,3 +2480,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - `WorktreeStatsStore` → EspalierKit (DIVERGE-4.5 test coverage), still open.
 - Surface `SocketServer.lastStartError` in Espalier menu (cycle 95).
+
+## Cycle 121 — 2026-04-20 (PERSIST spec drift: `wasRunning` → `state`)
+
+### Explored
+- Looked at SocketPathResolver edge cases (whitespace-only is deliberately not trimmed, documented in its own test). No issue.
+- Swept SPECS.md for stale field names. `grep -nE "wasRunning|isRunning:|setFocusedTerminal"` turned up `wasRunning` in two PERSIST entries.
+
+### Diagnosed
+- PERSIST-1.2 and PERSIST-3.3 referenced a `wasRunning: Bool` field that doesn't exist in the codebase. The model uses a `state` enum (`.closed` / `.running` / `.stale`). "wasRunning" was likely pre-enum shorthand that never got updated.
+- Not a code bug per se — the implementation is correct — but a reader of SPECS.md looking for `wasRunning` in `WorktreeEntry`'s CodingKeys would be misled. Drift that violates the project's "SPECS.md is authoritative" rule from CLAUDE.md.
+
+### Fixed
+- Updated the two entries to match reality:
+  - PERSIST-1.2: "per-worktree split tree topology and `state` enum (`.closed`, `.running`, `.stale`)"
+  - PERSIST-3.3: "each worktree whose persisted `state` was `.running`"
+
+### Spec
+- Pure spec cleanup, no contract change.
+
+### Tests
+- No test change. 543/543 pass.
+
+### Commit
+- `docs(specs): PERSIST refers to state enum, not wasRunning field`
+
+### Try next cycle
+- Still: WorktreeStatsStore → EspalierKit for DIVERGE-4.5 coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.
