@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import Observation
 import EspalierKit
 
@@ -26,6 +25,15 @@ public final class WorktreeStatsStore {
     @ObservationIgnored
     private var inFlight: Set<String> = []
 
+    /// Per-path generation counter. Bumped by `clear(worktreePath:)` so
+    /// an in-flight fetch's late `apply` can detect it's been invalidated
+    /// and drop its write — otherwise a fetch that started before a
+    /// user-triggered `clear` (Dismiss, Delete, stale transition) would
+    /// repopulate `stats` with data for a worktree the user just
+    /// dismissed. Mirrors `PRStatusStore`'s pattern. DIVERGE-4.5.
+    @ObservationIgnored
+    private var generation: [String: Int] = [:]
+
     @ObservationIgnored
     private var lastRepoFetch: [String: Date] = [:]
 
@@ -44,6 +52,7 @@ public final class WorktreeStatsStore {
         guard !inFlight.contains(worktreePath) else { return }
         inFlight.insert(worktreePath)
         let cached = defaultBranchByRepo[repoPath] ?? nil
+        let fetchGeneration = generation[worktreePath, default: 0]
 
         Task {
             let computed = await Self.computeOffMain(
@@ -54,13 +63,23 @@ public final class WorktreeStatsStore {
             self.apply(
                 worktreePath: worktreePath,
                 repoPath: repoPath,
-                result: computed
+                result: computed,
+                fetchGeneration: fetchGeneration
             )
         }
     }
 
     public func clear(worktreePath: String) {
         stats.removeValue(forKey: worktreePath)
+        // Release the in-flight gate so a subsequent `refresh` isn't
+        // silently suppressed while the prior Task drains. The Task's
+        // late `apply` is handled by the generation check.
+        inFlight.remove(worktreePath)
+        // Bump the generation so any in-flight fetch's late apply
+        // (after its await resumes) detects the invalidation and drops
+        // the write instead of repopulating stats for a dismissed
+        // worktree. Mirrors PRStatusStore.clear. DIVERGE-4.5.
+        generation[worktreePath, default: 0] += 1
     }
 
     /// Start a 5s ticker that periodically `git fetch`es each repo (on its
@@ -137,10 +156,17 @@ public final class WorktreeStatsStore {
     private func apply(
         worktreePath: String,
         repoPath: String,
-        result: ComputeResult
+        result: ComputeResult,
+        fetchGeneration: Int
     ) {
         inFlight.remove(worktreePath)
+        // The repo-level default-branch cache is path-agnostic and a
+        // valid side-effect regardless of whether the worktree-scoped
+        // stats write is still current, so always update it.
         defaultBranchByRepo[repoPath] = result.defaultBranch
+        // DIVERGE-4.5: drop the stats write if the caller's clear()
+        // invalidated us while the git subprocess was running.
+        if generation[worktreePath, default: 0] != fetchGeneration { return }
         if let s = result.stats {
             if stats[worktreePath] != s {
                 stats[worktreePath] = s

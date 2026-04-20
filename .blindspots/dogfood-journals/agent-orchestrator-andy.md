@@ -2053,3 +2053,30 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - WorktreeStatsStore race-with-clear — still open. The fix would mirror `PRStatusStore`'s generation counter. Testability requires moving WorktreeStatsStore to EspalierKit (modest refactor).
 - Surface `SocketServer.lastStartError` (cycle 95's follow-on) in the Espalier menu alongside web server status.
+
+## Cycle 106 — 2026-04-20 (WorktreeStatsStore repopulation race — DIVERGE-4.5)
+
+### Explored
+- Picked up the race I noticed in cycle 102, deferred through cycles 104 / 105.
+
+### Diagnosed
+- `WorktreeStatsStore.refresh` kicks a Task that `await`s `GitWorktreeStats.compute` (~50–200ms of git subprocess). If `clear(worktreePath:)` fires during that window, `apply` — when it eventually runs — unconditionally writes the stale result back into `stats`. Dismiss / Delete / stale-transition clears can be undone by a fetch that was already in flight.
+- `PRStatusStore` handled the same race via a per-path generation counter (cycles 91-ish). `WorktreeStatsStore` didn't.
+
+### Fixed
+- Added `generation: [String: Int]` to `WorktreeStatsStore`. `refresh` captures current gen, passes to `apply`. `clear` bumps the gen. `apply` drops the stats write (but keeps the path-agnostic default-branch cache update) if the captured gen no longer matches.
+- Bonus: removed the unused `import AppKit` at the top of the file while I was editing.
+
+### Spec
+- Added **DIVERGE-4.5** pinning the generation-counter contract and cross-referencing GIT-3.6 / GIT-3.13 / GIT-4.10 as the clear-triggering paths.
+
+### Tests
+- No new unit test: `WorktreeStatsStore` lives in the Espalier app target which doesn't have a test target (it pulls `PollingTicker` which needs AppKit). Moving it to EspalierKit would require either moving `PollingTicker` or abstracting via `PollingTickerLike` — a bigger refactor than a dogfood cycle allows. The fix mirrors `PRStatusStore`'s already-tested pattern in structure; integration-level assurance follows the cycle-99 precedent.
+- 505/505 existing tests pass.
+
+### Commit
+- `fix(app): guard WorktreeStatsStore.apply against late writes after clear (DIVERGE-4.5)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit (requires `PollingTicker` split) so DIVERGE-4.5's race can get a dedicated unit test.
+- Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95 TODO, still untouched).
