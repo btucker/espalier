@@ -2787,3 +2787,36 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - The read loop still holds messages in a single growing Data — a client sending 1000 small messages in quick succession still uses ~1 KB × 1000 = 1 MB. That's within the cap but wasteful. Line-at-a-time parsing (read until \n, decode, reset) would lower peak memory, but adds complexity. Flag for later.
 - Similar unbounded-read patterns elsewhere? Let me scan Zmx, web socket read paths, etc., next cycle.
+
+## Cycle 155/156 — 2026-04-20 (scp-style remote URL parser drops `.git` suffix — PR-5.6)
+
+### Cycle 155 abandoned
+- Attempted to add CLI-side buffer cap (SocketIO.readAll + test with socketpair). Test process hung on kernel-buffer backpressure; cascaded into multiple stale swift-test processes from retries. Cleaned up via TaskStop + reverted the uncommitted work.
+
+### Cycle 156 target
+- Audited `GitOriginHost.parse` edge cases after the PR-7.x / DIVERGE-4.x transient-failure sweep. Found a real parsing bug in the scp-style branch.
+
+### Broke
+- `git@github.com:owner/repo.git/` (user copy-pastes remote URL from a browser with trailing slash, or set-url with stray `/`) was parsed with repo=`"repo.git"` — `.git` strip ran BEFORE trailing-slash strip. URL(string:).path auto-normalises trailing slashes for the https branch, so this only affected scp-style URLs.
+- Downstream: `gh pr list --repo owner/repo.git` → empty result → sidebar shows no PR badge for the session.
+
+### Diagnosed
+- Sources/EspalierKit/Hosting/GitOriginHost.swift:35-36. Two strips in wrong order. Swap: trailing `/` first, then `.git` suffix.
+
+### Spec
+- Added **PR-5.6** pinning the strip ordering.
+
+### Fixed
+- Swapped the order in `parse`. One-line change.
+
+### Tests
+- `stripsDotGitSuffixWhenScpUrlHasTrailingSlash` — `git@github.com:btucker/espalier.git/` → repo=`espalier`. Failed pre-fix (got `espalier.git`), passes post-fix.
+- `stripsTrailingSlashOnScpUrlWithoutDotGit` — counterpart without `.git`. Pinned to catch future regressions.
+- 619/619 overall.
+
+### Commit
+- `fix(pr): strip trailing / before .git in remote URL parser (PR-5.6)` (a203f2c)
+
+### Try next cycle
+- Still want to add CLI-side readAll cap (ATTN-3.6 analogue to ATTN-2.11) but the socketpair test needs a simpler design. Maybe use a Dispatch/NIO-based fake producer or just test the helper pure-functionally over a pre-seeded fd.
+- Audit more `try?`-swallowed subprocess calls — `GitOriginDefaultBranch.resolve` still swallows every throw; not a bug because it falls through to probe fallbacks, but worth verifying.

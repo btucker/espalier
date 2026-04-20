@@ -263,6 +263,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **GIT-3.13** When a worktree transitions to the `.stale` state — regardless of which FSEvents channel observed the disappearance (`worktreeMonitorDidDetectDeletion` for the worktree-directory watcher, or the reconcile-driven transitions in `reconcileOnLaunch` / `worktreeMonitorDidDetectChange` when `git worktree list --porcelain` stops listing the entry) — the application shall call `statsStore.clear(worktreePath:)` and `prStatusStore.clear(worktreePath:)` so the cached stats and PR status don't linger on the stale entry. Matches `GIT-4.10`'s rule for the explicit-remove path; the three stale-transition paths must be symmetric, otherwise a worktree made stale by reconcile keeps rendering its old PR badge until a Dismiss or Delete fires.
 
+**GIT-3.14** When `WorktreeMonitor.resolveHeadLogPath` reads a linked worktree's `.git` file and finds a `gitdir: <path>` line, it shall resolve a relative `<path>` against the worktree directory rather than feeding it verbatim to `open(2)`. Git ≥ 2.52 with `worktree.useRelativePaths=true` writes relative gitdir entries like `gitdir: ../.git/worktrees/name`; passing that to `open` resolves it against the process cwd — usually nothing like the worktree dir — so the HEAD-reflog watcher silently targets the wrong path (or fails outright). The absolute-gitdir case (older git and the default config) is unaffected.
+
 ### 4.4 Deleting a Worktree
 
 **GIT-4.1** While a worktree entry is not in the stale state and is not the repository's main checkout, the context menu shall include a "Delete Worktree" action.

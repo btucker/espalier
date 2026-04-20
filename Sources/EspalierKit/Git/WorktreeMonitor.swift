@@ -186,13 +186,29 @@ public final class WorktreeMonitor: @unchecked Sendable {
         return source
     }
 
-    private func resolveHeadLogPath(worktreePath: String, repoPath: String) -> String {
+    func resolveHeadLogPath(worktreePath: String, repoPath: String) -> String {
         if worktreePath == repoPath { return "\(repoPath)/.git/logs/HEAD" }
         let gitFilePath = "\(worktreePath)/.git"
         if let contents = try? String(contentsOfFile: gitFilePath, encoding: .utf8),
            contents.hasPrefix("gitdir: ") {
-            let gitDir = contents.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("gitdir: ".count)
-            return "\(gitDir)/logs/HEAD"
+            let raw = String(contents
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .dropFirst("gitdir: ".count))
+            // Git ≥ 2.52 with `worktree.useRelativePaths=true` writes
+            // a path relative to the worktree directory. Feeding that
+            // verbatim to `open(2)` resolves against the process cwd
+            // — usually unrelated to the worktree — and the HEAD-
+            // reflog watcher silently targets the wrong path. Resolve
+            // explicitly against the worktree dir.
+            let gitDirURL: URL
+            if raw.hasPrefix("/") {
+                gitDirURL = URL(fileURLWithPath: raw)
+            } else {
+                gitDirURL = URL(fileURLWithPath: worktreePath)
+                    .appendingPathComponent(raw)
+                    .standardized
+            }
+            return gitDirURL.appendingPathComponent("logs/HEAD").path
         }
         let name = URL(fileURLWithPath: worktreePath).lastPathComponent
         return "\(repoPath)/.git/worktrees/\(name)/logs/HEAD"
