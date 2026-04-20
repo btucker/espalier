@@ -408,7 +408,25 @@ struct MainWindow: View {
     }
 
     func addPath(_ path: String) {
-        guard let detection = try? GitRepoDetector.detect(path: path) else { return }
+        let detection: GitPathType
+        do {
+            detection = try GitRepoDetector.detect(path: path)
+        } catch {
+            // `GitRepoDetector.detect` throws when the `.git` file exists
+            // but can't be read (permissions glitch, truncated file, FS
+            // error). Pre-cycle-141 this was `try?` which silently
+            // returned, leaving the user wondering why their dragged
+            // folder didn't appear. Analogue of `GIT-1.2`'s same fix on
+            // the async `discover` side (`GIT-1.3`).
+            NSLog("[Espalier] addPath: detect failed for %@: %@",
+                  path, String(describing: error))
+            let alert = NSAlert()
+            alert.messageText = "Could not add repository"
+            alert.informativeText = "\(path)\n\n\(String(describing: error))"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
 
         switch detection {
         case .repoRoot(let repoPath):

@@ -76,6 +76,42 @@ struct GitRepoDetectorTests {
         #expect(result == .notARepo)
     }
 
+    /// `.git` file exists but can't be read — e.g. chmod 000 from a
+    /// user-initiated permission glitch, or a truncated file from a
+    /// crash mid-rename. `detect` previously threw the underlying
+    /// `Foundation.NSError` so callers via `try?` silently swallowed
+    /// and returned, losing the user-triggered add-repository gesture
+    /// with no diagnostic.
+    ///
+    /// The throw itself has always been the right behavior — the
+    /// cycle 141 fix was at the caller (`MainWindow.addPath` now
+    /// alerts on throw per GIT-1.3). This test pins that the
+    /// throw-on-unreadable path stays present so future refactors
+    /// don't accidentally convert it into a silent `.notARepo` return.
+    @Test func throwsWhenGitFileIsUnreadable() throws {
+        let dir = try makeTempDir()
+        defer {
+            // Make sure we restore permissions before cleanup, otherwise
+            // test-runner removal fails.
+            let gitFile = dir.appendingPathComponent(".git").path
+            _ = try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: gitFile)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        // Create a .git file that `detect` would normally read as a
+        // linked-worktree pointer, but strip all read permissions so
+        // `String(contentsOf:)` throws.
+        let gitFile = dir.appendingPathComponent(".git").path
+        try "gitdir: /some/path/to/gitdir".write(
+            toFile: gitFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: gitFile)
+
+        #expect(throws: (any Error).self) {
+            _ = try GitRepoDetector.detect(path: dir.path)
+        }
+    }
+
     @Test func detectsSubdirectoryOfRepo() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
