@@ -5,12 +5,14 @@ import Foundation
 public enum WebURLComposer {
 
     /// Compose the URL. Bracket-notation for IPv6 hosts; percent-encode
-    /// the session name.
+    /// the session name with `urlPathAllowed` semantics so reserved
+    /// path / query / fragment separators (`?`, `#`) get escaped —
+    /// otherwise a session name containing `?` would cause the browser
+    /// to split the URL into path-vs-query, and the router would see
+    /// only the prefix (WEB-1.9).
     public static func url(session: String, host: String, port: Int) -> String {
         let encodedSession = session.addingPercentEncoding(
-            withAllowedCharacters: .urlQueryAllowed.subtracting(
-                CharacterSet(charactersIn: " ")
-            )
+            withAllowedCharacters: .urlPathAllowed
         ) ?? session
         return "\(baseURL(host: host, port: port))session/\(encodedSession)"
     }

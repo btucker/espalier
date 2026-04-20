@@ -53,6 +53,24 @@ struct WebURLComposerTests {
         #expect(url.contains("/session/name%20with%20space"))
     }
 
+    /// WEB-1.9: the session name is interpolated into the URL PATH, so
+    /// it must be percent-encoded with `urlPathAllowed` semantics — not
+    /// `urlQueryAllowed`, which leaves `?` and `#` unescaped. The prior
+    /// implementation used urlQueryAllowed, so a session name containing
+    /// `?` would be split by the browser into path-vs-query, with the
+    /// router seeing only the part before the `?`. Defensive — our own
+    /// sessionNames per ZMX-2.1 are always `espalier-<8hex>` and never
+    /// hit this — but closes the gap for any custom socket client.
+    @Test func sessionNameWithPathSeparatorIsEscaped() {
+        let url = WebURLComposer.url(session: "a?b", host: "h", port: 1)
+        #expect(url == "http://h:1/session/a%3Fb")
+    }
+
+    @Test func sessionNameWithFragmentSeparatorIsEscaped() {
+        let url = WebURLComposer.url(session: "a#b", host: "h", port: 1)
+        #expect(url == "http://h:1/session/a%23b")
+    }
+
     /// WEB-1.7: the Settings pane + sidebar display the server's root
     /// URL ("Copy web URL" without a specific session). This has to
     /// handle IPv6 the same way the session URL does — otherwise

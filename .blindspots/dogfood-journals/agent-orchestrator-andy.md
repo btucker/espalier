@@ -2344,3 +2344,28 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Move `WorktreeStatsStore` to EspalierKit for DIVERGE-4.5 unit coverage.
 - Surface `SocketServer.lastStartError` in Espalier menu.
+
+## Cycle 116 — 2026-04-20 (session name URL-encoded with wrong charset — WEB-1.9)
+
+### Explored
+- Continuing the URL-composer thread from cycles 114/115. Compared `urlQueryAllowed` vs `urlPathAllowed` on session-name samples and found the encoding was wrong for the path-component context.
+
+### Diagnosed
+- `WebURLComposer.url` percent-encoded the session name with `urlQueryAllowed.subtracting(" ")`. That set leaves `?` and `#` unescaped — fine for query strings, WRONG for path components. A session name like `"a?b"` produced `.../session/a?b`, which the browser splits into path=`/session/a`, query=`b`. The router would receive only `"a"` as the session name.
+- Our own session names are always `espalier-<8hex>` (`ZMX-2.1`), so no production impact. But a custom socket client — `nc -U`, web surface, a future Espalier feature that allows user-named sessions — would hit this.
+
+### Fixed
+- Switched to `CharacterSet.urlPathAllowed`, which escapes `?` to `%3F` and `#` to `%23` while still leaving sub-delims like `&` and `=` unencoded (allowed in path segments per RFC 3986).
+
+### Spec
+- Added **WEB-1.9** documenting the path-vs-query distinction and cross-referencing ZMX-2.1 for the common case.
+
+### Tests
+- Two new cases: `sessionNameWithPathSeparatorIsEscaped` (`?` → `%3F`), `sessionNameWithFragmentSeparatorIsEscaped` (`#` → `%23`). Failed before the fix; pass after. 540/540 overall.
+
+### Commit
+- `fix(web): percent-encode session name with urlPathAllowed (WEB-1.9)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit for DIVERGE-4.5 coverage.
+- Surface `SocketServer.lastStartError` in Espalier menu.

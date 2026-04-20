@@ -659,6 +659,8 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 
 **WEB-1.8** Any URL the application composes for display or clipboard copy — the Settings pane's `currentURL`, the sidebar "Copy web URL" action — shall bracket an IPv6 host per RFC 3986 authority syntax (e.g., `http://[fd7a:115c::5]:8799/`). Applies whether the URL includes a session path or is the server's root. Without bracketing, an IPv6-only Tailscale setup produces `http://fd7a:115c::5:8799/` which is a malformed URI. `WebURLComposer.baseURL(host:port:)` and `WebURLComposer.url(session:host:port:)` share the same bracket logic.
 
+**WEB-1.9** When `WebURLComposer.url(session:host:port:)` percent-encodes the session name for interpolation into the URL path, it shall use `CharacterSet.urlPathAllowed` rather than `urlQueryAllowed`. The latter leaves reserved path/query/fragment separators (`?`, `#`) unescaped, so a session name containing `?` would cause the browser to parse the URL as path-and-query and the client router would see only the prefix. Espalier's own session names per `ZMX-2.1` never include such characters, but socket clients producing custom session names would otherwise silently break.
+
 ### 15.2 Authorization
 
 **WEB-2.1** The application shall resolve each incoming peer IP via Tailscale LocalAPI `whois` before serving any content at any path.
