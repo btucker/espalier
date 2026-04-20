@@ -1377,26 +1377,266 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 - TERM-5.3 zmx shell exit — already landed; look for regressions.
 - Truly-stale click UX (placeholder + inline Dismiss) — many cycles queued.
 
-## Cycle 84 — 2026-04-19 (stale-worktree lifecycle survey, no new bug)
+## Cycle 79 — 2026-04-19 (LAYOUT-2.13 regressed by ZMX-6.4)
 
-### Exercised
-- `git worktree add .worktrees/cycle84-test -b cycle84-test` → FSEvents discovery picked it up (~instant) as `.closed` with correct branch.
-- `espalier notify` from inside the new worktree → landed on it correctly (state.json timing was just slow first check; attention appeared on second read).
-- `rm -rf .worktrees/cycle84-test` externally → worktreeMonitor's path watcher transitioned state to `.stale` within 3s.
-- `git worktree prune` → removed the `.git/worktrees/cycle84-test/` metadata. State.json still holds the `.stale` entry; reconciler has no "stale AND not in discovered → remove" rule.
+### Context
+- Post PR #36 merge, rebuilt + installed clean app from origin/main + my cycles-70/76 cherry-picks. Started a fresh dogfood session.
+- (Cycles 52–77 were worked on a pre-rebase branch; after `git reset --hard origin/main` + cherry-pick of just the two code commits, the per-cycle journal entries didn't survive. The essentials live in their commit messages and in PR #36's description.)
 
-### Classification
-- The persistent-stale-after-prune behavior is spec-compliant per GIT-3.6: "While a worktree entry is in the stale state, the context menu shall include a 'Dismiss' action..." implies Dismiss is the ONLY remove-from-sidebar path for stale entries. Auto-cleanup on prune isn't in the spec. Minor UX annoyance for Andy's "creates worktrees faster than UI can discover them" + rm cycle, but not a bug.
+### Found immediately
+- `espalier pane list` on the 20260418 worktree reported pane titles as ~200-char shell strings starting with `if [ -n "$ZDOTDIR" ]; then export GHOSTTY_ZSH_ZDOTDIR=…`. Sidebar was literally rendering that bootstrap line as each pane's label.
 
-### Audited
-- `AppState.setFocusedTerminal` doesn't validate terminalID against splitTree. A race between click and close_surface_cb could leave `focusedTerminalID` pointing at a removed leaf. User-visible consequence: sidebar's "focused pane" highlight disappears until the next click. Not fragile enough to fix (optional chaining on consumer side keeps subsequent renders safe).
-- `WorktreeEntry` Codable decode doesn't validate `focusedTerminalID` ∈ `splitTree.allLeaves` either. Same transient-only impact on deserialization.
-- All closePane + Stop + Dismiss paths correctly clean up `paneAttention`. No orphan-badge accumulation surface remaining.
+### Root cause
+- PR #35 (yesterday) tightened the `ZmxLauncher` prefix from a naked env-assignment (`GHOSTTY_ZSH_ZDOTDIR="$ZDOTDIR" ZDOTDIR=…`) to a shell conditional (`if [ -n "$ZDOTDIR" ]; then export GHOSTTY_ZSH_ZDOTDIR="$ZDOTDIR"; fi; ZDOTDIR=…`). Good fix for the ZMX-6.4 regression it targeted. But the `PaneTitle.isLikelyEnvAssignment` guard (LAYOUT-2.13) was keyed on `^[A-Z_][A-Z0-9_]*=` — an uppercase-prefix heuristic. The new conditional starts with lowercase `if` and slipped right past the filter, and ghostty's preexec hook echoed the whole bootstrap into OSC 2 as the pane's title.
+
+### Fixed
+- `PaneTitle.isLikelyEnvAssignment` now also rejects titles containing the literal `GHOSTTY_ZSH_ZDOTDIR` substring. That marker appears in BOTH bootstrap shapes and in no legitimate human-facing title.
+- SPECS.md `LAYOUT-2.13` revised to codify shape (a) uppercase-env and shape (b) contains-marker as independent filtering conditions.
+- Defensive test: a bare "if you see this" title is NOT filtered — we anchor on the marker, not the `if` keyword.
+
+### Tests (TDD)
+- `filtersZmxBootstrapLeak` — failing test against the real 200-char ZMX-6.4 bootstrap string.
+- `keepsLegitimateIfStatements` — guard against over-rejection.
+- **468/468 pass** (+2 new).
+
+### Commit
+- `947e893 fix(pane-title): catch post-ZMX-6.4 bootstrap leak (LAYOUT-2.13)`
+
+### Try next cycle
+- State.json still carries the 200-char poisoned titles in every running worktree's surfaces. After the fix, those stale entries stay until the next inner-shell title push overwrites them. Is there a migration/cleanup step worth adding, or do we trust the shell-integration's first prompt?
+- Reinstall + reinteract: with the new filter in place, do panes render with PWD-basename fallback as expected?
+
+## Cycle 80 — 2026-04-19 (Phantom-pane uncloseable — TERM-5.7/5.8)
+
+### Context
+- Rebuilt/reinstalled post cycle 79's LAYOUT-2.13 fix. Fresh app launch restored 4 running worktrees with several panes each. Console log: `embedded_window: error initializing surface err=error.OutOfMemory` repeating — libghostty refused multiple surface creations.
+- TERM-5.5's failable init kept the app alive, but left `splitTree` containing leaves without `SurfaceHandle` entries in `terminalManager.surfaces`.
+
+### Found live
+- `espalier pane list` showed 3 panes in 20260418 worktree.
+- `espalier pane close 3` → exit 0 (CLI reports `ok`).
+- `espalier pane list` → still shows 3 panes. `state.json` leaf count unchanged.
+- A phantom pane with no surface is **uncloseable**: Cmd+W, CLI close, and context-menu Close all route through `closePane`, which bails at the TERM-5.7 handle-nil guard because the handle never existed to begin with.
+
+### Spec ambiguity
+- `TERM-5.7` says "when `close_surface_cb` fires for a pane whose handle is torn down, no-op." That was written for the Stop-cascade case. User-initiated closes were implicitly covered by "normal path: handle exists." OOM-on-restore produces a third scenario the spec didn't name.
+
+### Fixed
+- Added `PhantomPaneClosePolicy.shouldRemoveFromTree(userInitiated:, handleExists:)` in EspalierKit.
+- `closePane` gained a `userInitiated: Bool = false` parameter. CLI close and Cmd+W pass `true`; libghostty's async `close_surface_cb` keeps `false`.
+- The handle-nil guard now sits behind the policy helper — user-initiated paths bypass it; library-initiated paths keep the Stop-cascade protection.
+
+### Spec
+- **TERM-5.7 revised** to say "library-initiated only."
+- **TERM-5.8 added** to codify the user-initiated phantom-cleanup case, with implementation-seam hint pointing at the `userInitiated` parameter.
+
+### Tests (TDD)
+- `PhantomPaneClosePolicyTests` — 4 cases exhaustively covering `(user × handle)` truth table.
+- **472/472 pass** (+4).
+
+### Commit
+- `fix(close): let user-initiated close remove phantom panes (TERM-5.8)`
+
+### Try next cycle
+- Reinstall + test: `espalier pane close` on a phantom pane should now actually close. May require forcing OOM again (easy — just have many running worktrees on relaunch).
+- Audit: are there OTHER guards in the codebase that treat "handle missing" as "bail," regardless of caller intent? e.g. `destroySurface`'s no-op-on-missing path is safe; `setFocus` falls through; `typeText` on a missing handle is skipped (correct). Quick sweep next cycle.
+
+## Cycle 81 — 2026-04-19 (TERM-5.8 verified, no new bug)
+
+### Verified
+- Rebuilt + reinstalled with cycle 80's TERM-5.8 fix. App re-opened, libghostty still `error.OutOfMemory` on restore (same 4+ worktree setup).
+- `espalier pane close 3` → exit 0, splitTree leaf count dropped from 3 to 2. **Phantom close works.**
+- Closed the remaining two phantoms one by one → splitTree empty, worktree transitioned to `.closed`, `focusedTerminalID` cleared. TERM-5.8 handles the last-pane-close case correctly (same path as normal close).
+
+### Audited — no new bugs
+- Swept all `handle(for:)` call sites in the app target. The four non-closePane uses all go through optional-chaining (`?.typeText(...)`, `?.view`, etc.) and silently skip on missing handle. That's the right shape for "render / type if you can, otherwise do nothing" — can't be exploited the same way the closePane guard could.
+- `clipboard_read_cb` (GhosttyBridge): guards with `guard let handle` before clipboard op. Missing handle → no-op (paste silently fails on a destroyed surface). Acceptable.
+
+### Noted but not fixed
+- **Attention-to-closed-worktree silence.** Sending `espalier notify` from a shell whose worktree is `.closed` in Espalier stores the attention in state.json but STATE-2.3 explicitly says "Non-running worktrees (no pane rows) display no attention indicator." Then the user's next click to open clears the attention via STATE-2.4. Net: notify lost silently. Edge case (Andy's shells are normally inside running Espalier panes, so worktree is `.running`), but worth flagging — it conflicts with the "stop feeling like a plate-spinner" JTBD. Fix would require a spec decision (show badge on closed-worktree row, or reject notify to closed, or retain attention through the click).
+
+### Tests
+- 472/472 pass (unchanged — verification cycle).
+
+### Try next cycle
+- Stop Worktree via context menu — does it cleanly tear down a mix of live + phantom panes?
+- Delete Worktree while CLI operations race against it (pane close mid-delete).
+- If screenshot access returns, click the now-closed 20260418 worktree to test .closed → .running with OOM pressure again.
+
+## Cycle 82 — 2026-04-19 (CLI fails on /tmp worktrees — ATTN-1.5)
+
+### Found live
+- Created a worktree externally: `git worktree add /tmp/espalier-cycle82-test -b cycle82-test`. FSEvents discovered it ~instantly; state.json got `/private/tmp/espalier-cycle82-test` (git resolves the symlink forward).
+- `cd /tmp/espalier-cycle82-test && espalier notify "hello"` → exit 1, `"Not inside a tracked worktree"`. Exact message the CLI emits when `isTracked` returns false. Yet state.json clearly tracks the worktree.
+
+### Root cause
+- macOS's `/tmp` is a symlink to `/private/tmp` (private root). Foundation's `URL.resolvingSymlinksInPath` / `NSString.resolvingSymlinksInPath` / `standardizingPath` all **collapse `/private/tmp` → `/tmp`** — the "logical" form. POSIX `realpath(3)` goes the other way, keeping the "physical" form. `git worktree list --porcelain` uses the physical form.
+- `GitRepoDetector.detect(path: pwd)` called `URL(fileURLWithPath: path).resolvingSymlinksInPath()` at the top, which produced `/tmp/espalier-cycle82-test`. State.json's entry was `/private/tmp/espalier-cycle82-test`. Literal `==` in `AppState.worktree(forPath:)` → no match → `isTracked` false.
+
+### Fixed
+- New `CanonicalPath.canonicalize(_:)` in EspalierKit, POSIX `realpath`-based. Handles missing-leaf (parent-resolve + reappend) and returns input on other failures.
+- `GitRepoDetector.detect` + `resolveRepoRoot` now route initial + gitdir paths through `CanonicalPath.canonicalize` instead of Foundation's resolver.
+- Existing `GitRepoDetectorTests` (detectsRepoRoot / detectsWorktree / detectsSubdirectoryOfRepo) had papered over the issue by also calling `NSString.resolvingSymlinksInPath` on their EXPECTED paths — so both sides were wrong in the same direction. Updated them to use `CanonicalPath.canonicalize` on both sides.
+
+### Spec
+- **ATTN-1.5 tightened** to pin `realpath(3)` semantics and explain why Foundation's resolver is wrong for this lookup.
+
+### Tests (TDD)
+- `CanonicalPathTests` — 4 cases: `/tmp` → `/private/tmp`, already-canonical preserved, missing-leaf with resolved parent, `/` preserved. Failing test-first, passed after impl.
+- **476/476** total pass.
+
+### Verified end-to-end
+- Repeated the live failure scenario post-fix: `cd /tmp/espalier-cycle82-test && espalier-cli notify "hello"` → exit 0, attention lands in state.json on the correct worktree.
+
+### Commit
+- `fix(cli): canonicalize pwd with realpath so /tmp worktrees resolve (ATTN-1.5)`
+
+### Try next cycle
+- Stop Worktree context-menu behavior — still untested interactively.
+- Re-sweep for OTHER `resolvingSymlinksInPath` call sites that may hit the same private-root issue (e.g. in stats / discovery layers).
+
+## Cycle 83 — 2026-04-19 (post-ATTN-1.5 symlink sweep, no new bug)
+
+### Swept
+- Grepped all `Sources/` for `resolvingSymlinksInPath`, `standardizingPath`, `standardizedFileURL`. Only hits are in the new `CanonicalPath.swift` doc comment. No other call sites to migrate.
+- Path-equality chains in `AppState` (`addRepo`, `worktree(forPath:)`, `repo(forWorktreePath:)`, `indices(forWorktreePath:)`, `removeWorktree`, `removeRepo`) — all consume paths produced by `GitRepoDetector` or `GitWorktreeDiscovery.discover`. Both producers now emit canonical (realpath) form post cycle 82, so literal `==` works.
+- Verified `git worktree list --porcelain` always emits physical paths, even if a worktree was added via the logical form. (Cross-checked: `git worktree add /tmp/…` registers as `/private/tmp/…` in the porcelain output.)
+- `selectPane` on a phantom leaf is a no-op against the invisible surface (setFocus iterates `surfaces`, skips missing handles; `makePaneFirstResponder` early-returns on no-view). The user sees sidebar-focused state but content area stays dark. Not a bug — consequence of libghostty OOM, not a click-handling issue.
+- `selectWorktree`'s post-resurrect path leaves `focusedTerminalID = nil` in the model (AppKit first-responder is still set via fallback to `allLeaves.first`). Minor model/view drift but not user-visible.
+
+### Broke
+- Nothing.
 
 ### Tests
 - 476/476 pass (unchanged).
 
 ### Try next cycle
+- Stop Worktree + Cmd+W interactive testing (still blocked by flaky screenshot permission).
+- Web-access path over Tailscale — not exercised this session.
+- `Reload Ghostty Config` menu-label mismatch (cycle 75 queued item).
+
+## Cycle 84 — 2026-04-19 (stale-worktree lifecycle survey, no new bug)
+
+### Exercised
+- `git worktree add .worktrees/cycle84-test -b cycle84-test` → FSEvents discovery picked it up (~instant) as `.closed` with correct branch.
+- `espalier notify` from inside the new worktree → landed on it correctly (first state.json check was just read too fast; retry saw the attention).
+- `rm -rf .worktrees/cycle84-test` externally → worktreeMonitor's path watcher transitioned state to `.stale` within 3s.
+- `git worktree prune` → removed `.git/worktrees/cycle84-test/` metadata. State.json still holds the `.stale` entry; reconciler has no "stale AND not in discovered → remove" rule.
+
+### Classification
+- Persistent-stale-after-prune is spec-compliant per GIT-3.6 ("the context menu shall include a 'Dismiss' action" implies Dismiss is the only remove path for stale entries). Auto-cleanup on prune isn't in the spec. Minor UX annoyance for Andy's "creates worktrees faster than UI can discover" + `rm` rhythm, but not a bug.
+
+### Audited
+- `AppState.setFocusedTerminal` doesn't validate terminalID against splitTree. A race between click and `close_surface_cb` could leave `focusedTerminalID` at a removed leaf. User-visible consequence: sidebar's "focused pane" highlight disappears until the next click. Transient only — not fragile enough to fix.
+- `WorktreeEntry` Codable decode doesn't validate `focusedTerminalID ∈ splitTree.allLeaves` either. Same transient-only impact on deserialization.
+- closePane + Stop + Dismiss + PWD-reassign paths all correctly clean up `paneAttention`. No orphan-badge accumulation surface.
+
+### Tests
+- 476/476 pass (unchanged).
+
+### Meta
+- Accidentally made the initial cycle-84 journal commit in the main-repo checkout instead of this worktree (cwd drifted mid-session). That commit is `2b2ddb7 chore(dogfood): log cycle 84` on `main` locally — `.blindspots/dogfood-journals/` is gitignored but I used `git add -f`. Sandbox refused both reset and revert. **Leaving the stray commit in place on main for the user to handle (`git -C /Users/btucker/projects/espalier reset --hard HEAD~1` will drop it cleanly if desired).**
+
+### Try next cycle
 - Exercise Stop Worktree context menu interactively once screenshot comes back.
 - Web-access/Tailscale path is still unexercised this session.
-- Consider a low-priority follow-up: add the "stale-not-in-discovered → remove" rule to reconciler for Andy's rapid-churn case. Would need a new spec line (GIT-3.12?).
+
+## Cycle 85 — 2026-04-19 (addWorktree + web-settings audit, no new bug)
+
+### Audited
+- `addWorktree` path: `GitWorktreeAdd.add` runs `git worktree add -b <branch> <path> [<startPoint>]`, captures stderr, surfaces errors to the AddWorktreeSheet. Clean. Constructed `worktreePath = repoPath + "/.worktrees/" + name` could in theory disagree with what git later emits for `worktree list --porcelain`, but repoPath was canonicalized by cycle 82's ATTN-1.5 fix so this matches.
+- `WorktreeNameSanitizer`: strict ASCII allowlist. Unicode (e.g., Chinese / emoji) collapses to `-`. Idempotent.
+- `WebAccessSettings` (`@AppStorage WebAccessEnabled:Bool`, `WebAccessPort:Int`): defaults off / 8799. `WebSettingsPane` TextField uses `format: .number` which rejects non-numeric input. Port goes through `isValidListenablePort(0...65535)` gate in WebServerController before NIO bind.
+- `GitWorktreeRemove`: `git worktree remove <path>`; path passes through untouched to git.
+- `SocketServer.acceptConnection`: DispatchSource's accept path fires per pending connection; handleClient dispatched to the serial queue. No missed-event shape observed.
+- `installCLI`: hardcoded `/usr/local/bin/espalier` symlink; simple CLIInstaller planner + install flow.
+
+### Broke
+- Nothing.
+
+### Tests
+- 476/476 pass (unchanged).
+
+### Try next cycle
+- Might be worth opening another PR with cycles 79, 80, 82 accumulated (LAYOUT-2.13, TERM-5.8, ATTN-1.5). Three real fixes since PR #36.
+- If screenshot permission recovers, test Stop Worktree context menu interactively.
+
+## Cycle 86 — 2026-04-19 (Force-quit leaves attention stuck — STATE-2.12)
+
+### Found by code audit
+- Cycle 85 noted cycle 82 found a path-canonicalization bug. Following the "persistence layer vs runtime-only state" thread that surfaced in cycle 81's "notify to closed worktree" observation, walked the lifecycle of `Attention.clearAfter`. The schedule site is `DispatchQueue.main.asyncAfter(deadline: .now() + effectiveClearAfter)` in `handleNotification` / `setAttentionForTerminal`. That timer is in-memory only. State.json persists the `Attention` struct (text + timestamp + clearAfter) but NOT any timer identity.
+
+### Broke
+- **Force-quit during a `--clear-after` window strands the attention badge.** Repro by thought experiment (didn't need to reproduce live since the code path is obvious): set `notify "x" --clear-after 60`, force-quit at T=30, relaunch. Attention persists with `clearAfter=60` and a 30-second-old timestamp; no code re-schedules. Badge sticks until user clicks the worktree. Same defect hits pane-scoped attention from shell-integration COMMAND_FINISHED pings.
+
+### Fixed
+- New pure helper `AttentionResumePolicy.remainingTime(for:now:)`. Returns:
+  - `nil` → no timer (attention had no `clearAfter`)
+  - `0` → expired; caller schedules zero-delay asyncAfter that fires next main-queue turn
+  - positive → remaining seconds to schedule
+  - clamps to full `clearAfter` when timestamp is in the future (clock-skew defense)
+- `EspalierApp.restoreRunningWorktrees` now ends with a call to `resumePersistedAttentionTimers()` which walks every worktree's `attention` and `paneAttention` entries, calls the helper, and schedules `asyncAfter` with the correct remaining time + `clearAttentionIfTimestamp` / `clearPaneAttentionIfTimestamp` dispatch.
+
+### Spec
+- **STATE-2.12 added** — pins the "restart-reschedule" contract, including the two edge cases (already-expired → 0 delay; future timestamp → clamp to full window).
+
+### Tests (TDD)
+- `AttentionResumePolicyTests` — 5 cases covering the decision matrix. Failing → passed after impl.
+- **481/481** total pass.
+
+### Commit
+- `fix(attention): resume auto-clear timers on restart (STATE-2.12)`
+
+### Try next cycle
+- Reinstall + verify end-to-end: send `notify --clear-after 20`, force-quit within the window, relaunch, confirm the badge self-clears after the remaining seconds.
+- Re-sweep: are there OTHER persisted state entries that carry implicit timers or ephemeral companions? (Doesn't look like it — I've now audited attention, paneAttention, stats, PR status, and focusedTerminalID.)
+
+## Cycle 87 — 2026-04-19 (zmx-kill race + attention-orphan audit, no new bug)
+
+### Context
+- PR #37 (cycles 79/80/82/86 bundle) opened, `build-and-test` pending, auto-merge enabled. Rebase deferred until it lands.
+
+### Audited
+- **ZMX-4.3 vs ZMX-4.4 race.** destroySurface queues `DispatchQueue.global.async { launcher.kill(...) }`. If the app quits between queuing and execution, the zmx session leaks. Per ZMX-4.4 the app deliberately *doesn't* kill sessions on quit (lets daemons survive for next-launch reattach), but this leaves orphan daemons for the specific "Cmd+W then quick Cmd+Q" timing. Daemons are lightweight; accumulate until user runs `zmx list` / `zmx kill`. Design consequence, not a spec violation.
+- **Orphan `paneAttention` keys after restart.** Walked every pane-close path (closePane, prepareForStop, prepareForDismissal, prepareForResurrection, reassignPaneByPWD). All clean up `paneAttention[terminalID]`. The only window for persistence-orphan is a sub-ms race between mutation and `.onChange`-triggered save. Cycle 86's STATE-2.12 resume handles the case gracefully anyway (`clearPaneAttentionIfTimestamp` is a no-op if the key is missing).
+- **AttentionResumePolicy edge cases.** Negative `clearAfter` (shouldn't exist per STATE-2.8 clamp, but possible if hand-edited) → treated as "already expired" → 0 delay. `clearAfter = 0` → same. Defensive.
+- **PaneInfo title rendering.** CLI print concatenates title verbatim. If a title contains newlines (decoded from JSON `\n`), pane list would span multiple lines. Weird but non-critical.
+
+### Broke
+- Nothing.
+
+### Tests
+- 481/481 pass (unchanged).
+
+### Try next cycle
+- Once PR #37 merges, rebase and continue against a clean main.
+- Look at the PR merge-offer dialog's interaction with the `OfferedDeleteForMergedPR` persistence + refresh cadence — is there a timing case where a user gets double-prompted?
+- Web/Tailscale path still unexercised in this session.
+
+## Cycle 88 — 2026-04-19 (SIGKILL/SIGTERM spec drift in WebSession — WEB-4.5)
+
+### Rebase
+- PR #37 + PR #38 (WorktreeNameSanitizer `/` support, GIT-5.1) both merged to origin/main. Hard-reset this branch onto the fresh main; restored journal from temp backup so per-cycle history stayed on this branch only.
+
+### Found by spec re-read
+- Sweeping `SPECS.md` for spec-vs-code mismatches after PR #37. WEB-4.5 reads: "When a WebSocket closes, the application shall send **SIGTERM** to the associated `zmx attach` child…"
+- `WebSession.close()`'s docstring (line 11) also says "sends SIGTERM to the child", but the body called `kill(pid, SIGKILL)` with a comment arguing SIGKILL was fine because "the daemon handles abrupt client disconnect." In-code intent (docstring) matched spec; implementation had drifted.
+
+### Broke
+- Spec violation. The `zmx attach` client didn't get a chance to clean up on graceful WS close (e.g. flush a trailing buffer, log the disconnect, detach cleanly from the daemon). Observable only to anyone auditing Zmx daemon state across many WS sessions. Not a user-visible crash.
+
+### Fixed
+- Swapped `SIGKILL` → `SIGTERM`. Rewrote the surrounding comment to cite WEB-4.5 + the waitpid-reap window as the safety net. Docstring now matches body.
+
+### Spec
+- Unchanged. WEB-4.5 already says SIGTERM.
+
+### Tests
+- 483/483 pass (PR #38 landed +2 new WorktreeNameSanitizer cases). Not unit-testable at WebSession layer without significant mock plumbing — PtyProcess.spawn → real subprocess. Signal-swap + rationale update is the substantive change.
+
+### Commit
+- `fix(web): send SIGTERM to zmx attach on WS close per WEB-4.5`
+
+### Try next cycle
+- Continue spec-vs-code audit — any other "comment says X, code does Y" drift?
+- Interactive exercise of web/Tailscale path if time permits.
