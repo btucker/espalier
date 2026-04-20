@@ -73,14 +73,10 @@ public final class WebSession {
 
     public func write(_ data: Data) {
         guard let fd = spawned?.masterFD, !data.isEmpty else { return }
-        data.withUnsafeBytes { buf in
+        try? data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { return }
-            var offset = 0
-            while offset < buf.count {
-                let n = Darwin.write(fd, base.advanced(by: offset), buf.count - offset)
-                if n < 0 { break }
-                offset += n
-            }
+            let typed = base.assumingMemoryBound(to: UInt8.self)
+            try SocketIO.writeAll(fd: fd, bytes: typed, count: buf.count)
         }
     }
 

@@ -81,7 +81,7 @@ public enum NotifyInputValidation: Equatable {
             // check above that only rejects when EVERY scalar is Cf.
             // Mixed `\u{202E}evil` renders RTL-reversed — "Trojan
             // Source"-style visual deception (CVE-2021-42574).
-            if text!.unicodeScalars.contains(where: Self.isBidiOverride) {
+            if BidiOverrides.containsAny(text!) {
                 return .bidiControlInText
             }
             // Negative / zero clearAfter is handled server-side per
@@ -126,29 +126,4 @@ public enum NotifyInputValidation: Equatable {
         }
     }
 
-    /// The Unicode scalars that change the display direction of
-    /// surrounding text: the "embedding" family (U+202A-U+202C), the
-    /// "override" family (U+202D-U+202E, the Trojan-Source flavor),
-    /// and the "isolate" family (U+2066-U+2069) Unicode 6.3+ uses as
-    /// the modern replacement. All are Format-category so they slip
-    /// past both the Cc-control gate and the all-invisible gate when
-    /// mixed with visible content.
-    static func isBidiOverride(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x202A...0x202E, 0x2066...0x2069: return true
-        default: return false
-        }
-    }
-
-    /// Drop every BIDI-override scalar from the input. Used at the
-    /// PR-title intake boundary (`PR-5.5`) where the author is
-    /// explicitly not trusted and rejecting the whole PR would hide
-    /// a legit PR behind a single poisoned title. Rejection (the
-    /// self-owned-surface policy at `ATTN-1.14` and `LAYOUT-2.18`)
-    /// assumes the text has an owner who can fix it; for external
-    /// data, stripping degrades the display gracefully.
-    public static func strippingBidiOverrides(_ s: String) -> String {
-        let safe = s.unicodeScalars.filter { !isBidiOverride($0) }
-        return String(String.UnicodeScalarView(safe))
-    }
 }

@@ -28,19 +28,17 @@ public struct Attention: Codable, Sendable, Equatable {
     public static func isValidText(_ text: String) -> Bool {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         if text.count > textMaxLength { return false }
-        // Match the CLI's ATTN-1.12 guard (widened in cycle 108 from
-        // just LF/CR to the full Unicode Cc category) so a raw socket
-        // client (`nc -U`, web surface, custom script) can't bypass
-        // validation and send text with ANSI escapes, tabs, bells, etc.
-        // that the sidebar would render as garbled literal glyphs.
+        // Match CLI's ATTN-1.12: reject Cc-category scalars so a raw
+        // socket client (`nc -U`, web surface) can't ship ANSI escapes,
+        // tabs, or bells the sidebar would render as garbled glyphs.
         if text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return false }
-        // ATTN-1.14 / STATE-2.13: mirror the CLI's BIDI-override
-        // rejection so raw socket clients can't ship a Trojan-Source-
-        // style notify past the front door.
-        if text.unicodeScalars.contains(where: NotifyInputValidation.isBidiOverride) { return false }
-        // Match CLI's ATTN-1.13 guard: text entirely made of format
-        // (Cf) + whitespace scalars renders as invisible. Swift's trim
-        // strips ZWSP but not BOM, so this backstop catches the rest.
+        // ATTN-1.14 / STATE-2.13: BIDI-override scalars are Cf, not Cc
+        // — the control gate above misses them. Reject so raw clients
+        // can't land a Trojan-Source ping past the front door.
+        if BidiOverrides.containsAny(text) { return false }
+        // ATTN-1.13: text made entirely of format (Cf) + whitespace
+        // renders as invisible. Swift's trim strips ZWSP but not BOM,
+        // so this backstop catches the rest.
         if text.unicodeScalars.allSatisfy({
             $0.properties.isWhitespace || $0.properties.generalCategory == .format
         }) { return false }

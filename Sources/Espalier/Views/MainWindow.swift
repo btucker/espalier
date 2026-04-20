@@ -407,12 +407,10 @@ struct MainWindow: View {
         do {
             detection = try GitRepoDetector.detect(path: path)
         } catch {
-            // `GitRepoDetector.detect` throws when the `.git` file exists
-            // but can't be read (permissions glitch, truncated file, FS
-            // error). Pre-cycle-141 this was `try?` which silently
-            // returned, leaving the user wondering why their dragged
-            // folder didn't appear. Analogue of `GIT-1.2`'s same fix on
-            // the async `discover` side (`GIT-1.3`).
+            // `detect` throws when `.git` exists but can't be read
+            // (permissions glitch, truncated file, FS error). Surface
+            // it to the user — otherwise a dragged folder silently
+            // fails to appear. Same policy as `GIT-1.3` on `discover`.
             NSLog("[Espalier] addPath: detect failed for %@: %@",
                   path, String(describing: error))
             let alert = NSAlert()

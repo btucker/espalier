@@ -25,7 +25,7 @@ public struct GitHubPRFetcher: PRFetcher {
                 // PR-5.5: strip BIDI-override scalars from the
                 // author-controlled title so a poisoned title can't
                 // visually deceive via RTL-reversal in the breadcrumb.
-                title: NotifyInputValidation.strippingBidiOverrides(open.title),
+                title: BidiOverrides.stripping(open.title),
                 url: open.url,
                 state: .open,
                 checks: checks,
@@ -35,7 +35,7 @@ public struct GitHubPRFetcher: PRFetcher {
         if let merged = try await fetchOne(origin: origin, branch: branch, state: "merged") {
             return PRInfo(
                 number: merged.number,
-                title: NotifyInputValidation.strippingBidiOverrides(merged.title),
+                title: BidiOverrides.stripping(merged.title),
                 url: merged.url,
                 state: .merged,
                 checks: .none,

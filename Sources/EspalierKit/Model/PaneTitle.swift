@@ -83,7 +83,7 @@ public enum PaneTitle {
         }) {
             return nil
         }
-        if title.unicodeScalars.contains(where: NotifyInputValidation.isBidiOverride) {
+        if BidiOverrides.containsAny(title) {
             return nil
         }
         return title

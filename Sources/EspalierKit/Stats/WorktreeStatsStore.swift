@@ -199,19 +199,9 @@ public final class WorktreeStatsStore {
 
     // MARK: - Private
 
-    /// Production `ComputeFunction` — resolves the default branch (home
-    /// checkout vs linked worktree shape) and computes divergence stats
-    /// via the real `GitRunner`. Extracted from the old private-static
-    /// `computeOffMain` so tests can inject a stub instead of the real
-    /// git subprocess chain. `nonisolated` so `init`'s default-parameter
-    /// evaluation (a nonisolated context) can reference it.
-    /// Production `FetchFunction` — runs `git fetch` via the real
-    /// `GitRunner.run`. `run` throws `CLIError.nonZeroExit` on any
-    /// non-zero exit so an offline / auth-failure / rate-limited fetch
-    /// propagates as a throw the caller turns into backoff (streak++).
-    /// Pre-cycle-140 this used `GitRunner.captureAll` which returns
-    /// normally on non-zero exit, so every failed fetch silently
-    /// reset the streak and the backoff never kicked in.
+    /// Production `FetchFunction` — runs `git fetch` via `GitRunner.run`.
+    /// `run` throws on non-zero exit so the caller's backoff (streak++)
+    /// fires on offline / auth-failure / rate-limited fetches.
     public nonisolated static let defaultFetch: FetchFunction = { repoPath, defaultBranch in
         _ = try await GitRunner.run(
             args: ["fetch", "--no-tags", "--prune", "origin", defaultBranch],
@@ -219,6 +209,9 @@ public final class WorktreeStatsStore {
         )
     }
 
+    /// Production `ComputeFunction` — resolves the default branch and
+    /// computes divergence via `GitRunner`. `nonisolated` so `init`'s
+    /// default-parameter evaluation can reference it.
     public nonisolated static let defaultCompute: ComputeFunction = { worktreePath, repoPath, cachedDefault in
         let name: String?
         if let cached = cachedDefault {

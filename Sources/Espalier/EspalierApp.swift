@@ -355,8 +355,6 @@ struct EspalierApp: App {
             // Surface the failure in Console.app AND present a one-time
             // banner so the user sees it immediately rather than learning
             // about it later via a "not listening" CLI error (ATTN-3.4).
-            // Previously `try?` silently swallowed it; cycle 95 added the
-            // NSLog, cycle 123 added the banner.
             NSLog("[Espalier] SocketServer.start() failed: %@", String(describing: error))
             DispatchQueue.main.async {
                 NotifySocketBanner.presentIfNeeded(error: error)

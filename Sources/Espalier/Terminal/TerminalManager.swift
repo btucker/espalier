@@ -697,7 +697,7 @@ final class TerminalManager: ObservableObject {
             // dict past `maxStoredLength`. A legitimate title pushed
             // by the inner shell later still wins because we write the
             // filtered value back. See `PaneTitle.sanitize`.
-            if let sanitized = PaneTitle.sanitize(title) {
+            if let sanitized = PaneTitle.sanitize(title), titles[id] != sanitized {
                 titles[id] = sanitized
             }
 

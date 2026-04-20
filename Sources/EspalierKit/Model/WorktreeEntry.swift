@@ -239,6 +239,6 @@ public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
     /// raw so `git` subprocess commands and `gh pr list --head` still
     /// operate on the real ref.
     public var displayBranch: String {
-        NotifyInputValidation.strippingBidiOverrides(branch)
+        BidiOverrides.stripping(branch)
     }
 }

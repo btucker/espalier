@@ -33,13 +33,10 @@ enum SocketClient {
         case .success(let msg):
             return msg
         case .failure(.timeout):
-            // Pre-cycle-138 this was `socketError("Empty response
-            // from app")` — misleading when the actual cause is a
-            // timeout (client SO_RCVTIMEO elapsed, or server closed
-            // fd without a response per `ATTN-2.10`). `.socketTimeout`
-            // mirrors the ATTN-3.3 error shape so the user gets the
-            // same "try again / wait for the app" cue regardless of
-            // which end of the timeout fired.
+            // Client SO_RCVTIMEO elapsed, or server closed fd without
+            // a response (`ATTN-2.10`). `.socketTimeout` mirrors the
+            // ATTN-3.3 error shape so the user gets the same cue
+            // regardless of which end of the timeout fired.
             throw CLIError.socketTimeout
         case .failure(.unparseable):
             throw CLIError.socketError("Unparseable response from app")
@@ -96,11 +93,6 @@ enum SocketClient {
     private static func writeMessage(_ message: NotificationMessage, to fd: Int32) throws {
         let data = try JSONEncoder().encode(message)
         let jsonLine = String(data: data, encoding: .utf8)! + "\n"
-        // Pre-cycle-139 this did `_ = Darwin.write(fd, ptr, strlen(ptr))`,
-        // silently dropping partial writes AND errors. `espalier notify
-        // "done"` against a just-crashed server would report success
-        // even though the server never received the message. See
-        // `SocketIO.writeAll` for the loop + errno-surfacing.
         do {
             try SocketIO.writeAll(fd: fd, string: jsonLine)
         } catch let error as SocketIO.WriteError {

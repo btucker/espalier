@@ -83,8 +83,7 @@ final class WebServerController: ObservableObject {
             var bind = tailscaleStatus.tailscaleIPs
             bind.append("127.0.0.1")
             let ownerLogin = tailscaleStatus.loginName
-            let auth = WebServer.AuthPolicy { peerIP in
-                guard let api = try? TailscaleLocalAPI.autoDetected() else { return false }
+            let auth = WebServer.AuthPolicy { [api] peerIP in
                 guard let whois = try? await api.whois(peerIP: peerIP) else { return false }
                 return whois.loginName == ownerLogin
             }.allowingLoopback()
