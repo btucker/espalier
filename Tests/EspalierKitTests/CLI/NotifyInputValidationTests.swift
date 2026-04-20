@@ -284,4 +284,41 @@ struct NotifyInputValidationTests {
         // a visible glyph. Mustn't reject.
         #expect(NotifyInputValidation.validate(text: "👨\u{200D}👩\u{200D}👧", clear: false) == .valid)
     }
+
+    // ATTN-1.14: the BIDI-override scalars (U+202A-U+202E, U+2066-U+2069)
+    // are Unicode Format-category (Cf) and so pass both the Cc-control
+    // check (`.controlCharactersInText`) and the all-Cf invisibility
+    // check (`.emptyText`) when interleaved with visible content. Result:
+    // a notify like `\u{202E}evil\u{202C}` stores fine but renders with
+    // reversed text in the sidebar — the "Trojan Source" style of
+    // render distortion (CVE-2021-42574). Low-probability vector in
+    // Andy's flow (he types his own notify text), but consistent with
+    // ATTN-1.12's "reject surprising render distortion" principle.
+
+    @Test func textWithRLOOverrideIsInvalid() {
+        // U+202E RIGHT-TO-LEFT OVERRIDE renders subsequent runs RTL.
+        let r = NotifyInputValidation.validate(text: "\u{202E}evil", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func textWithLRIIsolateIsInvalid() {
+        // U+2066 LEFT-TO-RIGHT ISOLATE — the newer isolate family
+        // (U+2066-U+2069) replaces the older embed family in security
+        // advisories; we reject both.
+        let r = NotifyInputValidation.validate(text: "ok\u{2066}hidden\u{2069}", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func textWithLREEmbedIsInvalid() {
+        // U+202A LEFT-TO-RIGHT EMBEDDING.
+        let r = NotifyInputValidation.validate(text: "ok\u{202A}x\u{202C}", clear: false)
+        #expect(r == .bidiControlInText)
+    }
+
+    @Test func plainNonBidiTextStillValid() {
+        // Arabic / Hebrew / RTL-natural text doesn't USE the override
+        // scalars; it just uses RTL-direction characters. Must pass.
+        #expect(NotifyInputValidation.validate(text: "مرحبا", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "שלום world", clear: false) == .valid)
+    }
 }

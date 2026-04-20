@@ -64,6 +64,15 @@ struct AttentionTextValidationTests {
     // the CLI can't ship text with control characters through either.
     // Widened in cycle 108 from just LF/CR to the full Unicode Cc
     // category (ANSI escapes, tabs, bells, DEL, null byte, etc.).
+    @Test func bidiOverrideScalarsAreInvalid() {
+        // Server-side mirror of ATTN-1.14: raw socket clients that
+        // bypass the CLI can't ship a Trojan-Source-style notify past
+        // `Attention.isValidText` either.
+        #expect(!Attention.isValidText("\u{202E}evil"))       // RLO
+        #expect(!Attention.isValidText("\u{202A}x\u{202C}"))  // LRE..PDF
+        #expect(!Attention.isValidText("ok\u{2066}x\u{2069}")) // LRI..PDI
+    }
+
     @Test func controlCharactersInTextAreInvalid() {
         #expect(!Attention.isValidText("line1\nline2"))
         #expect(!Attention.isValidText("line1\rline2"))

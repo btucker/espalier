@@ -19,6 +19,7 @@ public enum NotifyInputValidation: Equatable {
     case clearAfterWithClearFlag
     case textTooLong(max: Int)
     case controlCharactersInText
+    case bidiControlInText
 
     /// Upper bound for notify text. Proxies to `Attention.textMaxLength`
     /// so the CLI's ATTN-1.10 check and the server's STATE-2.10 backstop
@@ -74,6 +75,15 @@ public enum NotifyInputValidation: Equatable {
             if text!.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
                 return .controlCharactersInText
             }
+            // ATTN-1.14: reject BIDI-override scalars even when mixed
+            // with visible content. They're Unicode Cf (not Cc) so the
+            // check above doesn't catch them, and the all-Cf-invisible
+            // check above that only rejects when EVERY scalar is Cf.
+            // Mixed `\u{202E}evil` renders RTL-reversed — "Trojan
+            // Source"-style visual deception (CVE-2021-42574).
+            if text!.unicodeScalars.contains(where: Self.isBidiOverride) {
+                return .bidiControlInText
+            }
             // Negative / zero clearAfter is handled server-side per
             // STATE-2.8 (treated as no auto-clear). Only the upper
             // bound is a CLI-side rejection — the user probably typed
@@ -111,6 +121,22 @@ public enum NotifyInputValidation: Equatable {
             return "Notification text exceeds the \(max)-character limit"
         case .controlCharactersInText:
             return "Notification text cannot contain control characters (newlines, tabs, ANSI escapes, or other non-printable characters)"
+        case .bidiControlInText:
+            return "Notification text cannot contain bidirectional-override characters (U+202A-U+202E, U+2066-U+2069) — they visually reverse the text in the sidebar"
+        }
+    }
+
+    /// The Unicode scalars that change the display direction of
+    /// surrounding text: the "embedding" family (U+202A-U+202C), the
+    /// "override" family (U+202D-U+202E, the Trojan-Source flavor),
+    /// and the "isolate" family (U+2066-U+2069) Unicode 6.3+ uses as
+    /// the modern replacement. All are Format-category so they slip
+    /// past both the Cc-control gate and the all-invisible gate when
+    /// mixed with visible content.
+    static func isBidiOverride(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x202A...0x202E, 0x2066...0x2069: return true
+        default: return false
         }
     }
 }
