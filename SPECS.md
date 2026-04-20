@@ -219,6 +219,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **GIT-1.3** When the pre-`discover` step `GitRepoDetector.detect(path:)` throws while resolving the user-picked folder (e.g. the `.git` file exists but is unreadable due to permissions or a truncated write), the application shall present an `NSAlert` mirroring `GIT-1.2` rather than swallowing the throw via `try?`. Pre-fix the sync-detect path was the one remaining silent-return in the Add Repository flow — the async discover path (`GIT-1.2`) and the Delete Worktree path (`GIT-4.11`) already alert on throws, so the sync-detect throw stood out as the odd silent failure.
 
+**GIT-1.4** When `GitRepoDetector.detect(path:)` reads a linked worktree's `.git` file and finds a `gitdir: <path>` entry, it shall resolve a relative `<path>` against the worktree directory (the directory containing the `.git` file) rather than feeding it verbatim to `realpath(3)`. Git ≥ 2.52 with `worktree.useRelativePaths=true` writes entries like `gitdir: ../repo/.git/worktrees/name`; passing that to `realpath` resolves against the process cwd — usually unrelated to the worktree dir — so the returned `repoPath` was wrong and the "Add Repository" flow attached a dragged worktree to the wrong repo (or none at all). The absolute-gitdir case (older git and the default config) is unaffected. Mirrors `GIT-3.14`'s same-class fix in `WorktreeMonitor.resolveHeadLogPath`.
+
 ### 4.2 Filesystem Monitoring
 
 **GIT-2.1** While a repository is in the sidebar, the application shall watch the repository's `.git/worktrees/` directory for changes using FSEvents.

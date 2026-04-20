@@ -112,6 +112,55 @@ struct GitRepoDetectorTests {
         }
     }
 
+    /// Git ≥ 2.52 with `worktree.useRelativePaths=true` writes a
+    /// relative gitdir entry into the worktree's `.git` file
+    /// (`gitdir: ../repo/.git/worktrees/name`). `resolveRepoRoot`
+    /// fed that directly to `realpath(3)`, which resolves relative
+    /// paths against the process cwd — not the worktree dir — so
+    /// the returned repoPath was wrong (or the lookup fell back
+    /// through to `/`).
+    @Test func detectsWorktreeWithRelativeGitdir() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Build a realistic repo + worktree structure WITHOUT using
+        // `git worktree add`, so we don't depend on the test-host
+        // git version / config.
+        let repoDir = dir.appendingPathComponent("repo")
+        let wtDir = dir.appendingPathComponent("wt")
+        let gitDir = repoDir.appendingPathComponent(".git/worktrees/wt")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: wtDir, withIntermediateDirectories: true)
+        // Make the repo side look enough like a real repo that
+        // `resolveRepoRoot` can walk up from gitDir.
+        try FileManager.default.createDirectory(
+            at: repoDir.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+
+        // Write `.git` file with a relative gitdir pointing at the
+        // sibling repo's worktrees entry. From `<tmp>/wt`, the
+        // relative path `../repo/.git/worktrees/wt` resolves to
+        // `<tmp>/repo/.git/worktrees/wt`.
+        try "gitdir: ../repo/.git/worktrees/wt\n".write(
+            to: wtDir.appendingPathComponent(".git"),
+            atomically: true, encoding: .utf8
+        )
+
+        let result = try GitRepoDetector.detect(path: wtDir.path)
+        let expectedWtPath = CanonicalPath.canonicalize(wtDir.path)
+        let expectedRepoPath = CanonicalPath.canonicalize(repoDir.path)
+        if case .worktree(let worktreePath, let repoPath) = result {
+            #expect(worktreePath == expectedWtPath)
+            #expect(
+                repoPath == expectedRepoPath,
+                "relative gitdir must resolve against worktree dir; got repoPath=\(repoPath), expected=\(expectedRepoPath)"
+            )
+        } else {
+            Issue.record("Expected .worktree, got \(result)")
+        }
+    }
+
     @Test func detectsSubdirectoryOfRepo() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

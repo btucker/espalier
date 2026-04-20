@@ -29,7 +29,7 @@ public enum GitRepoDetector {
                     let contents = try String(contentsOf: gitPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard contents.hasPrefix("gitdir: ") else { return .notARepo }
                     let gitDir = String(contents.dropFirst("gitdir: ".count))
-                    let repoPath = resolveRepoRoot(fromGitDir: gitDir)
+                    let repoPath = resolveRepoRoot(fromGitDir: gitDir, worktreePath: current.path)
                     return .worktree(worktreePath: current.path, repoPath: repoPath)
                 }
             }
@@ -40,10 +40,26 @@ public enum GitRepoDetector {
         }
     }
 
-    private static func resolveRepoRoot(fromGitDir gitDir: String) -> String {
+    private static func resolveRepoRoot(fromGitDir gitDir: String, worktreePath: String) -> String {
+        // Git ≥ 2.52 with `worktree.useRelativePaths=true` writes
+        // relative gitdir entries in the worktree's `.git` file
+        // (`gitdir: ../repo/.git/worktrees/name`). Feeding that to
+        // `realpath(3)` resolves against the process cwd — unrelated
+        // to the worktree dir — so the returned repoPath was wrong.
+        // Resolve relative inputs against the worktree dir first.
+        // `GIT-1.4`.
+        let absoluteGitDir: String
+        if gitDir.hasPrefix("/") {
+            absoluteGitDir = gitDir
+        } else {
+            absoluteGitDir = URL(fileURLWithPath: worktreePath)
+                .appendingPathComponent(gitDir)
+                .standardized
+                .path
+        }
         // Same private-root issue as `detect`: use realpath so the
         // repoPath we return matches what `state.json` holds.
-        var url = URL(fileURLWithPath: CanonicalPath.canonicalize(gitDir))
+        var url = URL(fileURLWithPath: CanonicalPath.canonicalize(absoluteGitDir))
         while url.lastPathComponent != ".git" && url.path != "/" {
             url = url.deletingLastPathComponent()
         }

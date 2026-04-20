@@ -2820,3 +2820,40 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - Still want to add CLI-side readAll cap (ATTN-3.6 analogue to ATTN-2.11) but the socketpair test needs a simpler design. Maybe use a Dispatch/NIO-based fake producer or just test the helper pure-functionally over a pre-seeded fd.
 - Audit more `try?`-swallowed subprocess calls — `GitOriginDefaultBranch.resolve` still swallows every throw; not a bug because it falls through to probe fallbacks, but worth verifying.
+
+## Cycle 157 — 2026-04-20 (relative gitdir breaks HEAD-reflog watcher — GIT-3.14)
+
+### Explored
+- Audited `WorktreeMonitor.resolveHeadLogPath` after yesterday's parser fix. Found that the function:
+  1. Reads `<worktree>/.git` as text.
+  2. Drops the `gitdir: ` prefix.
+  3. Returns `"<gitdir>/logs/HEAD"` verbatim.
+
+### Broke
+- Git ≥ 2.52 with `worktree.useRelativePaths=true` writes `gitdir: ../../.git/worktrees/name` (relative). Feeding that to `open(2)` resolves against process cwd — not the worktree dir — so the reflog watcher fd is wrong or fails.
+- Traced the downstream: `createFileWatcher` returns nil on open-fail, `watchHeadRef` silently returns. The HEAD-change callback never fires, and local commits aren't detected until the 5-minute polling tick.
+- My local git is 2.52.0 but absolute paths (config not set), so I didn't trip it in practice. The bug is latent for users who enable the config.
+
+### Diagnosed
+- `Sources/EspalierKit/Git/WorktreeMonitor.swift:147-157`. Fix: if the parsed gitdir doesn't start with "/", resolve against `URL(fileURLWithPath: worktreePath)`.
+
+### Spec
+- Added **GIT-3.14** pinning: relative gitdir entries must be resolved against the worktree directory.
+
+### Fixed
+- Parse gitdir value; build a URL either absolute or resolved via `appendingPathComponent(relPath).standardized`.
+- Lifted `resolveHeadLogPath` from private to internal for `@testable import` access. Still file-scoped to WorktreeMonitor — no public surface change.
+
+### Tests
+- `WorktreeMonitorHeadLogPathTests`:
+  - `absoluteGitdirReturnsAbsoluteReflogPath` — regression: existing behaviour unchanged.
+  - `relativeGitdirResolvesAgainstWorktreeDirectory` — new: `.git` with `gitdir: ../repo/.git/worktrees/wt` resolves to the correct absolute path. Pre-fix returns a relative string starting with "../".
+  - `missingGitFileFallsBackToWorktreesNameGuess` — regression: fallback path unchanged.
+- 622/622 overall.
+
+### Commit
+- `fix(monitor): resolve relative gitdir against worktree dir (GIT-3.14)` (ec695a2)
+
+### Try next cycle
+- The `DispatchSource` event-handler path that fires the delegate multiple times on rapid FSEvent bursts (e.g. `git worktree add` twice in quick succession) spawns overlapping discover Tasks. Non-debounced; relies on each call producing the same appState result. Worth a closer look — may be safe in practice.
+- The CLI-side ATTN-3.6 buffer cap still pending after the cycle-155 socketpair fiasco. Retry with a cleaner design (maybe a synchronous file-fd test).
