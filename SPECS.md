@@ -701,7 +701,7 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 
 **WEB-1.6** When resolving the Tailscale LocalAPI, the application shall try Unix domain socket endpoints first (OSS / sandboxed App Store installs) and, if none are reachable, shall fall back to the macsys DMG's TCP endpoint by reading the port from `/Library/Tailscale/ipnport` (file or symlink) and the auth token from `/Library/Tailscale/sameuserproof-<port>`.
 
-**WEB-1.7** While web access is listening, the Settings pane status row shall render the listening address and port without locale grouping separators (e.g., `Listening on 100.64.0.5:49161`, never `49,161`).
+**WEB-1.7** Every UI surface that renders a TCP port — the Settings pane's Port input `TextField`, the status row, any future port label — shall suppress the locale grouping separator (e.g., `Listening on 100.64.0.5:49161`, never `49,161`; Port field value `8799`, never `8,799`). Input and display formatters go through `WebPortFormat.noGrouping` (an `IntegerFormatStyle<Int>` with `.grouping(.never)`) so every surface is identical.
 
 **WEB-1.8** Any URL the application composes for display or clipboard copy — the Settings pane's `currentURL`, the sidebar "Copy web URL" action — shall bracket an IPv6 host per RFC 3986 authority syntax (e.g., `http://[fd7a:115c::5]:8799/`). Applies whether the URL includes a session path or is the server's root. Without bracketing, an IPv6-only Tailscale setup produces `http://fd7a:115c::5:8799/` which is a malformed URI. `WebURLComposer.baseURL(host:port:)` and `WebURLComposer.url(session:host:port:)` share the same bracket logic.
 
@@ -710,6 +710,8 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 **WEB-1.10** The Settings pane status row ("Listening on …") shall render each listening address with its port individually (via `WebURLComposer.authority(host:port:)`), bracketing IPv6 hosts. The prior format `addrs.joined(", "):port` rendered `Listening on fd7a:115c::5, 127.0.0.1:49161` — ambiguous whether the port attaches to the IPv6 or only the trailing IPv4, and the IPv6 itself unbracketed. New format: `Listening on [fd7a:115c::5]:49161, 127.0.0.1:49161`.
 
 **WEB-1.11** When the server fails to bind because the configured port is already in use (EADDRINUSE), the application shall surface the status as `.portUnavailable` — rendered as "Port in use" in the Settings pane — rather than the raw NIO error string (`"bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)"`). Recognition is locale-stable: classify by the bridged `NSPOSIXErrorDomain` + `EADDRINUSE` errno code, with the NIO string-match kept as a secondary path. Both `WebServer.start` and `WebServerController` use a single shared `WebServer.isAddressInUse(_:)` classifier so they cannot drift on recognising the same error.
+
+**WEB-1.12** While the server is listening, the Settings pane shall render the Base URL as a clickable `Link` (opening the URL in the default browser) alongside a copy button that writes the URL to `NSPasteboard.general`. Plain selectable text is not sufficient: users were expected to triple-click, copy, then switch apps and paste — four steps for what is a single ask ("give me the URL on another machine"). The copy button is labelled `doc.on.doc` with an accessible "Copy URL" label.
 
 ### 15.2 Authorization
 

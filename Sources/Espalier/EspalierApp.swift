@@ -440,6 +440,23 @@ struct EspalierApp: App {
                 return sessions
             }
         }
+
+        // WEB-4.3: close the NIO listen sockets + SIGTERM any in-flight
+        // `zmx attach` children as part of normal shutdown. Process exit
+        // would eventually do both, but we can't rely on that: WEB-4.6's
+        // FD_CLOEXEC sweep inside PtyProcess is a defense-in-depth safety
+        // net, not the primary teardown path. Running stop() explicitly
+        // means the 500ms SIGTERM→waitpid window in WebSession.close()
+        // gets a chance to reap cleanly before NSApplication pulls the
+        // rug out.
+        let controller = webController
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { controller.stop() }
+        }
     }
 
     private func reconcileOnLaunch() {

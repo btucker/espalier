@@ -1,22 +1,14 @@
 import SwiftUI
 
-/// Preferences pane for Espalier. Exposed via the SwiftUI `Settings` scene,
-/// so the system adds a "Settings…" menu item under "About Espalier" and
-/// binds the standard ⌘, shortcut automatically.
+/// Preferences pane for Espalier — the "General" tab inside the SwiftUI
+/// `Settings` scene. The `TabView` + `.tabItem` shell lives in `EspalierApp`
+/// so this view renders its form directly; wrapping another `TabView` here
+/// would nest a second "General" tab strip under the first.
 struct SettingsView: View {
     @AppStorage("defaultCommand") private var defaultCommand: String = ""
     @AppStorage("defaultCommandFirstPaneOnly") private var firstPaneOnly: Bool = true
 
     var body: some View {
-        TabView {
-            generalTab
-                .tabItem { Label("General", systemImage: "gear") }
-        }
-        .frame(width: 440)
-        .padding(20)
-    }
-
-    private var generalTab: some View {
         Form {
             TextField("Default command:", text: $defaultCommand, prompt: Text("e.g., claude"))
                 .textFieldStyle(.roundedBorder)
@@ -27,5 +19,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        .formStyle(.grouped)
+        .frame(minWidth: 420, minHeight: 240)
     }
 }

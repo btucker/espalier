@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import EspalierKit
 
 struct WebSettingsPane: View {
@@ -9,13 +10,13 @@ struct WebSettingsPane: View {
         Form {
             Section {
                 Toggle("Enable web access", isOn: $settings.isEnabled)
-                TextField("Port", value: $settings.port, format: .number)
+                // `.grouping(.never)` so port 12345 doesn't render as "12,345"
+                // in locales with a comma grouping separator (WEB-1.7).
+                TextField("Port", value: $settings.port, format: WebPortFormat.noGrouping)
                     .frame(width: 80)
                 statusRow
                 if case .listening = controller.status, let url = controller.currentURL {
-                    Text("Base URL: \(url)")
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
+                    baseURLRow(url: url)
                 }
             } header: {
                 Text("Web Access")
@@ -27,6 +28,36 @@ struct WebSettingsPane: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 240)
+    }
+
+    /// "Base URL: <link>  [copy]" — a clickable `Link` that opens in the
+    /// default browser plus an NSPasteboard copy button. Falls back to
+    /// plain selectable text if the string somehow isn't a parseable URL
+    /// (shouldn't happen: WebURLComposer always emits a well-formed URL).
+    /// WEB-1.12.
+    @ViewBuilder private func baseURLRow(url: String) -> some View {
+        HStack(spacing: 8) {
+            Text("Base URL:")
+            if let parsed = URL(string: url) {
+                Link(url, destination: parsed)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+            } else {
+                Text(url)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            Button {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(url, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy URL")
+            .accessibilityLabel("Copy URL")
+        }
     }
 
     @ViewBuilder private var statusRow: some View {
