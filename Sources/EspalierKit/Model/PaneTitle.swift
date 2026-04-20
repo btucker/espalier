@@ -50,9 +50,10 @@ public enum PaneTitle {
     /// via `.lineLimit(1)`, but the stored string still sits in
     /// `TerminalManager.titles` for the pane's lifetime — a misbehaving
     /// program that pushes a 100 KB title via OSC 2 otherwise bloats the
-    /// app's heap with no upper bound. 200 matches `Attention.textMaxLength`
-    /// so the two surface caps stay in lockstep.
-    public static let maxStoredLength = 200
+    /// app's heap with no upper bound. Proxies to
+    /// `Attention.textMaxLength` so the two surface caps stay locked
+    /// together (same pattern as `NotifyInputValidation.textMaxLength`).
+    public static var maxStoredLength: Int { Attention.textMaxLength }
 
     /// Gate for an incoming OSC 2 / SET_TITLE payload. Returns the
     /// original string when it's safe to store, or nil when the caller

@@ -49,10 +49,15 @@ struct AttentionTextValidationTests {
     }
 
     @Test func textMaxLengthShareOneSourceOfTruth() {
-        // Tripwire: the CLI's NotifyInputValidation.textMaxLength must
-        // read through to Attention.textMaxLength so server-side and
-        // CLI-side can never drift.
+        // Tripwire: both surface caps that govern user-supplied text
+        // size (CLI notify on one side, OSC 2 pane title on the other)
+        // must read through to Attention.textMaxLength so a single
+        // edit in Attention.swift keeps all three in lockstep. Drift
+        // between them would either over-reject (rejecting valid-on-CLI
+        // text that the server would accept) or under-reject (accepting
+        // a title the sidebar can't render cleanly).
         #expect(NotifyInputValidation.textMaxLength == Attention.textMaxLength)
+        #expect(PaneTitle.maxStoredLength == Attention.textMaxLength)
     }
 
     // ATTN-1.12 server-side backstop: a raw socket client that bypasses
