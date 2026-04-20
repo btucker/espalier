@@ -28,6 +28,10 @@ public struct Attention: Codable, Sendable, Equatable {
     public static func isValidText(_ text: String) -> Bool {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         if text.count > textMaxLength { return false }
+        // Match the CLI's ATTN-1.12 guard so a raw socket client (`nc -U`,
+        // web surface, custom script) can't bypass the validation and
+        // send multi-line text that the sidebar silently clips.
+        if text.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return false }
         return true
     }
 

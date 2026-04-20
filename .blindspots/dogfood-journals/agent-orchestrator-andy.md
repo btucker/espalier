@@ -2080,3 +2080,35 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Move `WorktreeStatsStore` to EspalierKit (requires `PollingTicker` split) so DIVERGE-4.5's race can get a dedicated unit test.
 - Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95 TODO, still untouched).
+
+## Cycle 107 — 2026-04-20 (multi-line notify silently clips to first line — ATTN-1.12)
+
+### Explored
+- Considered desktop-notification-on-CLI-notify (addresses Andy's "misses attention when focused" persona pain) — but it's a feature/behavior change with spam-risk, better as a deliberate PR than a cycle.
+- Looked at `Text(attentionText)` rendering in `WorktreeRow.swift`: `.lineLimit(1)` + `.truncationMode(.tail)`.
+
+### Diagnosed
+- `NotifyInputValidation.validate` and `Attention.isValidText` both accept text with embedded `\n` / `\r` / CRLF. When such text lands in the sidebar capsule, SwiftUI's `.lineLimit(1)` clips to the first line silently. User sent `"build failed\nerr1\nerr2"`; UI shows only `"build failed"`. Data loss without any error.
+
+### Fixed
+- Added `.multilineText` case to `NotifyInputValidation`. `validate`'s `(text, false)` branch now returns it after the emptiness + length checks when `text.unicodeScalars.contains(\n || \r)`.
+- Server-side backstop: `Attention.isValidText` applies the same rejection for raw-socket clients (nc -U, web surface) bypassing the CLI.
+- CLI error message: "Notification text must be a single line (no embedded newlines)".
+
+### Spec
+- Added **ATTN-1.12** covering the CLI validation and the server-side backstop.
+
+### Tests
+- Five CLI-side tests: LF / CR / CRLF / trailing newline all rejected; plain singleline still valid.
+- One server-side backstop test mirroring the rejection cases.
+- 511/511 pass (one transient flake on first run, clean on retry).
+
+### Live verification
+- `printf 'line1\nline2' | xargs -0 ... espalier-cli notify` → "Error: Notification text must be a single line". Confirmed the literal `\n` string (2 chars) still passes through, so scripts that deliberately want a backslash-n in the badge aren't broken.
+
+### Commit
+- `fix(cli): reject multi-line notify text (ATTN-1.12)`
+
+### Try next cycle
+- Desktop-notification-on-CLI-notify — it's a real Andy pain but wants thought on UX (opt-in? throttle?). Probably not a 10-minute cycle.
+- Move WorktreeStatsStore to EspalierKit so DIVERGE-4.5's race gets direct unit coverage.

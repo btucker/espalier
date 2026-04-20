@@ -18,6 +18,7 @@ public enum NotifyInputValidation: Equatable {
     case clearAfterTooLarge(max: Int)
     case clearAfterWithClearFlag
     case textTooLong(max: Int)
+    case multilineText
 
     /// Upper bound for notify text. Proxies to `Attention.textMaxLength`
     /// so the CLI's ATTN-1.10 check and the server's STATE-2.10 backstop
@@ -52,6 +53,14 @@ public enum NotifyInputValidation: Equatable {
             }
             if text!.count > textMaxLength {
                 return .textTooLong(max: textMaxLength)
+            }
+            // ATTN-1.12: the sidebar capsule renders `Text` with
+            // `.lineLimit(1)`, so any `\n` / `\r` inside the text clips
+            // the render to just the first line — the user sends
+            // content the UI silently drops. Reject at the CLI so the
+            // user sees a clear error instead of a truncated badge.
+            if text!.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) {
+                return .multilineText
             }
             // Negative / zero clearAfter is handled server-side per
             // STATE-2.8 (treated as no auto-clear). Only the upper
@@ -88,6 +97,8 @@ public enum NotifyInputValidation: Equatable {
             return "Cannot use --clear-after with --clear; --clear-after applies only to notify messages"
         case .textTooLong(let max):
             return "Notification text exceeds the \(max)-character limit"
+        case .multilineText:
+            return "Notification text must be a single line (no embedded newlines)"
         }
     }
 }

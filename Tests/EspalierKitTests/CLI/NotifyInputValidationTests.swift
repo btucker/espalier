@@ -167,4 +167,43 @@ struct NotifyInputValidationTests {
         // returns emptyText.
         #expect(NotifyInputValidation.validate(text: "", clear: false) == .emptyText)
     }
+
+    // ATTN-1.12: the sidebar capsule renders `Text(attentionText)` with
+    // `.lineLimit(1)` + `.truncationMode(.tail)`. For a multiline input
+    // like `"line1\nline2"`, SwiftUI clips to the first line so the user
+    // sent content the UI silently drops. Reject embedded LF / CR / CRLF
+    // at the CLI so the user gets clear feedback rather than a clipped
+    // badge.
+
+    @Test func textWithEmbeddedLineFeedIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\nline2", clear: false)
+        #expect(r == .multilineText)
+        #expect(r.message?.contains("single line") == true)
+    }
+
+    @Test func textWithEmbeddedCarriageReturnIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\rline2", clear: false)
+        #expect(r == .multilineText)
+    }
+
+    @Test func textWithCRLFIsInvalid() {
+        let r = NotifyInputValidation.validate(text: "line1\r\nline2", clear: false)
+        #expect(r == .multilineText)
+    }
+
+    @Test func plainSinglelineTextStillValid() {
+        // Regression guard: the multiline check must not reject ordinary
+        // single-line text.
+        #expect(NotifyInputValidation.validate(text: "Build failed", clear: false) == .valid)
+        #expect(NotifyInputValidation.validate(text: "✓ 42 tests", clear: false) == .valid)
+    }
+
+    @Test func trailingNewlineIsStillInvalid() {
+        // A trailing `\n` (e.g. from `echo | xargs espalier notify`) counts
+        // as multiline because the render clips before showing nothing
+        // substantive past the newline. Arguably we could strip-then-accept,
+        // but erroring here tells the user what went wrong.
+        let r = NotifyInputValidation.validate(text: "Build failed\n", clear: false)
+        #expect(r == .multilineText)
+    }
 }

@@ -299,6 +299,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-1.11** Each row of `espalier pane list` output shall be formatted as `<marker> <id><padding> <title?>` where `marker` is `*` for the focused pane or a space otherwise, `id` is right-padded to at least width 3 for typical layouts (so ids 1–99 align their titles at the same column), and exactly one space separates the id from the title regardless of id width — so ids ≥ 100 don't collide visually with their title. Panes with no title render without trailing whitespace.
 
+**ATTN-1.12** If `espalier notify` is invoked with text containing an embedded line feed (`\n`), carriage return (`\r`), or CRLF, then the CLI shall exit non-zero with a usage error. The sidebar capsule renders `Text(attentionText)` with `.lineLimit(1)` + `.truncationMode(.tail)`; multi-line input silently clips to just the first line, which is data loss from the user's perspective. The server-side `Attention.isValidText` applies the same rejection (silently drops) as a backstop for raw socket clients bypassing the CLI.
+
 ### 5.2 Communication Protocol
 
 **ATTN-2.1** The application shall listen on a Unix domain socket at `~/Library/Application Support/Espalier/espalier.sock`.

@@ -54,6 +54,15 @@ struct AttentionTextValidationTests {
         // CLI-side can never drift.
         #expect(NotifyInputValidation.textMaxLength == Attention.textMaxLength)
     }
+
+    // ATTN-1.12 server-side backstop: a raw socket client that bypasses
+    // the CLI can't ship multi-line text through either.
+    @Test func multilineTextIsInvalid() {
+        #expect(!Attention.isValidText("line1\nline2"))
+        #expect(!Attention.isValidText("line1\rline2"))
+        #expect(!Attention.isValidText("line1\r\nline2"))
+        #expect(!Attention.isValidText("Build failed\n"))
+    }
 }
 
 // Mirrors `NotifyInputValidationTests` clear-after cap behaviors —
