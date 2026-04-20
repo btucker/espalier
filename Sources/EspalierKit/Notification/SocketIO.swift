@@ -40,4 +40,22 @@ public enum SocketIO {
             try writeAll(fd: fd, bytes: base, count: buf.count)
         }
     }
+
+    /// Read from `fd` until EOF or accumulated bytes reach `cap`.
+    /// Never returns more than `cap` bytes. `SO_RCVTIMEO` bounds time
+    /// per chunk; `cap` bounds total bytes. `ATTN-3.6`: mirrors the
+    /// server-side `ATTN-2.11` cap so a misbehaving or compromised
+    /// peer can't OOM the reader by flooding faster than the idle
+    /// timeout fires.
+    public static func readAll(fd: Int32, cap: Int) -> Data {
+        var buffer = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while buffer.count < cap {
+            let toRead = min(chunk.count, cap - buffer.count)
+            let n = Darwin.read(fd, &chunk, toRead)
+            if n <= 0 { break }
+            buffer.append(contentsOf: chunk[0..<n])
+        }
+        return buffer
+    }
 }

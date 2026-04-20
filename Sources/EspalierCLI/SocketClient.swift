@@ -22,13 +22,11 @@ enum SocketClient {
         // server would block indefinitely waiting for more bytes.
         _ = Darwin.shutdown(fd, Int32(SHUT_WR))
 
-        var buffer = Data()
-        var chunk = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let n = Darwin.read(fd, &chunk, 4096)
-            if n <= 0 { break }
-            buffer.append(contentsOf: chunk[0..<n])
-        }
+        // `ATTN-3.6`: cap the read at 1 MB so a misbehaving or
+        // compromised server can't OOM the CLI by flooding faster
+        // than `SO_RCVTIMEO` fires. Matches the server-side cap in
+        // `SocketServer.maxPerClientBytes`.
+        let buffer = SocketIO.readAll(fd: fd, cap: 1 * 1024 * 1024)
         switch SocketResponseDecoder.decode(buffer) {
         case .success(let msg):
             return msg
