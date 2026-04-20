@@ -465,47 +465,25 @@ struct EspalierApp: App {
                           repoPath, String(describing: error))
                     continue
                 }
-                let discoveredPaths = Set(discovered.map(\.path))
 
-                let existingPaths = Set(binding.wrappedValue.repos[repoIdx].worktrees.map(\.path))
-                for d in discovered where !existingPaths.contains(d.path) {
-                    binding.wrappedValue.repos[repoIdx].worktrees.append(
-                        WorktreeEntry(path: d.path, branch: d.branch)
-                    )
+                let result = WorktreeReconciler.reconcile(
+                    existing: binding.wrappedValue.repos[repoIdx].worktrees,
+                    discovered: discovered
+                )
+                binding.wrappedValue.repos[repoIdx].worktrees = result.merged
+
+                // GIT-3.13: clear cached stats/PR for newly-stale entries so
+                // stale-via-reconcile matches stale-via-fs-event. Otherwise
+                // the stale entry keeps its cached PR and stats until the
+                // next clear path (Dismiss, Delete) fires.
+                for wt in result.newlyStale {
+                    statsStore.clear(worktreePath: wt.path)
+                    prStatusStore.clear(worktreePath: wt.path)
                 }
 
-                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                    let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
-                    if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
-                        // Match worktreeMonitorDidDetectDeletion's cleanup
-                        // so stale-via-reconcile and stale-via-fs-event
-                        // behave the same. Otherwise the stale entry
-                        // keeps its cached PR and stats until the next
-                        // clear path (Dismiss, Delete) fires. GIT-3.13.
-                        statsStore.clear(worktreePath: wt.path)
-                        prStatusStore.clear(worktreePath: wt.path)
-                    } else if discoveredPaths.contains(wt.path) && wt.state == .stale {
-                        // Stale entry is back in git's view — resurrect
-                        // to .closed per GIT-3.7. Same rule as the
-                        // `.git/worktrees/`-tick reconcile path.
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-                    }
-                }
-
-                for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                    if let match = discovered.first(where: {
-                        $0.path == binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].path
-                    }) {
-                        binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].branch = match.branch
-                    }
-                }
-
-                // Kick initial stats refresh for this repo's non-stale
-                // worktrees, after reconciliation has populated new entries
-                // and marked externally-deleted ones stale. This preserves
-                // the pre-migration "reconcile, then refresh" ordering
-                // without blocking startup.
+                // Kick initial stats refresh for non-stale worktrees after
+                // reconciliation. Preserves the pre-migration "reconcile,
+                // then refresh" ordering without blocking startup.
                 for wt in binding.wrappedValue.repos[repoIdx].worktrees where wt.state != .stale {
                     statsStore.refresh(worktreePath: wt.path, repoPath: repoPath)
                 }
@@ -1470,32 +1448,18 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             }
             guard let repoIdx = binding.wrappedValue.repos.firstIndex(where: { $0.path == repoPath }) else { return }
 
-            let existing = binding.wrappedValue.repos[repoIdx].worktrees
-            let existingPaths = Set(existing.map(\.path))
-            let discoveredPaths = Set(discovered.map(\.path))
-            let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
+            let result = WorktreeReconciler.reconcile(
+                existing: binding.wrappedValue.repos[repoIdx].worktrees,
+                discovered: discovered
+            )
+            binding.wrappedValue.repos[repoIdx].worktrees = result.merged
 
-            for d in newlyAdded {
-                let entry = WorktreeEntry(path: d.path, branch: d.branch)
-                binding.wrappedValue.repos[repoIdx].worktrees.append(entry)
-            }
-            for wtIdx in binding.wrappedValue.repos[repoIdx].worktrees.indices {
-                let wt = binding.wrappedValue.repos[repoIdx].worktrees[wtIdx]
-                if !discoveredPaths.contains(wt.path) && wt.state != .stale {
-                    binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .stale
-                    // Match worktreeMonitorDidDetectDeletion's cleanup so
-                    // the .stale state is symmetric regardless of which
-                    // FSEvents channel discovered it. GIT-3.13.
-                    store.clear(worktreePath: wt.path)
-                    prStore.clear(worktreePath: wt.path)
-                } else if discoveredPaths.contains(wt.path) && wt.state == .stale {
-                    // Worktree was marked stale but is now back in git's
-                    // view (e.g., a momentary FSEvents delete glitch, a
-                    // `git worktree repair`, or a force-remove+re-add).
-                    // Resurrect to `.closed`; user can click to start
-                    // terminals again per TERM-1.1 / TERM-1.2.
-                    binding.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-                }
+            // GIT-3.13: newly-stale entries clear cached stats/PR symmetrically
+            // with worktreeMonitorDidDetectDeletion, so the .stale state is
+            // consistent regardless of which FSEvents channel discovered it.
+            for wt in result.newlyStale {
+                store.clear(worktreePath: wt.path)
+                prStore.clear(worktreePath: wt.path)
             }
 
             // watchWorktreePath / watchHeadRef are idempotent, so registering
@@ -1510,10 +1474,8 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             // Existing worktrees' stats are driven by their own HEAD
             // callbacks and the polling loop, so a `.git/worktrees/`
             // directory tick only needs to seed stats for new entries.
-            // Newly-stale entries' caches are cleared inline in the
-            // transition loop above (GIT-3.13), not here.
-            for d in newlyAdded {
-                store.refresh(worktreePath: d.path, repoPath: repoPath)
+            for wt in result.newlyAdded {
+                store.refresh(worktreePath: wt.path, repoPath: repoPath)
             }
         }
     }
