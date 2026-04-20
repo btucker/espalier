@@ -132,6 +132,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func worktreeBlock(_ worktree: WorktreeEntry, repo: RepoEntry) -> some View {
         let isActive = appState.selectedWorktreePath == worktree.path
+        let attention = SidebarAttentionLayout.layout(for: worktree)
         VStack(spacing: 0) {
             Button {
                 onSelect(worktree.path)
@@ -149,7 +150,8 @@ struct SidebarView: View {
                     ),
                     prBadge: prStatusStore.infos[worktree.path].map {
                         PRBadge(number: $0.number, state: $0.state, url: $0.url)
-                    }
+                    },
+                    attentionText: attention.worktreeCapsule
                 )
             }
             .buttonStyle(.plain)
@@ -168,8 +170,7 @@ struct SidebarView: View {
                             isFocusedPane: isActive
                                 && worktree.focusedTerminalID == terminalID,
                             theme: theme,
-                            attentionText: worktree.paneAttention[terminalID]?.text
-                                ?? worktree.attention?.text
+                            attentionText: attention.paneCapsules[terminalID]
                         )
                     }
                     .buttonStyle(.plain)
@@ -189,15 +190,12 @@ struct SidebarView: View {
         )
     }
 
-    /// The sidebar label for a worktree, special-cased so the main checkout
-    /// shows just its branch name (no disambiguation noise — the sidebar
-    /// icon differentiates it from linked worktrees), while linked
-    /// worktrees show their collision-aware directory name.
     private func label(for worktree: WorktreeEntry, in repo: RepoEntry) -> String {
-        if worktree.path == repo.path {
-            return worktree.branch
-        }
-        return worktree.displayName(amongSiblingPaths: repo.worktrees.map(\.path))
+        SidebarWorktreeLabel.text(
+            for: worktree,
+            inRepoAtPath: repo.path,
+            siblingPaths: repo.worktrees.map(\.path)
+        )
     }
 
     @ViewBuilder

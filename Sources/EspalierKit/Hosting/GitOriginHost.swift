@@ -32,8 +32,10 @@ public enum GitOriginHost {
         guard let slash = path.firstIndex(of: "/") else { return nil }
         let owner = String(path[..<slash])
         var repo = String(path[path.index(after: slash)...])
-        if repo.hasSuffix(".git") { repo = String(repo.dropLast(".git".count)) }
+        // `PR-5.6`: trailing `/` before `.git` so `repo.git/` →
+        // `repo` rather than `repo.git`.
         while repo.hasSuffix("/") { repo = String(repo.dropLast()) }
+        if repo.hasSuffix(".git") { repo = String(repo.dropLast(".git".count)) }
 
         guard !owner.isEmpty, !repo.isEmpty, !host.isEmpty else { return nil }
 

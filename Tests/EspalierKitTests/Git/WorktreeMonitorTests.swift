@@ -198,6 +198,78 @@ struct WorktreeMonitorTests {
         }
         #expect(condition(), "waitUntil timed out")
     }
+
+    /// `watchWorktreePath` opens a DispatchSource on the worktree's
+    /// inode fd. When the user `rm -rf`'s the worktree, the event
+    /// fires and the app transitions the entry to `.stale`. But the
+    /// source stays in the monitor's dict watching the reaped inode.
+    /// A subsequent `git worktree add` at the same path would
+    /// otherwise re-enter the reconciler's idempotent re-register
+    /// path (key exists → bail) and leave the new inode uncovered.
+    /// `GIT-3.15` gives the app a way out: `stopWatchingWorktree`
+    /// drops the three worktree-scoped entries for a single path so
+    /// the next `watch*` cleanly re-arms against the new inode.
+    @Test func stopWatchingWorktreeDropsPathAndHeadAndContentWatchers() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("espalier-rearm-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Seed `.git/logs/HEAD` so `watchHeadRef` has a real file to
+        // arm on — otherwise `createFileWatcher`'s `open()` fails and
+        // no fd is counted.
+        let gitDir = tmp.appendingPathComponent(".git/logs")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        try "".write(
+            to: gitDir.appendingPathComponent("HEAD"),
+            atomically: true, encoding: .utf8
+        )
+
+        let monitor = WorktreeMonitor()
+        monitor.watchWorktreePath(tmp.path)
+        monitor.watchHeadRef(worktreePath: tmp.path, repoPath: tmp.path)
+        monitor.watchWorktreeContents(worktreePath: tmp.path)
+        // path + head = 2 fds. Content is an FSEventStream, not an fd.
+        #expect(monitor.liveFdCountForTesting == 2)
+
+        monitor.stopWatchingWorktree(tmp.path)
+
+        for _ in 0..<50 {
+            if monitor.liveFdCountForTesting == 0 { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(
+            monitor.liveFdCountForTesting == 0,
+            "stopWatchingWorktree must drop path + head fds; got \(monitor.liveFdCountForTesting)"
+        )
+
+        // Re-register should now reopen a fresh fd per watcher.
+        monitor.watchWorktreePath(tmp.path)
+        monitor.watchHeadRef(worktreePath: tmp.path, repoPath: tmp.path)
+        #expect(
+            monitor.liveFdCountForTesting == 2,
+            "re-register after stopWatchingWorktree should reopen fresh fds; got \(monitor.liveFdCountForTesting)"
+        )
+        monitor.stopAll()
+    }
+}
+
+private final class DeletionRecorder: WorktreeMonitorDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _didFire = false
+
+    var didFire: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didFire
+    }
+
+    func worktreeMonitorDidDetectChange(_ monitor: WorktreeMonitor, repoPath: String) {}
+    func worktreeMonitorDidDetectDeletion(_ monitor: WorktreeMonitor, worktreePath: String) {
+        lock.lock(); defer { lock.unlock() }
+        _didFire = true
+    }
+    func worktreeMonitorDidDetectBranchChange(_ monitor: WorktreeMonitor, worktreePath: String) {}
+    func worktreeMonitorDidDetectOriginRefChange(_ monitor: WorktreeMonitor, repoPath: String) {}
 }
 
 private final class BranchChangeRecorder: WorktreeMonitorDelegate, @unchecked Sendable {

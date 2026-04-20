@@ -107,7 +107,14 @@ final class WebServerController: ObservableObject {
         } catch TailscaleLocalAPI.Error.socketUnreachable {
             status = .disabledNoTailscale
         } catch {
-            status = .error("\(error)")
+            // `WEB-1.11`: classify via the shared helper so the
+            // Settings pane renders "Port in use" instead of the raw
+            // NIO bind error.
+            if WebServer.isAddressInUse(error) {
+                status = .portUnavailable
+            } else {
+                status = .error("\(error)")
+            }
         }
     }
 

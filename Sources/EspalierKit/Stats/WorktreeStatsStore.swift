@@ -294,9 +294,14 @@ public final class WorktreeStatsStore {
             if stats[worktreePath] != s {
                 stats[worktreePath] = s
             }
-        } else if stats[worktreePath] != nil {
-            stats.removeValue(forKey: worktreePath)
+        } else if result.defaultBranch == nil {
+            // No default branch → no divergence to compute against.
+            if stats[worktreePath] != nil {
+                stats.removeValue(forKey: worktreePath)
+            }
         }
+        // `DIVERGE-4.9`: nil stats with a resolved defaultBranch
+        // means compute threw — preserve the last-known ↑N ↓M.
     }
 
     nonisolated static func repoFetchCadence(failureStreak: Int) -> Duration {

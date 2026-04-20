@@ -11,7 +11,7 @@ public final class PRStatusStore {
 
     @ObservationIgnored private let executor: CLIExecutor
     @ObservationIgnored private let fetcherFor: (HostingProvider) -> PRFetcher?
-    @ObservationIgnored private let detectHost: @Sendable (String) async -> HostingOrigin?
+    @ObservationIgnored private let detectHost: @Sendable (String) async throws -> HostingOrigin?
     @ObservationIgnored private var hostByRepo: [String: HostingOrigin?] = [:]
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var lastFetch: [String: Date] = [:]
@@ -36,7 +36,7 @@ public final class PRStatusStore {
     public init(
         executor: CLIExecutor = CLIRunner(),
         fetcherFor: ((HostingProvider) -> PRFetcher?)? = nil,
-        detectHost: (@Sendable (String) async -> HostingOrigin?)? = nil
+        detectHost: (@Sendable (String) async throws -> HostingOrigin?)? = nil
     ) {
         self.executor = executor
         if let fetcherFor {
@@ -55,7 +55,7 @@ public final class PRStatusStore {
             self.detectHost = detectHost
         } else {
             self.detectHost = { repoPath in
-                (try? await GitOriginHost.detect(repoPath: repoPath)) ?? nil
+                try await GitOriginHost.detect(repoPath: repoPath)
             }
         }
     }
@@ -72,11 +72,15 @@ public final class PRStatusStore {
         guard !inFlight.contains(worktreePath) else { return }
         inFlight.insert(worktreePath)
 
+        // Snapshot synchronously — a `clear()` between here and Task
+        // start must invalidate this fetch. `PR-7.9`.
+        let fetchGeneration = generation[worktreePath, default: 0]
         Task { [weak self] in
             await self?.performFetch(
                 worktreePath: worktreePath,
                 repoPath: repoPath,
-                branch: branch
+                branch: branch,
+                fetchGeneration: fetchGeneration
             )
         }
     }
@@ -132,21 +136,33 @@ public final class PRStatusStore {
 
     // MARK: - Fetch
 
-    private func performFetch(worktreePath: String, repoPath: String, branch: String) async {
+    private func performFetch(
+        worktreePath: String,
+        repoPath: String,
+        branch: String,
+        fetchGeneration: Int
+    ) async {
         defer { inFlight.remove(worktreePath) }
 
-        // Snapshot the generation we started under. `clear()` bumps it;
-        // if it differs after any `await`, this fetch's result is stale
-        // — Andy already expressed "forget this worktree" — and we bail
-        // before writing back to `infos`/`absent`.
-        let fetchGeneration = generation[worktreePath, default: 0]
-
+        // Caller snapshotted `fetchGeneration`; we re-read `generation`
+        // after each await and bail on mismatch so a `clear()` during
+        // the fetch drops the stale write.
         let origin: HostingOrigin?
         if let cached = hostByRepo[repoPath] {
             origin = cached
         } else {
-            origin = await detectHost(repoPath)
-            hostByRepo[repoPath] = origin
+            // Only cache on success. A thrown CLIError (git missing
+            // from PATH, spawn failure) would otherwise poison the
+            // cache for the session. `PR-7.11`. Log at debug level —
+            // polls can fire many times while the env is misconfigured.
+            do {
+                let detected = try await detectHost(repoPath)
+                origin = detected
+                hostByRepo[repoPath] = detected
+            } catch {
+                logger.debug("host detect failed for \(repoPath): \(String(describing: error))")
+                origin = nil
+            }
         }
         if generation[worktreePath, default: 0] != fetchGeneration { return }
         guard let origin, origin.provider != .unsupported,
@@ -191,9 +207,9 @@ public final class PRStatusStore {
             logger.info("PR fetch failed for \(worktreePath): \(String(describing: error))")
             failureStreak[worktreePath, default: 0] += 1
             lastFetch[worktreePath] = Date()
-            if infos[worktreePath] != nil {
-                infos.removeValue(forKey: worktreePath)
-            }
+            // `PR-7.10`: leave `infos[worktreePath]` untouched. A
+            // transient failure isn't evidence the PR stopped
+            // existing; the next successful fetch reconciles.
         }
     }
 
@@ -312,11 +328,13 @@ extension PRStatusStore {
                     inflight -= 1
                 }
                 inFlight.insert(c.path)
+                let gen = generation[c.path, default: 0]
                 group.addTask { [weak self] in
                     await self?.performFetch(
                         worktreePath: c.path,
                         repoPath: c.repoPath,
-                        branch: c.branch
+                        branch: c.branch,
+                        fetchGeneration: gen
                     )
                 }
                 inflight += 1

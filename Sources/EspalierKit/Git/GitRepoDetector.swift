@@ -29,7 +29,7 @@ public enum GitRepoDetector {
                     let contents = try String(contentsOf: gitPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard contents.hasPrefix("gitdir: ") else { return .notARepo }
                     let gitDir = String(contents.dropFirst("gitdir: ".count))
-                    let repoPath = resolveRepoRoot(fromGitDir: gitDir)
+                    let repoPath = resolveRepoRoot(fromGitDir: gitDir, worktreePath: current.path)
                     return .worktree(worktreePath: current.path, repoPath: repoPath)
                 }
             }
@@ -40,10 +40,12 @@ public enum GitRepoDetector {
         }
     }
 
-    private static func resolveRepoRoot(fromGitDir gitDir: String) -> String {
-        // Same private-root issue as `detect`: use realpath so the
-        // repoPath we return matches what `state.json` holds.
-        var url = URL(fileURLWithPath: CanonicalPath.canonicalize(gitDir))
+    private static func resolveRepoRoot(fromGitDir gitDir: String, worktreePath: String) -> String {
+        // `GitdirResolver` handles the relative-vs-absolute split
+        // (`GIT-1.4`) and `CanonicalPath` normalisation.
+        var url = URL(fileURLWithPath: GitdirResolver.resolve(
+            rawGitdir: gitDir, worktreePath: worktreePath
+        ))
         while url.lastPathComponent != ".git" && url.path != "/" {
             url = url.deletingLastPathComponent()
         }

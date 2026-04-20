@@ -172,8 +172,7 @@ public final class WebServer {
         } catch {
             try? group.syncShutdownGracefully()
             self.group = nil
-            let ns = (error as NSError)
-            if ns.domain.contains("posix") || "\(error)".contains("EADDRINUSE") {
+            if Self.isAddressInUse(error) {
                 status = .portUnavailable
             } else {
                 status = .error("\(error)")
@@ -195,6 +194,16 @@ public final class WebServer {
         try? group?.syncShutdownGracefully()
         group = nil
         status = .stopped
+    }
+
+    /// Recognise an "address already in use" bind failure across the
+    /// shapes NIO surfaces it as. Bridged NSError POSIX errno is the
+    /// locale-stable check; the string match is a fallback.
+    public static func isAddressInUse(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain && ns.code == Int(EADDRINUSE) { return true }
+        let s = "\(error)"
+        return s.contains("EADDRINUSE") || s.contains("Address already in use")
     }
 
     // MARK: - WS upgrader factory

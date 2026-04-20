@@ -2,6 +2,27 @@ import SwiftUI
 import AppKit
 import EspalierKit
 
+/// Red pill used by both `WorktreeRow` (worktree-scoped CLI notify) and
+/// `PaneTitleRow` (pane-scoped shell-integration pings). Centralized so
+/// a restyle — font, padding, color — lands in one place and the two
+/// scopes can't drift visually.
+struct AttentionCapsule: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Color.red)
+            .foregroundColor(.white)
+            .clipShape(Capsule())
+    }
+}
+
 /// Child row under a running worktree showing a single pane's title
 /// (from libghostty's `SET_TITLE` action). Indented to communicate the
 /// hierarchy; the `↳` glyph is there for at-a-glance parsing when the
@@ -20,10 +41,11 @@ struct PaneTitleRow: View {
     let isFocusedPane: Bool
     let theme: GhosttyTheme
     /// When non-nil, the pane title text is replaced by this string
-    /// rendered inside a red capsule — an attention ping from the CLI
-    /// `espalier notify` path. Cleared automatically when the worktree
-    /// (or any pane in it) gains focus, returning the row to showing
-    /// the shell-provided title.
+    /// rendered inside a red capsule — a pane-scoped attention ping
+    /// driven by shell-integration events (`NOTIF-2.x`). Cleared when
+    /// the user clicks the worktree (STATE-2.4). Worktree-scoped
+    /// `espalier notify` text renders on the enclosing worktree row
+    /// instead; see STATE-2.3.
     let attentionText: String?
 
     var body: some View {
@@ -33,16 +55,7 @@ struct PaneTitleRow: View {
                 .fontWeight(isFocusedPane ? .bold : .regular)
                 .foregroundColor(theme.foreground.opacity(arrowOpacity))
             if let attentionText {
-                Text(attentionText)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Color.red)
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
+                AttentionCapsule(text: attentionText)
             } else {
                 Text(title.isEmpty ? "shell" : title)
                     .font(.caption)
@@ -114,6 +127,11 @@ struct WorktreeRow: View {
     /// deliberately narrower than `PRInfo` so unrelated changes (CI
     /// checks, title, fetchedAt) don't invalidate the row on each poll.
     let prBadge: PRBadge?
+    /// Worktree-scoped attention text (STATE-2.3). Driven by the CLI's
+    /// `espalier notify` path. Rendered as a red capsule next to the
+    /// branch label, visible regardless of the worktree's running state
+    /// so a ping set on a closed worktree stays reachable.
+    let attentionText: String?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -122,6 +140,9 @@ struct WorktreeRow: View {
                 prBadgeLabel(prBadge)
             }
             branchLabel
+            if let attentionText {
+                AttentionCapsule(text: attentionText)
+            }
             Spacer()
             WorktreeRowGutter(
                 stats: entry.state == .stale ? nil : stats,
