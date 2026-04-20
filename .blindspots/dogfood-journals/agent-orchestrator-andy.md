@@ -2620,3 +2620,35 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - Consider: the same compute-injection pattern for `PRStatusStore`? PRStatusStore's `fetcherFor` is already injectable via init but the actual `fetch` invocation still flows through it. Cycle 96-era already handles most cases.
 - Other injection seams to audit for global-state coupling.
+
+## Cycle 150 — 2026-04-20 (PR cache wiped on transient fetch failure — PR-7.7)
+
+### Rebase
+- Origin/main had advanced to e99b870 (PR #41 squash-merged). Local branch had all 63 originals + 2 new (fb8014a simplify, d5a94dd PR-7.6). Rebase would have conflicted 62× on journal history. Reset to origin/main + cherry-picked d5a94dd → clean 5a0c2b5 on top of merged main.
+
+### Explored
+- Verified follow-up from cycle 149: `WorktreeStatsStore.refresh` already snapshots `fetchGeneration` synchronously (line 138), so no PR-7.6-equivalent bug there.
+- Traced PRStatusStore.performFetch's catch block. Found `infos.removeValue(forKey: worktreePath)` — wipes user-visible badge on every failed poll.
+
+### Broke
+- Transient gh failures (rate limit, auth expired, network blip) erase the sidebar PR badge and breadcrumb PR button. With PR-7.2's exponential backoff delaying retries up to 30 min, the badge stays gone for the whole window.
+
+### Diagnosed
+- `Sources/EspalierKit/PRStatus/PRStatusStore.swift:205-207` catch block removed `infos[wt]` unconditionally. No spec claimed this — pure implementation detail, surfacing as visible flicker.
+
+### Spec
+- Added **PR-7.7** requiring cache preservation across transient failures.
+
+### Fixed
+- Removed the `infos.removeValue(...)` in the catch. Kept log + failureStreak++ + lastFetch update.
+
+### Tests
+- `PRStatusStoreFetchFailureTests.fetchFailureKeepsLastKnownInfo` — FlipFetcher returns PR#42 first, then throws on the next call. Confirms `infos["/wt"]?.number` stays at 42.
+- Failed pre-fix (nil), passes post-fix. 611/611 overall.
+
+### Commit
+- `fix(pr): preserve cached PRInfo across transient fetch failures (PR-7.7)` (8c002fd)
+
+### Try next cycle
+- Same bug class in `WorktreeStatsStore` — does the stats apply path wipe on failure? Looking at apply(), it only writes nil if the successful compute returned nil stats; failures propagate as thrown from `fetch` which the call-site handles in `performRepoFetch` (just increments failureStreak, doesn't clear stats). Looks safe, but worth a closer look.
+- PRStatusStore.inFlight fragility: Task1's defer clears inFlight while Task2 may still be running. Not user-visible (same branch, same result), but wasteful.
