@@ -2,6 +2,27 @@ import SwiftUI
 import AppKit
 import EspalierKit
 
+/// Red pill used by both `WorktreeRow` (worktree-scoped CLI notify) and
+/// `PaneTitleRow` (pane-scoped shell-integration pings). Centralized so
+/// a restyle — font, padding, color — lands in one place and the two
+/// scopes can't drift visually.
+struct AttentionCapsule: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Color.red)
+            .foregroundColor(.white)
+            .clipShape(Capsule())
+    }
+}
+
 /// Child row under a running worktree showing a single pane's title
 /// (from libghostty's `SET_TITLE` action). Indented to communicate the
 /// hierarchy; the `↳` glyph is there for at-a-glance parsing when the
@@ -34,16 +55,7 @@ struct PaneTitleRow: View {
                 .fontWeight(isFocusedPane ? .bold : .regular)
                 .foregroundColor(theme.foreground.opacity(arrowOpacity))
             if let attentionText {
-                Text(attentionText)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Color.red)
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
+                AttentionCapsule(text: attentionText)
             } else {
                 Text(title.isEmpty ? "shell" : title)
                     .font(.caption)
@@ -129,7 +141,7 @@ struct WorktreeRow: View {
             }
             branchLabel
             if let attentionText {
-                attentionCapsule(attentionText)
+                AttentionCapsule(text: attentionText)
             }
             Spacer()
             WorktreeRowGutter(
@@ -181,20 +193,6 @@ struct WorktreeRow: View {
         .buttonStyle(.plain)
         .help("Open #\(badge.number) on \(badge.url.host ?? "")")
         .accessibilityLabel(badgeAccessibilityLabel(badge))
-    }
-
-    @ViewBuilder
-    private func attentionCapsule(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .fontWeight(.semibold)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Color.red)
-            .foregroundColor(.white)
-            .clipShape(Capsule())
     }
 
     private func badgeAccessibilityLabel(_ badge: PRBadge) -> String {
