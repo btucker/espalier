@@ -142,7 +142,7 @@ struct PRStatusStoreMergedTransitionTests {
 
         // A second refresh with the same merged PR is the normal polling
         // steady state. The callback must NOT re-fire — otherwise the
-        // offer dialog would pop up every 15 minutes forever.
+        // offer dialog would pop up every poll cycle forever.
         await store.refresh(worktreePath: "/wt", repoPath: "/repo", branch: "feat")
         _ = try await Self.waitForInfo(store: store, path: "/wt") { $0?.state == .merged }
         // Give any spurious callback time to land before asserting.
