@@ -697,6 +697,8 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 
 **WEB-1.10** The Settings pane status row ("Listening on …") shall render each listening address with its port individually (via `WebURLComposer.authority(host:port:)`), bracketing IPv6 hosts. The prior format `addrs.joined(", "):port` rendered `Listening on fd7a:115c::5, 127.0.0.1:49161` — ambiguous whether the port attaches to the IPv6 or only the trailing IPv4, and the IPv6 itself unbracketed. New format: `Listening on [fd7a:115c::5]:49161, 127.0.0.1:49161`.
 
+**WEB-1.11** When the server fails to bind because the configured port is already in use (EADDRINUSE), the application shall surface the status as `.portUnavailable` — rendered as "Port in use" in the Settings pane — rather than the raw NIO error string (`"bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)"`). Recognition is locale-stable: classify by the bridged `NSPOSIXErrorDomain` + `EADDRINUSE` errno code, with the NIO string-match kept as a secondary path. Both `WebServer.start` and `WebServerController` use a single shared `WebServer.isAddressInUse(_:)` classifier so they cannot drift on recognising the same error.
+
 ### 15.2 Authorization
 
 **WEB-2.1** The application shall resolve each incoming peer IP via Tailscale LocalAPI `whois` before serving any content at any path.

@@ -107,7 +107,17 @@ final class WebServerController: ObservableObject {
         } catch TailscaleLocalAPI.Error.socketUnreachable {
             status = .disabledNoTailscale
         } catch {
-            status = .error("\(error)")
+            // Map common bind failures to stable typed status values so
+            // the settings pane renders "Port in use" instead of the
+            // raw NIO "bind(descriptor:ptr:bytes:): Address already in
+            // use) (errno: 48)" blob. WebServer.isAddressInUse is the
+            // shared classifier so WebServer.start and this catch can't
+            // drift apart on locale-dependent NIO error strings.
+            if WebServer.isAddressInUse(error) {
+                status = .portUnavailable
+            } else {
+                status = .error("\(error)")
+            }
         }
     }
 

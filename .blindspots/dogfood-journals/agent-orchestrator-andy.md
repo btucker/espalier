@@ -2686,3 +2686,38 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - PRStatusStore.inFlight fragility (Task1's defer clears inFlight during Task2 lifetime) — wasteful but not wrong. Low priority.
 - Check if `hostByRepo` cache in PRStatusStore has a similar wipe-on-failure concern. Currently I only see cache-on-success (line 149).
+
+## Cycle 152 — 2026-04-20 (host-detect failure poisons hostByRepo cache — PR-7.8)
+
+### Explored
+- Followup from cycle 151: does `hostByRepo` in PRStatusStore have a similar wipe/cache-on-failure bug?
+- Traced `performFetch` line 155-161. `detectHost` default wrapper was `(try? await GitOriginHost.detect(...)) ?? nil` — any throw surfaces as nil.
+- Found `hostByRepo[repoPath] = origin` runs unconditionally on cache miss, so nil-from-throw and nil-from-legit-no-origin both get cached.
+
+### Broke
+- Scripted a detectHost that throws on call 1, succeeds on call 2. Post-first-refresh, hostByRepo has the nil. Second refresh hits the cache, skips detect. callLog stuck at 1.
+- Real-world trigger: git binary transiently unavailable (IDE ran without full PATH, launchd env issue), process spawn failure, or any non-`nonZeroExit` CLIError at first fetch. Repo loses PR tracking for the session — the poll tick's gate in `tick()` even SKIPS cached-nil repos, so no retry channel.
+
+### Diagnosed
+- `Sources/EspalierKit/PRStatus/PRStatusStore.swift:155-161`. `try?` swallowed throws and still cached nil. No invalidation for hostByRepo anywhere in the codebase.
+
+### Spec
+- Added **PR-7.8** pinning: only successful detects cache; thrown detects leave the cache key absent for retry.
+
+### Fixed
+- Changed `detectHost` closure signature from `async -> HostingOrigin?` to `async throws -> HostingOrigin?`.
+- Default wrapper just `try await GitOriginHost.detect(...)` (no `try?`).
+- `performFetch` wraps the call in do/catch: on catch, logs + uses origin=nil for THIS call, but does NOT write to hostByRepo.
+
+### Tests
+- `PRStatusStoreHostCacheTests`:
+  - `transientDetectFailureDoesNotPoisonCache` — throws call 1, returns origin call 2. Asserts detect called ≥2 times across two refreshes. Pre-fix fails (stuck at 1).
+  - `successfulDetectStillCaches` — happy path: detect call 1 only, second refresh for a different path on same repo reuses cache. Prevents regression.
+- 615/615 overall.
+
+### Commit
+- `fix(pr): don't cache hostByRepo on transient detect failure (PR-7.8)` (a37fcd2)
+
+### Try next cycle
+- `PRStatusStore.lastFetch` has similar semantics — a failed fetch still sets lastFetch = Date(), which drives the PR-7.2 backoff. That's deliberate and not a bug.
+- Look at GIT-*, LAYOUT-*, ZMX-* for similar "swallow and cache failure" patterns in stores I haven't audited yet.
