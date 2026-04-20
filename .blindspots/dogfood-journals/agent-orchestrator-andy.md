@@ -2176,3 +2176,28 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 - Still open: move `WorktreeStatsStore` to EspalierKit for DIVERGE-4.5 unit coverage.
 - `SocketServer.lastStartError` UI surfacing (cycle 95 follow-on).
 - Keyboard-first worktree switching (feature).
+
+## Cycle 110 — 2026-04-20 (whitespace-only pane title in CLI list — ATTN-1.11 extension)
+
+### Explored
+- Ranged through NotificationMessage decoding (unknown-type path throws, well-covered), WebServer /ws session parsing (empty `session=` spawns a failing zmx — theoretical UX wart but not a correctness bug), PaneInfo rendering.
+
+### Diagnosed
+- Cycle 109 fixed `PaneTitle.display` to fall through to PWD on whitespace-only stored titles. The SIDEBAR rendering now handles whitespace correctly. But `PaneInfo.formattedLine` (used by `espalier pane list` CLI output, extracted from cycle 103) uses the parallel pattern `title?.isEmpty == false ? title : nil` — catches `""` and `nil` but not `"   "`. A whitespace-only title rendered `"* 5     "` with trailing spaces — the capsule-equivalent of LAYOUT-2.14's blank-looking pane label.
+
+### Fixed
+- Widened the renderedTitle guard to `!title.trimmingCharacters(in: .whitespaces).isEmpty`. Matches `PaneTitle.display`'s LAYOUT-2.14 behaviour. Contentful titles with surrounding whitespace still preserved verbatim.
+
+### Spec
+- Extended **ATTN-1.11** with the whitespace-only rule cross-referencing LAYOUT-2.14.
+
+### Tests
+- Three new cases on `PaneInfo.formattedLine` suite: whitespace-only → no-title form, tab-only → same, contentful-with-surrounding-whitespace preserved.
+- Failed before the fix; pass after. 524/524 overall.
+
+### Commit
+- `fix(pane-info): treat whitespace-only title as no-title in formattedLine (ATTN-1.11)`
+
+### Try next cycle
+- Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 unit coverage still open.
+- `SocketServer.lastStartError` UI surfacing (cycle 95).

@@ -52,4 +52,27 @@ struct PaneInfoFormatTests {
         #expect(nilTitle == emptyTitle)
         #expect(nilTitle == "* 5")
     }
+
+    /// LAYOUT-2.14-adjacent: a PaneInfo constructed with a
+    /// whitespace-only title (three spaces, a tab, a newline-that-slipped-
+    /// through) rendered as `"* 5      "` — the capsule-equivalent of
+    /// LAYOUT-2.14 for the `pane list` CLI output, where the user sees a
+    /// focus marker + id + spaces and wonders whether the title is set.
+    /// Treat whitespace-only as "no title" so the row clips cleanly,
+    /// matching `PaneTitle.display`.
+    @Test func whitespaceOnlyTitleRendersAsNoTitle() {
+        let line = PaneInfo(id: 3, title: "   ", focused: false).formattedLine()
+        #expect(line == "  3")
+    }
+
+    @Test func tabOnlyTitleRendersAsNoTitle() {
+        let line = PaneInfo(id: 3, title: "\t", focused: true).formattedLine()
+        #expect(line == "* 3")
+    }
+
+    @Test func contentfulTitleWithSurroundingWhitespacePreserved() {
+        // Mirrors PaneTitle.display: blank-vs-content check, not a trim.
+        let line = PaneInfo(id: 3, title: " claude ", focused: false).formattedLine()
+        #expect(line == "  3    claude ")
+    }
 }

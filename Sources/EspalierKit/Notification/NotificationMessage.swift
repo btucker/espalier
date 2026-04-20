@@ -89,17 +89,25 @@ public struct PaneInfo: Codable, Sendable, Equatable {
     /// but a single separator space is always inserted before the
     /// title regardless of id width — so pane IDs ≥ 100 don't collide
     /// visually with their title.
+    ///
+    /// A whitespace-only title is treated the same as nil / empty so
+    /// the row clips cleanly; contentful titles with surrounding
+    /// whitespace are preserved verbatim. Mirrors `PaneTitle.display`'s
+    /// LAYOUT-2.14 behaviour for the `pane list` output surface.
     public func formattedLine() -> String {
         let marker = focused ? "*" : " "
         let idStr = String(id)
         let minWidth = 3
         let padLen = max(0, minWidth - idStr.count)
         let padding = String(repeating: " ", count: padLen)
-        let trimmedTitle = title?.isEmpty == false ? title : nil
-        guard let trimmedTitle else {
+        let renderedTitle: String? = {
+            guard let title, !title.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return title
+        }()
+        guard let renderedTitle else {
             return "\(marker) \(idStr)"
         }
-        return "\(marker) \(idStr)\(padding) \(trimmedTitle)"
+        return "\(marker) \(idStr)\(padding) \(renderedTitle)"
     }
 }
 
