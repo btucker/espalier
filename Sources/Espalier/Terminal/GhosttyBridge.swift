@@ -15,7 +15,10 @@ final class GhosttyConfig {
     let config: ghostty_config_t
 
     /// Set to `true` once ownership is transferred to a `ghostty_app_t`.
-    fileprivate var ownershipTransferred: Bool = false
+    /// Callers beyond `GhosttyBridge.swift`: `TerminalManager.reloadGhosttyConfig`
+    /// sets this after `ghostty_app_update_config` takes ownership
+    /// of a freshly-constructed config (TERM-9.1).
+    internal var ownershipTransferred: Bool = false
 
     init() {
         config = ghostty_config_new()

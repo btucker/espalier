@@ -340,6 +340,27 @@ final class TerminalManager: ObservableObject {
         readSplitPreserveZoomConfig()
     }
 
+    /// Re-read the user's Ghostty config from disk and push it into the
+    /// live app. Unlike `rebuildKeybindBridge` which only re-queries
+    /// Espalier's bridge against the existing config pointer, this
+    /// actually reloads the files (`GhosttyConfig.init` walks XDG +
+    /// `com.mitchellh.ghostty` + recursive includes + finalize) and
+    /// hands the result to `ghostty_app_update_config`. TERM-9.1.
+    ///
+    /// Ownership: the new `GhosttyConfig` transfers to the app on
+    /// `ghostty_app_update_config`, mirroring `ghostty_app_new`. We
+    /// mark `ownershipTransferred` so the wrapper's deinit doesn't
+    /// double-free. The previous `ghosttyConfig` is replaced; its
+    /// libghostty storage is freed internally by `update_config`.
+    func reloadGhosttyConfig() {
+        guard let app = ghosttyApp?.app else { return }
+        let newConfig = GhosttyConfig()
+        ghostty_app_update_config(app, newConfig.config)
+        newConfig.ownershipTransferred = true
+        self.ghosttyConfig = newConfig
+        rebuildKeybindBridge()
+    }
+
     /// Read `split-preserve-zoom` from the live config and update
     /// `splitPreserveZoomOnNavigation`. Called after `initialize()` and
     /// after every `rebuildKeybindBridge()` so the flag tracks reloads.

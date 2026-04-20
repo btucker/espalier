@@ -735,6 +735,17 @@ application shall log at debug and no-op.
 **KBD-4.1** When `reload_config` fires, the application shall rebuild
 its Ghostty-config-derived menu shortcuts without requiring a restart.
 
+**TERM-9.1** When the user activates "Reload Ghostty Config"
+(either via the Espalier menu or via a Ghostty keybinding mapped to
+the `reload_config` action), the application shall construct a fresh
+`GhosttyConfig` — re-walking the XDG default paths, `com.mitchellh.ghostty/config`,
+and recursive `config-file =` includes — and push it into the live
+`ghostty_app_t` via `ghostty_app_update_config`, so subsequent key
+presses and theme reads reflect edits to the on-disk config without
+a restart. A stale earlier comment claimed libghostty-spm lacked a
+reload C API; `ghostty_app_update_config` has been available on the
+vendored surface and is what this spec pins.
+
 ## 17. PR/MR Status Display
 
 ### 17.1 Branch-to-PR Association

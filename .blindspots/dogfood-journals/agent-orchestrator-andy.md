@@ -1855,3 +1855,33 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Hunt the remaining `try?` spots at lines 431/1406/1505 (GitWorktreeDiscovery.discover) — they're the same silent-failure family that cycles 95 and 97 nibbled off.
 - Investigate whether "Reload Ghostty Config" menu item is actually reloading from disk or is a keybind-rebuild-only no-op (flagged in cycle 97).
+
+## Cycle 99 — 2026-04-19 ("Reload Ghostty Config" was a near no-op — TERM-9.1)
+
+### Explored
+- Followed up on cycle 97's flag — is `handleReloadConfig()` / `terminalManager.onReloadConfig` actually reloading the config from disk, or just shuffling the same config pointer into a new keybind bridge?
+
+### Diagnosed
+- `EspalierApp.swift:283-289` set `onReloadConfig` to call `rebuildKeybindBridge()`, which in turn re-read chords from the SAME `ghosttyConfig?.config` pointer. The comment on that block literally said "libghostty-spm doesn't expose a reload C API" — but it was wrong:
+  - `libghostty-spm/.../ghostty.h:1083` has `void ghostty_app_update_config(ghostty_app_t, ghostty_config_t);`
+- So the menu item "Reload Ghostty Config" and the `reload_config` Ghostty action both ran: "construct a new keybind bridge from the old config" → no behavior change. User edits `~/.config/ghostty/config`, hits reload, nothing happens. Andy ragequit material.
+
+### Fixed
+- New `TerminalManager.reloadGhosttyConfig()`: construct a fresh `GhosttyConfig` (re-walks XDG → macOS Ghostty config → recursive includes → finalize), call `ghostty_app_update_config(app, newConfig.config)`, mark ownership transferred, replace `self.ghosttyConfig`, then `rebuildKeybindBridge()` against the new config.
+- Wired both call sites (menu handler `handleReloadConfig`, libghostty action callback `onReloadConfig`) to the new method.
+- Made `GhosttyConfig.ownershipTransferred` `internal` so `TerminalManager` (in another file) can mark it after the C-side takes ownership.
+- Removed the stale "no reload C API" comment.
+
+### Spec
+- Added **TERM-9.1** under §16 Keyboard Shortcuts, noting that the stale pre-existing comment was wrong.
+
+### Tests
+- Integration-level behavior (a real libghostty round-trip) isn't reachable from EspalierKitTests — that target doesn't import GhosttyKit, and the live `ghostty_*` APIs need `ghostty_init` to have run. So no new failing-test-first unit test for this cycle. 497/497 existing tests still pass.
+- Manual verification path is documented in the spec: edit `~/.config/ghostty/config`, hit Reload Ghostty Config, confirm a keybind change takes effect without quit+relaunch.
+
+### Commit
+- `fix(ghostty): actually reload the config file on 'Reload Ghostty Config' (TERM-9.1)`
+
+### Try next cycle
+- The rapid-worktree-create scenario still hasn't been exercised.
+- Remaining `try?` at EspalierApp.swift lines 431/1406/1505 (GitWorktreeDiscovery.discover) — silent discovery failures during reconcile / HEAD-change / monitor-poll.

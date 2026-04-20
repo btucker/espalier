@@ -289,11 +289,12 @@ struct EspalierApp: App {
             }
         }
 
-        // libghostty-spm doesn't expose a reload C API — rebuild the bridge
-        // from the live config object so menu shortcuts stay consistent.
+        // `ghostty_app_update_config` re-reads the config files and swaps
+        // them into the live app; our bridge rebuild happens inside
+        // `reloadGhosttyConfig`. TERM-9.1.
         terminalManager.onReloadConfig = { [tm = terminalManager] in
             MainActor.assumeIsolated {
-                tm.rebuildKeybindBridge()
+                tm.reloadGhosttyConfig()
             }
         }
 
@@ -1302,7 +1303,7 @@ struct EspalierApp: App {
     }
 
     private func handleReloadConfig() {
-        terminalManager.rebuildKeybindBridge()
+        terminalManager.reloadGhosttyConfig()
     }
 
     // MARK: - View builder for bridge-shortcutted menu buttons
