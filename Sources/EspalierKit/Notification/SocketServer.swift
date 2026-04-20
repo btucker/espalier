@@ -94,6 +94,14 @@ public final class SocketServer: @unchecked Sendable {
 
     private func handleClient(fd: Int32) {
         defer { close(fd) }
+        // Bound each client's read phase with SO_RCVTIMEO so a silent or
+        // hung peer can't pin this serial dispatch queue indefinitely —
+        // which would block acceptConnection from running and DoS every
+        // subsequent `espalier notify`. Matches the CLI's client-side
+        // 2s timeout (ATTN-3.3); JSON messages are ≤~1 KB over a local
+        // Unix socket, so 2s is ample for any well-behaved client.
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {

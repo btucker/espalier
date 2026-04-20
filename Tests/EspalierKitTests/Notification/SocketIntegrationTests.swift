@@ -296,6 +296,68 @@ struct SocketIntegrationTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(received.value != nil)
     }
+
+    /// A silent client that connects but never writes or closes must not
+    /// block subsequent clients from being handled. Previously
+    /// `SocketServer.handleClient` did `read()` in a loop with no
+    /// `SO_RCVTIMEO`, so a hung peer pinned the server's serial dispatch
+    /// queue indefinitely — a trivial local DoS: any process doing
+    /// `nc -U ~/…/espalier.sock` would freeze every `espalier notify`
+    /// until the peer closed. Exactly Andy's "furious when any tool
+    /// kills a long-running shell unexpectedly" pain point in the
+    /// server-accept-queue dimension.
+    @Test func silentClientDoesNotBlockOtherClients() async throws {
+        let dir = URL(fileURLWithPath: "/tmp").appendingPathComponent("espalier-hang-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let socketPath = dir.appendingPathComponent("s").path
+        let received = MutableBox<NotificationMessage?>(nil)
+
+        let server = SocketServer(socketPath: socketPath)
+        server.onMessage = { msg in received.value = msg }
+        try server.start()
+        try await Task.sleep(for: .milliseconds(100))
+
+        func connectClient() -> Int32 {
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            var addr = sockaddr_un()
+            addr.sun_family = sa_family_t(AF_UNIX)
+            socketPath.withCString { ptr in
+                withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
+                    pathPtr.withMemoryRebound(to: CChar.self, capacity: 104) { dest in _ = strlcpy(dest, ptr, 104) }
+                }
+            }
+            let rc = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            }
+            #expect(rc == 0)
+            return fd
+        }
+
+        // Connection #1: silent — connect but neither write nor close
+        // until test teardown. Pre-fix, this pins the serial queue on
+        // `handleClient`'s blocking `read()` forever.
+        let silentFD = connectClient()
+        defer { close(silentFD) }
+
+        // Give the server a beat to accept + begin handling #1.
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Connection #2: valid — write one message and close.
+        let activeFD = connectClient()
+        let msg = #"{"type":"notify","path":"/tmp/wt","text":"test"}"# + "\n"
+        msg.withCString { ptr in _ = Darwin.write(activeFD, ptr, strlen(ptr)) }
+        close(activeFD)
+
+        // Wait comfortably longer than the 2s server-side read timeout
+        // so handler #1 finishes and the serial queue drains to #2.
+        try await Task.sleep(for: .milliseconds(2800))
+        server.stop()
+
+        #expect(received.value != nil,
+                "Silent client blocked the serial dispatch queue; message from the valid client was never processed.")
+    }
 }
 
 final class MutableBox<T>: @unchecked Sendable {
