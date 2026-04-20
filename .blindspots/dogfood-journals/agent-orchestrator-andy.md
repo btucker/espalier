@@ -1970,3 +1970,27 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Actually exercise Andy's rapid-worktree-creation scenario with computer-use (still untouched across 12 cycles).
 - Or: pick up `pane list` output-alignment robustness at id ≥ 100 — 10-line test + format change.
+
+## Cycle 103 — 2026-04-19 (pane list output collapses at id ≥ 100 — ATTN-1.11)
+
+### Explored
+- Picked up cycle 102's flagged alignment bug as a tight, concrete cycle target.
+
+### Diagnosed
+- `Sources/EspalierCLI/CLI.swift:65` padding formula: `max(0, 3 - String(pane.id).count)`. For id=100+, the padding collapses to zero and the title runs straight into the id: `"* 100zsh"` instead of `"* 100 zsh"`. Theoretical for normal use (rare to have 100 panes), but Andy's 3–6 worktrees × multiple panes × his "create worktrees faster than UI can discover them" behavior isn't a great reason to rely on luck.
+
+### Fixed
+- Extracted the format into `PaneInfo.formattedLine()` in `EspalierKit`. Always inserts a single space between the id and the title regardless of padding. CLI uses the helper; renders `"  100 zsh"` / `"  1234 zsh"` correctly.
+
+### Spec
+- Added **ATTN-1.11** pinning the format contract.
+
+### Tests
+- Seven `PaneInfoFormatTests`: single-digit focused/unfocused, two-digit, three-digit (the bug case), four-digit, empty title, nil-vs-empty-title equivalence. Each asserts the exact expected line. Failed to compile before the helper existed; all green after. 505/505 overall.
+
+### Commit
+- `fix(cli): keep id-title separator in pane list at any id width (ATTN-1.11)`
+
+### Try next cycle
+- Actually use computer-use to verify Andy's rapid-worktree-creation scenario (still deferred from many cycles back — screenshots have been blocked in recent cycles; may need a retry).
+- Look at PRStatusStore.hostByRepo — no cleanup when a repo is removed (tiny leak, noted in cycle 102 exploration).

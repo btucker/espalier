@@ -295,6 +295,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-1.10** If `espalier notify` is invoked with text longer than 200 Character (grapheme cluster) units, then the CLI shall exit non-zero with a usage error. Attention overlays are designed for short status pings rendered in a narrow sidebar capsule; large inputs (e.g. a piped `git log` or `ls -la`) blow up layout and drown the intended signal.
 
+**ATTN-1.11** Each row of `espalier pane list` output shall be formatted as `<marker> <id><padding> <title?>` where `marker` is `*` for the focused pane or a space otherwise, `id` is right-padded to at least width 3 for typical layouts (so ids 1–99 align their titles at the same column), and exactly one space separates the id from the title regardless of id width — so ids ≥ 100 don't collide visually with their title. Panes with no title render without trailing whitespace.
+
 ### 5.2 Communication Protocol
 
 **ATTN-2.1** The application shall listen on a Unix domain socket at `~/Library/Application Support/Espalier/espalier.sock`.
