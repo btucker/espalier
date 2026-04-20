@@ -11,7 +11,7 @@ public final class PRStatusStore {
 
     @ObservationIgnored private let executor: CLIExecutor
     @ObservationIgnored private let fetcherFor: (HostingProvider) -> PRFetcher?
-    @ObservationIgnored private let detectHost: @Sendable (String) async -> HostingOrigin?
+    @ObservationIgnored private let detectHost: @Sendable (String) async throws -> HostingOrigin?
     @ObservationIgnored private var hostByRepo: [String: HostingOrigin?] = [:]
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var lastFetch: [String: Date] = [:]
@@ -36,7 +36,7 @@ public final class PRStatusStore {
     public init(
         executor: CLIExecutor = CLIRunner(),
         fetcherFor: ((HostingProvider) -> PRFetcher?)? = nil,
-        detectHost: (@Sendable (String) async -> HostingOrigin?)? = nil
+        detectHost: (@Sendable (String) async throws -> HostingOrigin?)? = nil
     ) {
         self.executor = executor
         if let fetcherFor {
@@ -55,7 +55,7 @@ public final class PRStatusStore {
             self.detectHost = detectHost
         } else {
             self.detectHost = { repoPath in
-                (try? await GitOriginHost.detect(repoPath: repoPath)) ?? nil
+                try await GitOriginHost.detect(repoPath: repoPath)
             }
         }
     }
@@ -156,8 +156,19 @@ public final class PRStatusStore {
         if let cached = hostByRepo[repoPath] {
             origin = cached
         } else {
-            origin = await detectHost(repoPath)
-            hostByRepo[repoPath] = origin
+            // Only cache when detect SUCCEEDS (whether that's a real
+            // HostingOrigin or a legitimate "no origin remote"). A
+            // thrown CLIError (.notFound / .launchFailed — git missing
+            // from PATH, spawn failure) would otherwise poison the
+            // cache with nil for the session. `PR-7.11`.
+            do {
+                let detected = try await detectHost(repoPath)
+                origin = detected
+                hostByRepo[repoPath] = detected
+            } catch {
+                logger.info("host detect failed for \(repoPath): \(String(describing: error))")
+                origin = nil
+            }
         }
         if generation[worktreePath, default: 0] != fetchGeneration { return }
         guard let origin, origin.provider != .unsupported,

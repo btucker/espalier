@@ -2652,3 +2652,37 @@ No code change this cycle. The prior ~9 cycles covered a lot of surface; diminis
 ### Try next cycle
 - Same bug class in `WorktreeStatsStore` — does the stats apply path wipe on failure? Looking at apply(), it only writes nil if the successful compute returned nil stats; failures propagate as thrown from `fetch` which the call-site handles in `performRepoFetch` (just increments failureStreak, doesn't clear stats). Looks safe, but worth a closer look.
 - PRStatusStore.inFlight fragility: Task1's defer clears inFlight while Task2 may still be running. Not user-visible (same branch, same result), but wasteful.
+
+## Cycle 151 — 2026-04-20 (divergence gutter wiped on transient git failure — DIVERGE-4.6)
+
+### Rebase
+- Clean rebase onto e99b870 + PR #42 (ghostty-web native parity). No conflicts after stashing the journal.
+
+### Explored
+- Cycle 150's try-next followup: does `WorktreeStatsStore.apply` have the same wipe-on-failure class as PRStatusStore? Answer: yes.
+- Traced `defaultCompute` → `try? GitWorktreeStats.compute(...)` → nil on throw. `apply` then did `else if stats[wt] != nil { removeValue }` without distinguishing "no default branch" from "compute threw".
+
+### Broke
+- Simulated a transient compute failure via a scripted ComputeFunction returning `(defaultBranch: "main", stats: nil)` — confirmed `stats["/wt"]` gets wiped. With 5-minute polling cadence, a one-off glitch blanks the ↑N ↓M gutter for the full interval.
+
+### Diagnosed
+- `Sources/EspalierKit/Stats/WorktreeStatsStore.swift:252-259` collapsed two cases into one wipe. The legitimate "no default branch" case (`defaultBranch == nil`) and the transient-failure case (`defaultBranch != nil, stats == nil`) need different handling.
+
+### Spec
+- Added **DIVERGE-4.6** distinguishing the two nil-stats cases explicitly.
+
+### Fixed
+- Changed `apply` to only wipe when `result.defaultBranch == nil`. Preserves last-known stats when defaultBranch was resolved but compute threw.
+
+### Tests
+- `WorktreeStatsStoreComputeFailureTests`:
+  - `computeFailureKeepsLastKnownStats` — ComputeFunction scripted to return okStats first, then `(defaultBranch: "main", stats: nil)`. Asserts `stats["/wt"] == okStats` after call 2. Failed pre-fix, passes post-fix.
+  - `missingDefaultBranchStillWipesStats` — counterpart: second call returns `(defaultBranch: nil, stats: nil)`. Asserts stats goes nil. Pins the distinction.
+- 613/613 overall.
+
+### Commit
+- `fix(stats): preserve cached divergence on transient compute failure (DIVERGE-4.6)` (de161c5)
+
+### Try next cycle
+- PRStatusStore.inFlight fragility (Task1's defer clears inFlight during Task2 lifetime) — wasteful but not wrong. Low priority.
+- Check if `hostByRepo` cache in PRStatusStore has a similar wipe-on-failure concern. Currently I only see cache-on-success (line 149).
