@@ -773,7 +773,7 @@ its Ghostty-config-derived menu shortcuts without requiring a restart.
 
 ### 17.7 Polling Cadence and Backoff
 
-**PR-7.1** The application shall poll a worktree's PR status on the following base cadence: open + pending checks every 25s; open with any other check state every 5 minutes; merged every 15 minutes; no PR associated (absent) every 15 minutes.
+**PR-7.1** The application shall poll a worktree's PR status on a base cadence of 30 seconds whenever a PR is known (open or merged) or the worktree has been observed to have no associated PR (absent). A faster or tiered cadence is not applied, because `watchOriginRefs` (per GIT-2.5) catches local push/fetch but is blind to a merge landing on the hosting provider without a local `git fetch` — polling is therefore the sole detection channel for that event, and a slower cadence directly surfaces as user-visible staleness in the sidebar badge and breadcrumb PR button.
 
 **PR-7.2** When a fetch for a worktree fails, the application shall apply exponential backoff to its cadence: the base interval (or 60s if the base is zero) shall be doubled for each consecutive failure up to a shift of 5 (32×), capped at 30 minutes.
 

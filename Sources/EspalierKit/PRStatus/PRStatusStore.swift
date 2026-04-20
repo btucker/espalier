@@ -220,15 +220,14 @@ extension PRStatusStore {
         isAbsent: Bool,
         failureStreak: Int
     ) -> Duration {
+        // PR-7.1: 30s across all non-unknown buckets. Prior tiered cadences
+        // (5min open / 15min merged / 15min absent) let a PR that was opened
+        // and merged on GitHub go unnoticed for up to 15 min — `watchOriginRefs`
+        // catches local push/fetch but is blind to a remote-only merge, so
+        // polling is the only channel for that signal.
         let base: Duration
-        if let info {
-            switch (info.state, info.checks) {
-            case (.open, .pending): base = .seconds(25)
-            case (.open, _):        base = .seconds(5 * 60)
-            case (.merged, _):      base = .seconds(15 * 60)
-            }
-        } else if isAbsent {
-            base = .seconds(15 * 60)
+        if info != nil || isAbsent {
+            base = .seconds(30)
         } else {
             base = .zero
         }
