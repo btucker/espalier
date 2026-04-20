@@ -1452,7 +1452,6 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             let existingPaths = Set(existing.map(\.path))
             let discoveredPaths = Set(discovered.map(\.path))
             let newlyAdded = discovered.filter { !existingPaths.contains($0.path) }
-            let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }
 
             for d in newlyAdded {
                 let entry = WorktreeEntry(path: d.path, branch: d.branch)
@@ -1488,13 +1487,11 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
 
             // Existing worktrees' stats are driven by their own HEAD
             // callbacks and the polling loop, so a `.git/worktrees/`
-            // directory tick only needs to seed stats for new entries and
-            // drop stats for newly-stale ones.
+            // directory tick only needs to seed stats for new entries.
+            // Newly-stale entries' caches are cleared inline in the
+            // transition loop above (GIT-3.13), not here.
             for d in newlyAdded {
                 store.refresh(worktreePath: d.path, repoPath: repoPath)
-            }
-            for wt in newlyStale {
-                store.clear(worktreePath: wt.path)
             }
         }
     }

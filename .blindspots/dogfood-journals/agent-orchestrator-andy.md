@@ -2026,3 +2026,30 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Return to the attention-clear-on-focus thread (cycle 102 noted). Either verify current behavior is correct, or surface a mismatch with Andy's expectations.
 - Worth revisiting: is there a helper I could extract so the three stale-transition sites share ONE codepath? DRY fix rather than three spot-fixes.
+
+## Cycle 105 — 2026-04-20 (dead `newlyStale` loop after GIT-3.13)
+
+### Explored
+- Rambled widely: attention-clear-on-focus (spec says click only, nav shortcuts don't clear — but NOTIF auto-clear timers make it self-correcting), IPv6 loopback canonicalization (`::ffff:127.0.0.1` not in `isLoopback` — but we don't bind `::1` so it's unreachable), WorktreeStatsStore race-with-clear (real but ~50ms window, low impact on stale rows that likely don't render stats anyway, and not easily testable without moving to EspalierKit), `--version` flag (no version source defined anywhere).
+- Finally noticed that cycle 104's transition-loop clear made the `for wt in newlyStale { store.clear(...) }` loop at the bottom of `worktreeMonitorDidDetectChange` redundant.
+
+### Diagnosed
+- `let newlyStale = existing.filter { !discoveredPaths.contains($0.path) && $0.state != .stale }` captured a snapshot BEFORE the transition loop, then used it after the loop to clear stats. After cycle 104 added `store.clear` + `prStore.clear` inside the transition loop itself (GIT-3.13), the outer loop was doing redundant stats clears on already-cleared paths.
+- Not a bug per se — `WorktreeStatsStore.clear` is idempotent — but dead code that misleads a future reader into thinking there are two separate cleanup paths.
+
+### Fixed
+- Removed `let newlyStale = ...` binding (only used by the redundant loop) and the redundant `for wt in newlyStale { store.clear(...) }` loop.
+- Updated the surrounding comment to point to the transition loop (GIT-3.13) as the single cleanup site.
+
+### Spec
+- No SPECS change. GIT-3.13 already pins the transition-loop clear as the sole contract; removing the redundancy doesn't change behavior.
+
+### Tests
+- 505/505 pass (one transient flake on first run, green on retry).
+
+### Commit
+- `refactor(app): drop redundant newlyStale cleanup loop after GIT-3.13`
+
+### Try next cycle
+- WorktreeStatsStore race-with-clear — still open. The fix would mirror `PRStatusStore`'s generation counter. Testability requires moving WorktreeStatsStore to EspalierKit (modest refactor).
+- Surface `SocketServer.lastStartError` (cycle 95's follow-on) in the Espalier menu alongside web server status.
