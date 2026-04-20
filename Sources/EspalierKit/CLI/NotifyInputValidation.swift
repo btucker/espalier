@@ -18,7 +18,7 @@ public enum NotifyInputValidation: Equatable {
     case clearAfterTooLarge(max: Int)
     case clearAfterWithClearFlag
     case textTooLong(max: Int)
-    case multilineText
+    case controlCharactersInText
 
     /// Upper bound for notify text. Proxies to `Attention.textMaxLength`
     /// so the CLI's ATTN-1.10 check and the server's STATE-2.10 backstop
@@ -55,12 +55,13 @@ public enum NotifyInputValidation: Equatable {
                 return .textTooLong(max: textMaxLength)
             }
             // ATTN-1.12: the sidebar capsule renders `Text` with
-            // `.lineLimit(1)`, so any `\n` / `\r` inside the text clips
-            // the render to just the first line — the user sends
-            // content the UI silently drops. Reject at the CLI so the
-            // user sees a clear error instead of a truncated badge.
-            if text!.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) {
-                return .multilineText
+            // `.lineLimit(1)`, so any control character (LF/CR clip the
+            // render, TAB renders as ?-width, ESC-based ANSI codes land
+            // as literal `[31m` glyphs in SwiftUI Text). Reject the
+            // whole Unicode Cc general category so the user gets clear
+            // feedback instead of a truncated or garbled badge.
+            if text!.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
+                return .controlCharactersInText
             }
             // Negative / zero clearAfter is handled server-side per
             // STATE-2.8 (treated as no auto-clear). Only the upper
@@ -97,8 +98,8 @@ public enum NotifyInputValidation: Equatable {
             return "Cannot use --clear-after with --clear; --clear-after applies only to notify messages"
         case .textTooLong(let max):
             return "Notification text exceeds the \(max)-character limit"
-        case .multilineText:
-            return "Notification text must be a single line (no embedded newlines)"
+        case .controlCharactersInText:
+            return "Notification text cannot contain control characters (newlines, tabs, ANSI escapes, or other non-printable characters)"
         }
     }
 }

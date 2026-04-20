@@ -28,10 +28,12 @@ public struct Attention: Codable, Sendable, Equatable {
     public static func isValidText(_ text: String) -> Bool {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         if text.count > textMaxLength { return false }
-        // Match the CLI's ATTN-1.12 guard so a raw socket client (`nc -U`,
-        // web surface, custom script) can't bypass the validation and
-        // send multi-line text that the sidebar silently clips.
-        if text.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) { return false }
+        // Match the CLI's ATTN-1.12 guard (widened in cycle 108 from
+        // just LF/CR to the full Unicode Cc category) so a raw socket
+        // client (`nc -U`, web surface, custom script) can't bypass
+        // validation and send text with ANSI escapes, tabs, bells, etc.
+        // that the sidebar would render as garbled literal glyphs.
+        if text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return false }
         return true
     }
 

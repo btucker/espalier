@@ -56,12 +56,25 @@ struct AttentionTextValidationTests {
     }
 
     // ATTN-1.12 server-side backstop: a raw socket client that bypasses
-    // the CLI can't ship multi-line text through either.
-    @Test func multilineTextIsInvalid() {
+    // the CLI can't ship text with control characters through either.
+    // Widened in cycle 108 from just LF/CR to the full Unicode Cc
+    // category (ANSI escapes, tabs, bells, DEL, null byte, etc.).
+    @Test func controlCharactersInTextAreInvalid() {
         #expect(!Attention.isValidText("line1\nline2"))
         #expect(!Attention.isValidText("line1\rline2"))
         #expect(!Attention.isValidText("line1\r\nline2"))
         #expect(!Attention.isValidText("Build failed\n"))
+        #expect(!Attention.isValidText("\u{001B}[31mred\u{001B}[0m"))
+        #expect(!Attention.isValidText("foo\tbar"))
+        #expect(!Attention.isValidText("\u{0007}ding"))
+        #expect(!Attention.isValidText("before\u{0000}after"))
+        #expect(!Attention.isValidText("foo\u{007F}bar"))
+    }
+
+    @Test func nonControlUnicodeIsValid() {
+        #expect(Attention.isValidText("🚀 deploy"))
+        #expect(Attention.isValidText("日本語 テスト"))
+        #expect(Attention.isValidText("café ✓"))
     }
 }
 

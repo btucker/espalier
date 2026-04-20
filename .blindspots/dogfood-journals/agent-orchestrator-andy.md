@@ -2112,3 +2112,39 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Desktop-notification-on-CLI-notify — it's a real Andy pain but wants thought on UX (opt-in? throttle?). Probably not a 10-minute cycle.
 - Move WorktreeStatsStore to EspalierKit so DIVERGE-4.5's race gets direct unit coverage.
+
+## Cycle 108 — 2026-04-20 (widen ATTN-1.12 to all control characters)
+
+### Explored
+- Followed cycle 107's multiline fix one step further: `ls --color=always | head | xargs espalier notify` — what happens with ANSI escape sequences?
+
+### Diagnosed
+- CLI accepted text with ANSI escapes. The ESC byte (0x1B) is invisible in SwiftUI Text, so the sidebar would render `\e[31mBUILD\e[0m` as literal `[31mBUILD[0m`. Garbled.
+- Same failure mode for TAB (renders at implementation-defined width, breaks capsule layout), BEL (ding and then garbled), DEL (invisible + shifted), null byte (implementation-dependent).
+- Cycle 107's check was specifically `\n || \r`. Too narrow — every C0/C1 control ought to be rejected for consistency with Andy's "the badge must be readable" expectation.
+
+### Fixed
+- Renamed `NotifyInputValidation.multilineText` → `.controlCharactersInText` and widened the predicate from LF/CR only to the full Unicode Cc general category. Same change on the server-side `Attention.isValidText` backstop.
+- Error message now reads: "Notification text cannot contain control characters (newlines, tabs, ANSI escapes, or other non-printable characters)".
+
+### Spec
+- Rewrote **ATTN-1.12** to pin the widened contract (all Cc scalars) and name specifically what breaks for each kind (newlines clip, tabs render weird, ANSI escapes show as literal garbage).
+
+### Tests
+- Updated cycle 107's 5 tests to the new case name.
+- Added 5 new cases: ANSI escape, TAB, BEL, null byte, DEL.
+- Added 2 regression-guard cases: emoji / CJK / accented-Latin still valid (widened check must not trip on multi-byte Unicode).
+- Server-side backstop test expanded to mirror all the cases.
+- 518/518 pass.
+
+### Live verification
+- `swift run espalier-cli notify $'\e[31mred\e[0m'` → "Error: Notification text cannot contain control characters..."
+- `swift run espalier-cli notify $'foo\tbar'` → same error.
+
+### Commit
+- `fix(cli): widen ATTN-1.12 to reject all Unicode control characters`
+
+### Try next cycle
+- The WorktreeStatsStore move-to-EspalierKit for testable DIVERGE-4.5 remains the biggest open item.
+- Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95's still-open follow-on).
+- Andy's keyboard-first worktree navigation (Cmd+1..9 / arrow keys) — feature request, not a bug.
