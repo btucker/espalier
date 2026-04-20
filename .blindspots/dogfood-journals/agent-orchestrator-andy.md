@@ -2288,3 +2288,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 ### Try next cycle
 - Move `WorktreeStatsStore` to EspalierKit — DIVERGE-4.5 still lacks direct unit coverage.
 - Surface `SocketServer.lastStartError` in the Espalier menu (cycle 95 carry-over).
+
+## Cycle 114 — 2026-04-20 (IPv6 currentURL missing brackets — WEB-1.8)
+
+### Explored
+- Looked at `WebServerController.currentURL` construction at line 106: `"http://\(host):\(desired.port)/"`. Manual interpolation without the bracket logic that `WebURLComposer.url(session:host:port:)` applies.
+
+### Diagnosed
+- For an IPv6-only Tailscale setup, `chooseHost` falls back to IPv6 (no IPv4 available), and `currentURL` becomes `http://fd7a:115c::5:8799/` — a malformed URI (IPv6 authorities MUST be bracketed per RFC 3986).
+- Happy path works because `chooseHost` prefers IPv4 and most Tailscale setups have both. IPv6-only setups (some corporate IPv6-only networks, Tailscale exit-node chains) hit the bug.
+
+### Fixed
+- Extracted `WebURLComposer.baseURL(host:port:)` that shares the `host.contains(":") ? "[\(host)]" : host` bracket logic with `WebURLComposer.url(session:host:port:)`. `WebURLComposer.url` now composes via `baseURL(...) + "session/\(encoded)"` to DRY the bracket code.
+- `WebServerController.currentURL` switches to `WebURLComposer.baseURL(host: host, port: desired.port)`.
+
+### Spec
+- Added **WEB-1.8** pinning the bracket contract for display / clipboard URLs.
+
+### Tests
+- Three new `WebURLComposer` cases: baseURL brackets IPv6, baseURL leaves IPv4 alone, baseURL accepts hostnames. Failed before the `baseURL` method existed; pass after.
+- Existing `ipv4Url` / `ipv6UrlBrackets` tests still pass because `url(session:host:port:)` now delegates the bracket logic via `baseURL`.
+- 536/536 pass.
+
+### Commit
+- `fix(web): bracket IPv6 host in currentURL display + extract baseURL (WEB-1.8)`
+
+### Try next cycle
+- `WorktreeStatsStore` → EspalierKit move for DIVERGE-4.5 coverage remains open.
+- Surface `SocketServer.lastStartError` in Espalier menu.

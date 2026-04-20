@@ -657,6 +657,8 @@ The sweep runs once at `EspalierApp.init()`. `ZmxLauncher.subprocessEnv` additio
 
 **WEB-1.7** While web access is listening, the Settings pane status row shall render the listening address and port without locale grouping separators (e.g., `Listening on 100.64.0.5:49161`, never `49,161`).
 
+**WEB-1.8** Any URL the application composes for display or clipboard copy — the Settings pane's `currentURL`, the sidebar "Copy web URL" action — shall bracket an IPv6 host per RFC 3986 authority syntax (e.g., `http://[fd7a:115c::5]:8799/`). Applies whether the URL includes a session path or is the server's root. Without bracketing, an IPv6-only Tailscale setup produces `http://fd7a:115c::5:8799/` which is a malformed URI. `WebURLComposer.baseURL(host:port:)` and `WebURLComposer.url(session:host:port:)` share the same bracket logic.
+
 ### 15.2 Authorization
 
 **WEB-2.1** The application shall resolve each incoming peer IP via Tailscale LocalAPI `whois` before serving any content at any path.

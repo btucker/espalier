@@ -35,4 +35,24 @@ struct WebURLComposerTests {
         let url = WebURLComposer.url(session: "name with space", host: "100.64.0.5", port: 8799)
         #expect(url.contains("/session/name%20with%20space"))
     }
+
+    /// WEB-1.7: the Settings pane + sidebar display the server's root
+    /// URL ("Copy web URL" without a specific session). This has to
+    /// handle IPv6 the same way the session URL does — otherwise
+    /// IPv6-only Tailscale setups render `http://fd7a:115c::5:8799/`
+    /// which is a malformed URI (IPv6 authorities MUST be bracketed).
+    @Test func baseURLBracketsIPv6Host() {
+        let url = WebURLComposer.baseURL(host: "fd7a:115c::5", port: 8799)
+        #expect(url == "http://[fd7a:115c::5]:8799/")
+    }
+
+    @Test func baseURLLeavesIPv4Alone() {
+        let url = WebURLComposer.baseURL(host: "100.64.0.5", port: 8799)
+        #expect(url == "http://100.64.0.5:8799/")
+    }
+
+    @Test func baseURLAcceptsHostnames() {
+        let url = WebURLComposer.baseURL(host: "macbook-pro.taile2dd2b.ts.net", port: 8799)
+        #expect(url == "http://macbook-pro.taile2dd2b.ts.net:8799/")
+    }
 }

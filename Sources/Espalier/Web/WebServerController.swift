@@ -103,7 +103,7 @@ final class WebServerController: ObservableObject {
             server = s
             status = s.status
             if let host = WebURLComposer.chooseHost(from: tailscaleStatus.tailscaleIPs) {
-                currentURL = "http://\(host):\(desired.port)/"
+                currentURL = WebURLComposer.baseURL(host: host, port: desired.port)
             }
         } catch TailscaleLocalAPI.Error.socketUnreachable {
             status = .disabledNoTailscale
