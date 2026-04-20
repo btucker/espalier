@@ -2540,3 +2540,31 @@ Ran a research agent against https://github.com/ghostty-org/ghostty — specific
 
 ### Try next cycle
 - Surface `SocketServer.lastStartError` in Espalier menu (cycle 95 carry-over, final biggest open item).
+
+## Cycle 123 — 2026-04-20 (surface SocketServer startup failure via banner — ATTN-2.7 extended)
+
+### Explored
+- The final carry-over from cycle 95. Options for surfacing `lastStartError`:
+  1. Make SocketServer `@Observable` and wire a menu item — more plumbing, dynamic.
+  2. Present a one-time alert banner at launch if start failed — simpler, mirrors the `ZmxFallbackBanner` / `ZMX-5.2` pattern.
+- Chose (2) because the user only needs to see this at launch; if they dismiss and the socket is still broken, they'll hit it via the CLI's cycle-94 stale-socket message anyway.
+
+### Diagnosed
+- Cycle 95 added the NSLog + `lastStartError` capture, but neither is user-visible. A user who never uses the CLI would never know their notify surface is dead — and might attribute missing sidebar notifications to other causes.
+
+### Fixed
+- New `Sources/Espalier/Views/NotifySocketBanner.swift` mirroring `ZmxFallbackBanner`'s shape: `presentIfNeeded(error:)` with a process-local `hasShown` guard, an NSAlert with a clear explanation, underlying-errno detail, and recovery hints.
+- `EspalierApp.startup` now catches `SocketServerError` specifically, logs via NSLog AND calls `NotifySocketBanner.presentIfNeeded(error:)`. Falls through to a bare `catch` for non-SocketServerError (belt-and-suspenders).
+
+### Spec
+- Extended **ATTN-2.7** to include the banner surface, cross-referencing ZMX-5.2 as the pattern anchor.
+
+### Tests
+- No new unit test — UI banner, same constraint as `ZmxFallbackBanner` (no test coverage). The `SocketServerError` enum's cases are covered by existing cycle-95 tests; the banner's `describe` switch is a pure mapping that can be reviewed by eye.
+- 546/546 existing tests pass.
+
+### Commit
+- `feat(app): banner alert on SocketServer startup failure (ATTN-2.7)`
+
+### Try next cycle
+- All prior TODOs cleared. Fresh territory — maybe pan for bugs in the SidebarView rendering or the WorktreeMonitor FS-event handling under rapid file-system churn.

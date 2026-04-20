@@ -351,12 +351,17 @@ struct EspalierApp: App {
 
         do {
             try services.socketServer.start()
+        } catch let error as SocketServerError {
+            // Surface the failure in Console.app AND present a one-time
+            // banner so the user sees it immediately rather than learning
+            // about it later via a "not listening" CLI error (ATTN-3.4).
+            // Previously `try?` silently swallowed it; cycle 95 added the
+            // NSLog, cycle 123 added the banner.
+            NSLog("[Espalier] SocketServer.start() failed: %@", String(describing: error))
+            DispatchQueue.main.async {
+                NotifySocketBanner.presentIfNeeded(error: error)
+            }
         } catch {
-            // Surface the failure in Console.app. Previously `try?` silently
-            // swallowed it, which is how we ended up with Espalier running
-            // without a notify surface and no trail (ATTN-2.7). The CLI's
-            // ATTN-3.4 stale-socket diagnostic tells the user to relaunch;
-            // this log tells *us* why it failed in the first place.
             NSLog("[Espalier] SocketServer.start() failed: %@", String(describing: error))
         }
         // SocketServer already dispatches onMessage to the main queue.
