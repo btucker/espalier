@@ -7,6 +7,7 @@ import GrafttyKit
 @MainActor
 final class AppServices {
     let socketServer: SocketServer
+    let channelRouter: ChannelRouter
     let worktreeMonitor: WorktreeMonitor
     let statsStore: WorktreeStatsStore
     let prStatusStore: PRStatusStore
@@ -14,9 +15,25 @@ final class AppServices {
 
     init(socketPath: String) {
         self.socketServer = SocketServer(socketPath: socketPath)
+
+        let channelSocketPath = SocketPathResolver.resolveChannels()
+        self.channelRouter = ChannelRouter(
+            socketPath: channelSocketPath,
+            promptProvider: {
+                UserDefaults.standard.string(forKey: "channelPrompt")
+                    ?? ChannelsSettingsPane.defaultPrompt
+            }
+        )
+
         self.worktreeMonitor = WorktreeMonitor()
         self.statsStore = WorktreeStatsStore()
         self.prStatusStore = PRStatusStore()
+
+        // Route PRStatusStore transitions into ChannelRouter. Captured weakly
+        // so AppServices can own both without a retain cycle.
+        self.prStatusStore.onTransition = { [weak channelRouter] worktreePath, message in
+            channelRouter?.dispatch(worktreePath: worktreePath, message: message)
+        }
     }
 }
 
@@ -362,6 +379,20 @@ struct GrafttyApp: App {
         } catch {
             NSLog("[Graftty] SocketServer.start() failed: %@", String(describing: error))
         }
+
+        // Claude Code Channels — only active when the user has enabled the
+        // feature. On enable, install the plugin into ~/.claude/plugins/
+        // (idempotent) and start the router so new Claude sessions spawned
+        // under `--channels plugin:graftty-channel` connect successfully.
+        if UserDefaults.standard.bool(forKey: "channelsEnabled") {
+            do {
+                try installChannelPlugin()
+                try services.channelRouter.start()
+            } catch {
+                NSLog("[Graftty] Channels startup failed: %@", String(describing: error))
+            }
+        }
+
         // SocketServer already dispatches onMessage to the main queue.
         let binding = $appState
         let tm = terminalManager
@@ -1660,6 +1691,34 @@ struct GrafttyApp: App {
         } else {
             Button(label, action: onTap)
         }
+    }
+
+    /// Render the bundled plugin resources into `~/.claude/plugins/graftty-channel/`
+    /// with the current absolute path to our CLI binary. Idempotent — safe to
+    /// call on every launch. Throws if the bundle resources can't be read or
+    /// the target directory can't be written.
+    private func installChannelPlugin() throws {
+        let pluginDir = Bundle.module.bundleURL
+            .appendingPathComponent("plugins/graftty-channel")
+        let manifest = try String(contentsOf: pluginDir.appendingPathComponent("plugin.json"))
+        let template = try String(contentsOf: pluginDir.appendingPathComponent("mcp.json.template"))
+
+        // Absolute path to the CLI binary. When Graftty is bundled, the CLI
+        // lives at Graftty.app/Contents/Resources/graftty per CLIInstaller
+        // convention. When running via `swift run`, no bundled binary exists;
+        // the installer still runs (writes a config pointing to a nonexistent
+        // path) so the dev experience is consistent with production even if
+        // the resulting plugin wouldn't actually work.
+        let cliPath = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Resources/graftty")
+            .path
+
+        try ChannelPluginInstaller.install(
+            pluginsRoot: ChannelPluginInstaller.defaultPluginsRoot(),
+            cliPath: cliPath,
+            manifest: manifest,
+            mcpTemplate: template
+        )
     }
 
     private func installCLI() {
