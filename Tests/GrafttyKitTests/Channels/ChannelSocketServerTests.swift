@@ -109,7 +109,11 @@ final class ChannelTestClient {
     }
 
     func readLine(timeout: TimeInterval) throws -> String {
-        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
+        // Split `timeout` into whole seconds + microseconds so fractional
+        // timeouts (e.g. 0.5s) don't silently round to "block forever".
+        let secs = Int(timeout)
+        let usecs = Int32((timeout - Double(secs)) * 1_000_000)
+        var tv = timeval(tv_sec: secs, tv_usec: usecs)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var buf = [UInt8](repeating: 0, count: 4096)
         let n = Darwin.read(fd, &buf, buf.count)

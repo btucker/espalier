@@ -98,9 +98,9 @@ public final class ChannelSocketServer: @unchecked Sendable {
             connLock.lock()
             connections.removeValue(forKey: ObjectIdentifier(conn))
             connLock.unlock()
-            if let cb = onDisconnect {
-                DispatchQueue.main.async { cb(conn) }
-            }
+            // Same rationale as onSubscribe: run on the current thread and let
+            // the caller hop to the main actor if it needs to.
+            onDisconnect?(conn)
         }
 
         guard let firstLine = readLine(fd: conn.fd) else { return }
@@ -111,9 +111,12 @@ public final class ChannelSocketServer: @unchecked Sendable {
         if case let .subscribe(worktree, _) = message {
             conn.worktree = worktree
         }
-        if let cb = onSubscribe {
-            DispatchQueue.main.async { cb(message, conn) }
-        }
+        // Invoke the subscribe callback synchronously on the server's
+        // connection-handling thread. Callers that need main-actor work
+        // (e.g. ChannelRouter) are responsible for hopping themselves.
+        // Dispatching to main here would deadlock tests that block the
+        // main thread on a synchronous socket read.
+        onSubscribe?(message, conn)
 
         // Keep the connection open until the peer closes.
         var buf = [UInt8](repeating: 0, count: 256)
