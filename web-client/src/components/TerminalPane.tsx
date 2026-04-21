@@ -1,7 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { init, Terminal, FitAddon } from 'ghostty-web';
+import { init, Terminal } from 'ghostty-web';
 
 type Status = 'connecting' | 'disconnected' | 'error' | string;
+
+// ghostty-web's bundled FitAddon reserves 15px on the right for a native
+// vertical scrollbar (proposeDimensions subtracts a hard-coded constant).
+// Ghostty renders its scrollbar as a canvas overlay (not a DOM scrollbar),
+// so those 15px would show up as an artificial gap and narrow the cols
+// reported to the PTY — causing wrapping at e.g. 148 instead of 150.
+// Fit ourselves against the host's full client area.
+function fitTerminal(term: Terminal, host: HTMLElement): void {
+  const metrics = term.renderer?.getMetrics();
+  if (!metrics || metrics.width === 0 || metrics.height === 0) return;
+  if (host.clientWidth === 0 || host.clientHeight === 0) return;
+  const cols = Math.max(2, Math.floor(host.clientWidth / metrics.width));
+  const rows = Math.max(1, Math.floor(host.clientHeight / metrics.height));
+  if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+}
 
 const textEncoder = new TextEncoder();
 
@@ -55,10 +70,10 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
           },
         });
         term.open(host);
-        const fit = new FitAddon();
-        term.loadAddon(fit);
-        fit.fit();
-        fit.observeResize();
+        fitTerminal(term, host);
+        const resizeObserver = new ResizeObserver(() => fitTerminal(term, host));
+        resizeObserver.observe(host);
+        abort.signal.addEventListener('abort', () => resizeObserver.disconnect());
 
         term.onData((data) => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -67,9 +82,10 @@ export function TerminalPane({ sessionName }: { sessionName: string }) {
         });
         term.onResize(({ cols, rows }) => sendResize(cols, rows));
 
-        // FitAddon resolves dimensions synchronously here, so onResize has
-        // already fired by now. Push once more to cover the ws-not-yet-open
-        // case: either send immediately or once the socket reaches OPEN.
+        // fitTerminal resolves dimensions synchronously above, so onResize
+        // has already fired by now. Push once more to cover the
+        // ws-not-yet-open case: either send immediately or once the socket
+        // reaches OPEN.
         const pushCurrent = () => sendResize(term.cols, term.rows);
         if (ws.readyState === WebSocket.OPEN) pushCurrent();
         else ws.addEventListener('open', pushCurrent, { once: true, signal: abort.signal });
