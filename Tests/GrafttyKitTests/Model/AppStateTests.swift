@@ -443,4 +443,60 @@ struct AppStateTests {
         #expect(match?.repo == 1)
         #expect(match?.worktree == 0)
     }
+
+    // MARK: removeRepo — repository-lifecycle selection invariant (LAYOUT-4.3 prep)
+
+    @Test func removeRepoClearsSelectionWhenSelectedWorktreeIsInsideRemovedRepo() {
+        var state = AppState()
+        let repo = RepoEntry(path: "/tmp/repo", displayName: "repo", worktrees: [
+            WorktreeEntry(path: "/tmp/repo", branch: "main"),
+            WorktreeEntry(path: "/tmp/repo/.worktrees/feature", branch: "feature")
+        ])
+        state.addRepo(repo)
+        state.selectedWorktreePath = "/tmp/repo/.worktrees/feature"
+
+        state.removeRepo(atPath: "/tmp/repo")
+
+        #expect(state.repos.isEmpty)
+        #expect(state.selectedWorktreePath == nil)
+    }
+
+    @Test func removeRepoPreservesSelectionWhenSelectedWorktreeIsInDifferentRepo() {
+        var state = AppState()
+        state.addRepo(RepoEntry(path: "/tmp/repoA", displayName: "A", worktrees: [
+            WorktreeEntry(path: "/tmp/repoA", branch: "main")
+        ]))
+        state.addRepo(RepoEntry(path: "/tmp/repoB", displayName: "B", worktrees: [
+            WorktreeEntry(path: "/tmp/repoB", branch: "main")
+        ]))
+        state.selectedWorktreePath = "/tmp/repoB"
+
+        state.removeRepo(atPath: "/tmp/repoA")
+
+        #expect(state.repos.count == 1)
+        #expect(state.selectedWorktreePath == "/tmp/repoB")
+    }
+
+    @Test func removeRepoIsNoOpForUnknownPath() {
+        var state = AppState()
+        state.addRepo(RepoEntry(path: "/tmp/repo", displayName: "repo"))
+        state.selectedWorktreePath = "/tmp/repo"
+
+        state.removeRepo(atPath: "/tmp/other")
+
+        #expect(state.repos.count == 1)
+        #expect(state.selectedWorktreePath == "/tmp/repo")
+    }
+
+    @Test func removeRepoClearsSelectionEvenWhenSelectionIsRepoMainCheckoutPath() {
+        var state = AppState()
+        state.addRepo(RepoEntry(path: "/tmp/repo", displayName: "repo", worktrees: [
+            WorktreeEntry(path: "/tmp/repo", branch: "main")
+        ]))
+        state.selectedWorktreePath = "/tmp/repo"
+
+        state.removeRepo(atPath: "/tmp/repo")
+
+        #expect(state.selectedWorktreePath == nil)
+    }
 }

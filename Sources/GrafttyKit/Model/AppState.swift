@@ -34,8 +34,22 @@ public struct AppState: Codable, Sendable, Equatable {
         repos.append(repo)
     }
 
+    /// Repository-lifecycle primitive that removes the repo at `path` and
+    /// preserves the "selection never points at a vanished worktree"
+    /// invariant by clearing `selectedWorktreePath` when it lives under
+    /// the removed repo (across any of its worktrees, including the main
+    /// checkout). Analogous to `removeWorktree(atPath:)` below, but at
+    /// the repo granularity — the user-visible caller is the
+    /// "Remove Repository" cascade in MainWindow (`LAYOUT-4.3`).
+    ///
+    /// Silent no-op for an unknown path.
     public mutating func removeRepo(atPath path: String) {
+        guard let repo = repos.first(where: { $0.path == path }) else { return }
+        let victimPaths = Set(repo.worktrees.map(\.path))
         repos.removeAll { $0.path == path }
+        if let selected = selectedWorktreePath, victimPaths.contains(selected) {
+            selectedWorktreePath = nil
+        }
     }
 
     /// Persist "this pane had focus last" on the worktree at `path`, so
