@@ -69,18 +69,33 @@ public final class ChannelSocketServer: @unchecked Sendable {
 
         let src = DispatchSource.makeReadSource(fileDescriptor: listenFD, queue: queue)
         src.setEventHandler { [weak self] in self?.accept() }
-        src.setCancelHandler { [weak self] in if let fd = self?.listenFD, fd >= 0 { close(fd) } }
+        // No-op: `stop()` captures-and-clears `listenFD` before invoking
+        // cancel, so by the time this handler runs the server already owns
+        // the close() (or has already performed it). Closing here would
+        // race against a concurrent `stop()` on the caller's thread and
+        // could double-close an fd that the kernel has since reassigned
+        // to an unrelated `socket()` call.
+        src.setCancelHandler { }
         src.resume()
         self.source = src
     }
 
     public func stop() {
-        source?.cancel(); source = nil
+        // Atomically capture-and-clear listenFD so the cancel handler and
+        // this function can't both see a non-negative value. Whichever
+        // runs first owns the close().
+        let fd = listenFD
+        listenFD = -1
+
+        source?.cancel()
+        source = nil
+
         connLock.lock()
         for conn in connections.values { conn.close_() }
         connections.removeAll()
         connLock.unlock()
-        if listenFD >= 0 { close(listenFD); listenFD = -1 }
+
+        if fd >= 0 { close(fd) }
         unlink(socketPath)
     }
 

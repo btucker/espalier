@@ -68,7 +68,7 @@ public enum ChannelServerMessage: Codable, Equatable, Sendable {
 public enum ChannelEventType {
     public static let prStateChanged = "pr_state_changed"
     public static let ciConclusionChanged = "ci_conclusion_changed"
-    public static let mergeStateChanged = "merge_state_changed"
+    public static let mergeStateChanged = "merge_state_changed"  // v2: requires merge-state polling in PRInfo
     public static let instructions = "instructions"
     public static let channelError = "channel_error"
 }

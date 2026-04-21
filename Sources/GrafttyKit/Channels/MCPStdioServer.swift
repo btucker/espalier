@@ -12,6 +12,11 @@ public final class MCPStdioServer {
     private let version: String
     private let instructions: String
     private let output: (Data) -> Void
+    /// Serializes `output` calls so concurrent `handleLine` (main thread)
+    /// and `emitChannelNotification` (socket thread) writes don't interleave
+    /// past the `PIPE_BUF` atomicity boundary (512 bytes on Darwin) and
+    /// corrupt the newline-delimited JSON-RPC stream.
+    private let outputLock = NSLock()
 
     public init(name: String, version: String, instructions: String, output: @escaping (Data) -> Void) {
         self.name = name
@@ -97,6 +102,10 @@ public final class MCPStdioServer {
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]) else { return }
         var out = data
         out.append(0x0A)
+        // Only the emit itself needs the lock; serializing the whole
+        // payload build would add contention without preventing any races.
+        outputLock.lock()
+        defer { outputLock.unlock() }
         output(out)
     }
 }

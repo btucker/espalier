@@ -94,7 +94,7 @@ final class PRStatusStoreTransitionTests: XCTestCase {
         XCTAssertEqual(attrs["repo"], "acme/docs")
     }
 
-    func testNilPreviousStillFiresOnInitialPR() {
+    func testNilPreviousDoesNotFireOnInitialDiscovery() {
         let store = PRStatusStore()
         var events: [ChannelServerMessage] = []
         store.onTransition = { _, msg in events.append(msg) }

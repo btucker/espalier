@@ -65,12 +65,21 @@ public final class ChannelRouter {
         guard let encoded = try? JSONEncoder().encode(message) else { return }
         var payload = encoded
         payload.append(0x0A)
+
+        // Collect dead subscribers and prune after iteration — Swift
+        // dictionary iteration is snapshot-based so removing mid-loop
+        // wouldn't crash, but two-phase is more explicit and robust to
+        // future refactors that change iteration semantics.
+        var dead: [String] = []
         for (worktree, conn) in subscribers {
             do {
                 try conn.writeRaw(payload)
             } catch {
-                subscribers.removeValue(forKey: worktree)
+                dead.append(worktree)
             }
+        }
+        for worktree in dead {
+            subscribers.removeValue(forKey: worktree)
         }
     }
 

@@ -26,7 +26,10 @@ final class AppServices {
             }
         )
         self.channelRouter = router
-        self.channelSettingsObserver = ChannelSettingsObserver(router: router)
+        self.channelSettingsObserver = ChannelSettingsObserver(
+            router: router,
+            onEnable: { GrafttyApp.installChannelPluginFromBundle() }
+        )
 
         self.worktreeMonitor = WorktreeMonitor()
         self.statsStore = WorktreeStatsStore()
@@ -387,8 +390,8 @@ struct GrafttyApp: App {
         // under `--dangerously-load-development-channels plugin:graftty-channel`
         // connect successfully.
         if UserDefaults.standard.bool(forKey: "channelsEnabled") {
+            Self.installChannelPluginFromBundle()
             do {
-                try installChannelPlugin()
                 try services.channelRouter.start()
             } catch {
                 NSLog("[Graftty] Channels startup failed: %@", String(describing: error))
@@ -1698,22 +1701,29 @@ struct GrafttyApp: App {
 
     /// Render the bundled plugin resources into `~/.claude/plugins/graftty-channel/`
     /// with the current absolute path to our CLI binary. Idempotent — safe to
-    /// call on every launch. Throws if the bundle resources can't be read or
-    /// the target directory can't be written.
-    private func installChannelPlugin() throws {
+    /// call on every launch. Logs on failure; does not throw.
+    ///
+    /// Static so that both `startup()` and `ChannelSettingsObserver`'s
+    /// `onEnable` closure can call it without needing a live `GrafttyApp`
+    /// struct instance (the struct is a SwiftUI App value type; capturing
+    /// `self` across scenes is awkward).
+    @MainActor
+    static func installChannelPluginFromBundle() {
         let pluginDir = Bundle.module.bundleURL
             .appendingPathComponent("plugins/graftty-channel")
-        let manifest = try String(contentsOf: pluginDir.appendingPathComponent("plugin.json"), encoding: .utf8)
-        let template = try String(contentsOf: pluginDir.appendingPathComponent("mcp.json.template"), encoding: .utf8)
+        guard
+            let manifest = try? String(contentsOf: pluginDir.appendingPathComponent("plugin.json"), encoding: .utf8),
+            let template = try? String(contentsOf: pluginDir.appendingPathComponent("mcp.json.template"), encoding: .utf8)
+        else {
+            NSLog("[Graftty] Channels plugin install skipped: missing bundled resources")
+            return
+        }
 
         // Absolute path to the CLI binary. When Graftty is bundled, the CLI
-        // lives at Graftty.app/Contents/Resources/graftty per CLIInstaller
-        // convention. When running via `swift run`, no bundled binary exists;
-        // the installer still runs (writes a config pointing to a nonexistent
-        // path) so the dev experience is consistent with production even if
-        // the resulting plugin wouldn't actually work.
+        // lives at Graftty.app/Contents/Helpers/graftty per `scripts/bundle.sh`
+        // and `installCLI()` below.
         let cliPath = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Resources/graftty")
+            .appendingPathComponent("Contents/Helpers/graftty")
             .path
 
         // When running from `swift run` there's no bundled CLI — the path
@@ -1727,12 +1737,16 @@ struct GrafttyApp: App {
             return
         }
 
-        try ChannelPluginInstaller.install(
-            pluginsRoot: ChannelPluginInstaller.defaultPluginsRoot(),
-            cliPath: cliPath,
-            manifest: manifest,
-            mcpTemplate: template
-        )
+        do {
+            try ChannelPluginInstaller.install(
+                pluginsRoot: ChannelPluginInstaller.defaultPluginsRoot(),
+                cliPath: cliPath,
+                manifest: manifest,
+                mcpTemplate: template
+            )
+        } catch {
+            NSLog("[Graftty] Channels plugin install failed: %@", String(describing: error))
+        }
     }
 
     private func installCLI() {

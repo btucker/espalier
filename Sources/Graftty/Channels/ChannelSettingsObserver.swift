@@ -15,11 +15,13 @@ import GrafttyKit
 @MainActor
 final class ChannelSettingsObserver {
     private let router: ChannelRouter
+    private let onEnable: @MainActor () -> Void
     private var promptTimer: Timer?
     private var cancellables: Set<AnyCancellable> = []
 
-    init(router: ChannelRouter) {
+    init(router: ChannelRouter, onEnable: @escaping @MainActor () -> Void = {}) {
         self.router = router
+        self.onEnable = onEnable
         // Initial isEnabled from current defaults — covers the case where
         // the observer is constructed AFTER the app's launch-time start()
         // and the user has already changed the toggle once.
@@ -48,6 +50,10 @@ final class ChannelSettingsObserver {
     private func apply(enabled: Bool) {
         router.isEnabled = enabled
         if enabled {
+            // Install plugin config before starting — the user may have
+            // toggled channels on mid-session, before ~/.claude/plugins/
+            // has been populated.
+            onEnable()
             do {
                 try router.start()
             } catch {
