@@ -970,3 +970,17 @@ shall surface an actionable alert rather than silently continue.
 **CHAN-1.7** If a write to a subscriber's connection throws (peer gone, socket closed), the router shall remove that subscriber from its map and update `subscriberCount`, so a dead peer does not leak a stale entry and subsequent dispatches to the same worktree path do not fail against the same dead fd.
 
 **CHAN-1.8** While `ChannelRouter.isEnabled` is `false`, both `dispatch` and `broadcastInstructions` shall become no-ops, but existing subscriber connections shall remain connected — mirroring the Settings enable toggle without forcing every subscriber to reconnect on re-enable.
+
+### 18.2 Channels Settings Pane
+
+**CHAN-2.1** The application shall expose a "Channels" tab in the Settings window alongside "General" and "Web Access", using the `antenna.radiowaves.left.and.right` SF Symbol.
+
+**CHAN-2.2** The Channels pane shall present an "Enable GitHub/GitLab channel" toggle bound to `@AppStorage("channelsEnabled")`, defaulting to `false` on first launch so the research-preview feature is opt-in.
+
+**CHAN-2.3** While `channelsEnabled` is `false`, the Channels pane shall hide the research-preview disclosure banner and the prompt editor, showing only the toggle and its caption.
+
+**CHAN-2.4** When `channelsEnabled` is `true`, the Channels pane shall display a highlighted research-preview banner that names the `--dangerously-load-development-channels plugin:graftty-channel` flag injected into the Claude launch, clarifies that the flag bypasses Claude Code's channel allowlist only for this plugin, and notes that events originate from Graftty's local polling.
+
+**CHAN-2.5** When `channelsEnabled` is `true`, the Channels pane shall render an editable prompt textarea bound to `@AppStorage("channelPrompt")`, seeded on first read with the default prompt template that documents the event tag format and how Claude should respond to `pr_state_changed` and `ci_conclusion_changed` events.
+
+**CHAN-2.6** When the user clicks "Restore default" in the prompt section, the application shall overwrite `channelPrompt` with the built-in default prompt template.

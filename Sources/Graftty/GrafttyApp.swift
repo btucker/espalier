@@ -178,10 +178,13 @@ struct GrafttyApp: App {
             }
         }
 
-        // Settings scene — existing General pane plus the Phase 2 Web Access
-        // pane. WebServerController is injected so WebSettingsPane can read
+        // Settings scene — existing General pane, the Phase 2 Web Access
+        // pane, and the Channels pane (Claude Code Channels research preview).
+        // WebServerController is injected so WebSettingsPane can read
         // `.status` / `.currentURL`, and so toggling `WebAccessSettings.isEnabled`
         // triggers the controller's `reconcile()` via its Combine subscription.
+        // ChannelsSettingsPane is pure @AppStorage for now; the ChannelRouter
+        // wiring lands in the next task.
         Settings {
             TabView {
                 SettingsView(onRestartZMX: { restartZMXWithConfirmation() })
@@ -189,6 +192,8 @@ struct GrafttyApp: App {
                 WebSettingsPane()
                     .environmentObject(webController)
                     .tabItem { Label("Web Access", systemImage: "network") }
+                ChannelsSettingsPane()
+                    .tabItem { Label("Channels", systemImage: "antenna.radiowaves.left.and.right") }
             }
         }
     }
