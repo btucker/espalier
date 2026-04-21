@@ -459,11 +459,236 @@ struct GrafttyApp: App {
         }
     }
 
+    /// Pre-pass for `reconcileOnLaunch` implementing LAYOUT-4.6 (bookmark
+    /// resolution at launch) and LAYOUT-4.9 (backfill mint for pre-upgrade
+    /// entries without bookmarks).
+    ///
+    /// For each `RepoEntry`:
+    /// - If it has a bookmark, resolve it. If the resolved path differs
+    ///   from the stored `path`, run the relocate cascade. If the
+    ///   bookmark resolves to the same path but is stale, re-mint.
+    /// - If it has no bookmark and the stored `path` exists on disk, mint
+    ///   one in place (migration from pre-LAYOUT-4.5 state.json).
+    ///
+    /// Runs before any `WorktreeMonitor.watch*` calls in `startup()`
+    /// would have armed watchers at stale paths; by the time
+    /// `reconcileOnLaunch`'s own discover loop runs, each `RepoEntry` is
+    /// already at its current-on-disk location.
+    @MainActor
+    private func resolveRepoLocations() async {
+        for repoIdx in appState.repos.indices {
+            let repo = appState.repos[repoIdx]
+            if let bookmark = repo.bookmark {
+                do {
+                    let resolved = try RepoBookmark.resolve(bookmark)
+                    if resolved.url.path != repo.path {
+                        await relocateRepo(
+                            repoIdx: repoIdx,
+                            newURL: resolved.url,
+                            isStale: resolved.isStale
+                        )
+                    } else if resolved.isStale {
+                        // Same path, but the bookmark is stale (cross-
+                        // volume move, APFS firmlink resolution). Re-mint
+                        // so next launch's resolve is fast and we don't
+                        // accumulate staleness.
+                        appState.repos[repoIdx].bookmark = try? RepoBookmark.mint(atPath: repo.path)
+                    }
+                } catch {
+                    NSLog("[Graftty] resolveRepoLocations: bookmark resolve failed for %@: %@",
+                          repo.path, String(describing: error))
+                }
+            } else if FileManager.default.fileExists(atPath: repo.path) {
+                // LAYOUT-4.9: entry decoded from a pre-LAYOUT-4.5
+                // state.json has no bookmark. The stored path resolves
+                // on disk, so mint a fresh bookmark from it — subsequent
+                // renames/moves will then be recoverable automatically.
+                if let fresh = try? RepoBookmark.mint(atPath: repo.path) {
+                    appState.repos[repoIdx].bookmark = fresh
+                }
+            }
+        }
+    }
+
+    /// Orchestrator for LAYOUT-4.8 — enacts the relocate decisions
+    /// produced by `RepoRelocator` against the live model, watchers, and
+    /// caches. Called from two entry points: the launch-time pre-pass
+    /// (`resolveRepoLocations`) and, starting in Task 10, the
+    /// `WorktreeMonitor.worktreeMonitorDidDetectDeletion` FSEvents hook.
+    ///
+    /// Ordering matters: watcher stop + cache clear MUST happen before
+    /// the `appState.repos[repoIdx].path` assignment, otherwise later
+    /// `stopWatching(repoPath:)` / `clear(worktreePath:)` calls would
+    /// see the new path and the old-path watchers + cache entries would
+    /// leak (GIT-3.11 / GIT-3.13).
+    @MainActor
+    private func relocateRepo(repoIdx: Int, newURL: URL, isStale: Bool) async {
+        // Guard: the caller may have suspended on an `await` between the
+        // index lookup and here; if the repo vanished in the meantime
+        // (e.g. concurrent Remove Repository), skip silently.
+        guard appState.repos.indices.contains(repoIdx) else {
+            NSLog("[Graftty] relocateRepo: repoIdx %d out of range after suspension", repoIdx)
+            return
+        }
+
+        let oldRepoPath = appState.repos[repoIdx].path
+        let newRepoPath = newURL.path
+
+        // (a) Abort if the resolved folder is no longer a git repo.
+        // A rename into a non-git directory (e.g. bookmark survived a
+        // cross-volume move that clobbered `.git`) has no recovery path;
+        // falling through to the stale transition is correct.
+        let gitEntry = newURL.appendingPathComponent(".git").path
+        guard FileManager.default.fileExists(atPath: gitEntry) else {
+            NSLog("[Graftty] relocateRepo: resolved URL is not a git repo: %@", newRepoPath)
+            return
+        }
+
+        // (b) Re-mint stale bookmark from the new path so future
+        // resolves don't pay the staleness cost.
+        if isStale, let fresh = try? RepoBookmark.mint(atPath: newRepoPath) {
+            appState.repos[repoIdx].bookmark = fresh
+        }
+
+        // (c) Stop repo-level and per-worktree watchers before any
+        // mutation of `appState.repos[repoIdx].path` — `stopWatching`
+        // matches watcher keys by the repoPath we pass in, not by the
+        // repo's current model value.
+        services.worktreeMonitor.stopWatching(repoPath: oldRepoPath)
+        for wt in appState.repos[repoIdx].worktrees {
+            services.worktreeMonitor.stopWatchingWorktree(wt.path)
+        }
+
+        // (d) Clear per-old-path caches so a worktree that carries
+        // forward with its path rewritten doesn't observe a stale cache
+        // entry keyed by the old path.
+        for wt in appState.repos[repoIdx].worktrees {
+            services.prStatusStore.clear(worktreePath: wt.path)
+            services.statsStore.clear(worktreePath: wt.path)
+        }
+
+        // (e) Snapshot the pre-relocate repo for the pure decision
+        // function, then apply the repo-level path/displayName update.
+        // The snapshot is load-bearing: the decision reads old paths to
+        // compute rewrites, and we're about to clobber them in the
+        // model.
+        let pre = appState.repos[repoIdx]
+        appState.repos[repoIdx].path = newRepoPath
+        appState.repos[repoIdx].displayName = newURL.lastPathComponent
+
+        // (f) Discover at the new location. On failure, leave the
+        // repo.path updated but worktrees untouched — the per-worktree
+        // stale transitions will happen naturally on the next
+        // reconcile / FSEvents delete, so this is a recoverable state.
+        var discovered: [DiscoveredWorktree]
+        do {
+            discovered = try await GitWorktreeDiscovery.discover(repoPath: newRepoPath)
+        } catch {
+            NSLog("[Graftty] relocateRepo: discover failed at %@: %@",
+                  newRepoPath, String(describing: error))
+            return
+        }
+
+        // (g) Ask the pure decision function whether a repair is needed.
+        // If yes, run `git worktree repair` (which rewrites the `gitdir:`
+        // files of linked worktrees whose paths moved) and re-discover.
+        let firstDecision = RepoRelocator.decide(
+            repo: pre,
+            newRepoPath: newRepoPath,
+            discovered: discovered,
+            selectedWorktreePath: appState.selectedWorktreePath
+        )
+        let finalDecision: RepoRelocator.Decision
+        if firstDecision.needsRepair {
+            do {
+                try await GitWorktreeRepair.repair(
+                    repoPath: newRepoPath,
+                    worktreePaths: firstDecision.repairCandidatePaths
+                )
+                discovered = try await GitWorktreeDiscovery.discover(repoPath: newRepoPath)
+            } catch {
+                NSLog("[Graftty] relocateRepo: repair/rediscover failed at %@: %@",
+                      newRepoPath, String(describing: error))
+                // Fall through with the current `discovered` snapshot;
+                // unmatched pre-worktrees will go stale and the user can
+                // dismiss them manually.
+            }
+            finalDecision = RepoRelocator.decidePostRepair(
+                repo: pre,
+                newRepoPath: newRepoPath,
+                discovered: discovered,
+                selectedWorktreePath: appState.selectedWorktreePath
+            )
+        } else {
+            finalDecision = firstDecision
+        }
+
+        // (h) Build the new worktrees array:
+        //  - Carried-forward: mutate path (and latest branch label)
+        //    in place on the `pre` copy, preserving id / splitTree /
+        //    state / attention / paneAttention / focusedTerminalID /
+        //    offeredDeleteForMergedPR.
+        //  - Gone-stale: preserve the full entry, flip state to `.stale`
+        //    so the sidebar can still offer a Dismiss action.
+        //  - Fresh: discovered branches that didn't match any existing
+        //    entry are brand-new worktrees (git added while we weren't
+        //    watching). Append as `.closed`.
+        var newWorktrees: [WorktreeEntry] = []
+        for cf in finalDecision.carriedForward {
+            if var existing = pre.worktrees.first(where: { $0.id == cf.existingID }) {
+                existing.path = cf.newPath
+                existing.branch = cf.branch
+                newWorktrees.append(existing)
+            }
+        }
+        for stale in finalDecision.goneStale {
+            if var existing = pre.worktrees.first(where: { $0.id == stale.existingID }) {
+                existing.state = .stale
+                newWorktrees.append(existing)
+            }
+        }
+        // Fresh (unmatched) discovered entries — carried-forward already
+        // claimed the matched ones, so any discovered worktree whose
+        // `(branch, path)` pair isn't in `carriedForward` is new.
+        let carriedPaths = Set(finalDecision.carriedForward.map(\.newPath))
+        for d in discovered where !carriedPaths.contains(d.path) {
+            newWorktrees.append(WorktreeEntry(path: d.path, branch: d.branch))
+        }
+        appState.repos[repoIdx].worktrees = newWorktrees
+
+        // (i) Update selection to the relocated path (decision already
+        // mapped old→new or nil'd it when the selected worktree went
+        // stale).
+        appState.selectedWorktreePath = finalDecision.newSelectedWorktreePath
+
+        // (j) Install fresh watchers at the new paths. Matches
+        // `startup()`'s initial watcher-install loop exactly so the
+        // post-relocate watcher graph is indistinguishable from a
+        // from-scratch launch at the new location.
+        services.worktreeMonitor.watchWorktreeDirectory(repoPath: newRepoPath)
+        services.worktreeMonitor.watchOriginRefs(repoPath: newRepoPath)
+        for wt in appState.repos[repoIdx].worktrees where wt.state != .stale {
+            services.worktreeMonitor.watchWorktreePath(wt.path)
+            services.worktreeMonitor.watchHeadRef(worktreePath: wt.path, repoPath: newRepoPath)
+            services.worktreeMonitor.watchWorktreeContents(worktreePath: wt.path)
+        }
+
+        NSLog("[Graftty] relocateRepo: %@ → %@", oldRepoPath, newRepoPath)
+    }
+
     private func reconcileOnLaunch() {
         let binding = $appState
         let statsStore = services.statsStore
         let prStatusStore = services.prStatusStore
-        Task {
+        Task { @MainActor in
+            // LAYOUT-4.6 / LAYOUT-4.9: resolve bookmarks and run any
+            // relocate cascades BEFORE the discover+reconcile loop below.
+            // If a repo moved in Finder between runs, this fixes up its
+            // path (and per-worktree paths) so the subsequent discover
+            // uses the right repoPath and the reconcile doesn't flag
+            // every worktree as newly-stale.
+            await resolveRepoLocations()
+
             for repoIdx in binding.wrappedValue.repos.indices {
                 let repoPath = binding.wrappedValue.repos[repoIdx].path
                 let discovered: [DiscoveredWorktree]
