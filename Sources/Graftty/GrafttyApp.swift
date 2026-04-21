@@ -1545,7 +1545,8 @@ struct GrafttyApp: App {
             defaultCommand: command,
             firstPaneOnly: firstPaneOnly,
             isFirstPane: terminalManager.isFirstPane(terminalID),
-            wasRehydrated: terminalManager.wasRehydrated(terminalID)
+            wasRehydrated: terminalManager.wasRehydrated(terminalID),
+            channelsEnabled: defaults.bool(forKey: "channelsEnabled")
         )
 
         switch decision {
