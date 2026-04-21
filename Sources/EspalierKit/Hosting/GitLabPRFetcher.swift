@@ -46,6 +46,12 @@ public struct GitLabPRFetcher: PRFetcher {
         let state: String
         let source_branch: String
         let head_pipeline: RawPipeline?
+        // PR-5.3: `glab mr list --source-branch` returns MRs from forks
+        // too (their source_project_id differs from the target
+        // project's). We use these to filter forks out — same rationale
+        // as `headRepositoryOwner` on the GitHub side.
+        let source_project_id: Int?
+        let target_project_id: Int?
     }
 
     private struct RawPipeline: Decodable {
@@ -54,18 +60,24 @@ public struct GitLabPRFetcher: PRFetcher {
     }
 
     private func fetchOne(origin: HostingOrigin, branch: String, state: String) async throws -> RawMR? {
+        // PR-5.3: `--per-page 5` (rather than 1) so a fork MR returned
+        // first by glab's default sort cannot crowd out a same-repo MR
+        // that the source/target project-id filter would otherwise accept.
         let args = [
             "mr", "list",
             "--repo", origin.slug,
             "--source-branch", branch,
             "--state", state,
-            "--per-page", "1",
+            "--per-page", "5",
             "-F", "json"
         ]
         let output = try await executor.run(command: "glab", args: args, at: NSTemporaryDirectory())
         let data = Data(output.stdout.utf8)
         let mrs = try JSONDecoder().decode([RawMR].self, from: data)
-        return mrs.first
+        return mrs.first { mr in
+            guard let src = mr.source_project_id, let tgt = mr.target_project_id else { return false }
+            return src == tgt
+        }
     }
 
     static func mapStatus(_ status: String) -> PRInfo.Checks {
