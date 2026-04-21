@@ -8,6 +8,7 @@ import GrafttyKit
 final class AppServices {
     let socketServer: SocketServer
     let channelRouter: ChannelRouter
+    let channelSettingsObserver: ChannelSettingsObserver
     let worktreeMonitor: WorktreeMonitor
     let statsStore: WorktreeStatsStore
     let prStatusStore: PRStatusStore
@@ -17,13 +18,15 @@ final class AppServices {
         self.socketServer = SocketServer(socketPath: socketPath)
 
         let channelSocketPath = SocketPathResolver.resolveChannels()
-        self.channelRouter = ChannelRouter(
+        let router = ChannelRouter(
             socketPath: channelSocketPath,
             promptProvider: {
                 UserDefaults.standard.string(forKey: "channelPrompt")
                     ?? ChannelsSettingsPane.defaultPrompt
             }
         )
+        self.channelRouter = router
+        self.channelSettingsObserver = ChannelSettingsObserver(router: router)
 
         self.worktreeMonitor = WorktreeMonitor()
         self.statsStore = WorktreeStatsStore()
@@ -31,8 +34,8 @@ final class AppServices {
 
         // Route PRStatusStore transitions into ChannelRouter. Captured weakly
         // so AppServices can own both without a retain cycle.
-        self.prStatusStore.onTransition = { [weak channelRouter] worktreePath, message in
-            channelRouter?.dispatch(worktreePath: worktreePath, message: message)
+        self.prStatusStore.onTransition = { [weak router] worktreePath, message in
+            router?.dispatch(worktreePath: worktreePath, message: message)
         }
     }
 }
