@@ -984,3 +984,55 @@ shall surface an actionable alert rather than silently continue.
 **CHAN-2.5** When `channelsEnabled` is `true`, the Channels pane shall render an editable prompt textarea bound to `@AppStorage("channelPrompt")`, seeded on first read with the default prompt template that documents the event tag format and how Claude should respond to `pr_state_changed` and `ci_conclusion_changed` events.
 
 **CHAN-2.6** When the user clicks "Restore default" in the prompt section, the application shall overwrite `channelPrompt` with the built-in default prompt template.
+
+### 18.3 Launch Flag Composition
+
+**CHAN-3.1** While `channelsEnabled` is `true` and the user's `defaultCommand` begins with the `claude` binary name as a whole token, the application shall insert `--channels plugin:graftty-channel --dangerously-load-development-channels plugin:graftty-channel` between the binary name and any user-supplied arguments for all subsequently launched sessions.
+
+**CHAN-3.2** If `defaultCommand` does not begin with the `claude` binary name (e.g. "zsh", "claudex"), the composed launch string shall be unchanged regardless of `channelsEnabled`.
+
+**CHAN-3.3** While `channelsEnabled` is `false`, the composed launch string shall be unchanged regardless of the user's `defaultCommand`.
+
+**CHAN-3.4** Existing `claude` sessions shall continue with their original launch flags when `channelsEnabled` is toggled mid-session; only newly launched sessions shall pick up the change. Retroactively attaching channels to a running claude requires restarting that session.
+
+### 18.4 Plugin Installation
+
+**CHAN-4.1** While `channelsEnabled` is `true`, on app launch the application shall render the bundled `plugin.json` and `mcp.json.template` from its own resources into `~/.claude/plugins/graftty-channel/`, substituting the absolute path of the Graftty CLI binary for `{{CLI_PATH}}` in the template and writing the output as `.mcp.json` (with leading dot).
+
+**CHAN-4.2** The plugin installation shall be idempotent: repeated invocations with the same inputs shall leave exactly two files in `~/.claude/plugins/graftty-channel/` (`.mcp.json` and `plugin.json`) with no stray intermediate files.
+
+**CHAN-4.3** If the bundled plugin resources cannot be read or the target directory cannot be written, the application shall log the failure via `NSLog` and continue app startup without channels, rather than aborting the launch.
+
+### 18.5 Event Emission
+
+**CHAN-5.1** When `PRStatusStore` detects a PR state transition (`open` ↔ `merged`), the application shall fire a `type=pr_state_changed` channel event for that worktree carrying `from`, `to`, `pr_number`, `pr_url`, `provider`, `repo`, `worktree`, and `pr_title` attributes.
+
+**CHAN-5.2** When `PRStatusStore` detects a CI conclusion change for a tracked PR, the application shall fire a `type=ci_conclusion_changed` channel event for that worktree carrying `from`, `to`, `pr_number`, `pr_url`, `provider`, `repo`, and `worktree` attributes.
+
+**CHAN-5.3** Events shall not be fired for idempotent polls where `previous == current` (same `PRInfo` seen twice).
+
+**CHAN-5.4** Events shall not be fired on initial discovery of a PR for a worktree (when `previous == nil`) — a transition requires a previous state to transition FROM.
+
+**CHAN-5.5** The `provider` attribute shall be the lowercase raw string of the hosting provider (`github` or `gitlab`), and the `repo` attribute shall be the `owner/name` slug of the repository.
+
+### 18.6 Prompt Update Lifecycle
+
+**CHAN-6.1** When the user edits the channels prompt in the Settings pane, the application shall observe the change via KVO on `UserDefaults.channelPrompt` and, after a 500ms debounce, invoke `ChannelRouter.broadcastInstructions()` to fan the current prompt out to every connected subscriber.
+
+**CHAN-6.2** The debounce shall coalesce rapid edits into a single broadcast per settled edit — successive keystrokes within the 500ms window shall reset the timer rather than each scheduling their own broadcast.
+
+### 18.7 Error Handling
+
+**CHAN-7.1** If the `graftty mcp-channel` subprocess fails to resolve the worktree at startup (CWD is not inside a tracked Graftty worktree), the subprocess shall emit exactly one `notifications/claude/channel` event with `meta.type = "channel_error"` on stdout, then exit with status 1.
+
+**CHAN-7.2** If the `graftty mcp-channel` subprocess cannot connect to the channels socket at startup, the subprocess shall emit exactly one `channel_error` event and exit with status 1.
+
+**CHAN-7.3** If the channels socket closes after a `graftty mcp-channel` subprocess has subscribed (Graftty quit, socket torn down), the subprocess shall emit one final `channel_error` event and exit cleanly.
+
+**CHAN-7.4** When a `PRStatusStore` fetch fails (network error, rate limit, expired auth), no channel event shall be sent to any subscriber for that polling cycle. Failure is silent from the channel's perspective; only successful state-change detections fire events.
+
+### 18.8 Socket Infrastructure
+
+**CHAN-8.1** The channels socket shall be located at `<ApplicationSupport>/Graftty/graftty-channels.sock` by default, overridable via the `GRAFTTY_CHANNELS_SOCK` environment variable (empty-string values shall fall back to the default, matching the control socket's semantics).
+
+**CHAN-8.2** The channels socket shall be distinct from the control socket at `graftty.sock`; a failure affecting one shall not disrupt the other.
