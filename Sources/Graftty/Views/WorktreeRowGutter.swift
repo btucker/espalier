@@ -16,25 +16,27 @@ struct WorktreeRowGutter: View {
 
     var body: some View {
         if let stats, !stats.isEmpty {
-            Text(commitsLine(stats))
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(theme.foreground.opacity(0.55))
-                .help(tooltip(stats))
+            HStack(spacing: 4) {
+                if let ahead = aheadToken(stats) {
+                    Text(ahead)
+                        .foregroundColor(theme.foreground.opacity(0.55))
+                }
+                if stats.behind > 0 {
+                    Text("↓\(stats.behind)")
+                        .foregroundColor(.red)
+                }
+            }
+            .font(.system(size: 10, design: .monospaced))
+            .help(tooltip(stats))
         }
     }
 
-    /// `↑X[+] ↓Y` with zero sides omitted, except the ahead side is also
-    /// shown (as `↑0+`) when the worktree has uncommitted changes even if
-    /// ahead is zero — so the dirty indicator never disappears.
-    private func commitsLine(_ s: WorktreeStats) -> String {
-        var parts: [String] = []
-        if s.ahead > 0 || s.hasUncommittedChanges {
-            parts.append("↑\(s.ahead)\(s.hasUncommittedChanges ? "+" : "")")
-        }
-        if s.behind > 0 {
-            parts.append("↓\(s.behind)")
-        }
-        return parts.joined(separator: " ")
+    /// `↑X[+]` with the ahead side shown (as `↑0+`) when the worktree has
+    /// uncommitted changes even if ahead is zero — so the dirty indicator
+    /// never disappears. Nil when neither ahead nor dirty.
+    private func aheadToken(_ s: WorktreeStats) -> String? {
+        guard s.ahead > 0 || s.hasUncommittedChanges else { return nil }
+        return "↑\(s.ahead)\(s.hasUncommittedChanges ? "+" : "")"
     }
 
     /// Hover tooltip detail: the committed-diff line counts, optionally

@@ -62,16 +62,20 @@ struct WorktreeStatsStoreClearTests {
         let resumeIterator = Box(resumeStream.stream.makeAsyncIterator())
 
         let cannedStats = WorktreeStats(ahead: 3, behind: 7, insertions: 40, deletions: 10, hasUncommittedChanges: false)
-        let compute: WorktreeStatsStore.ComputeFunction = { _, _, _ in
+        let compute: WorktreeStatsStore.ComputeFunction = { _, _, _, _ in
             // Suspend until the test signals. This is where the Task
             // "is in-flight" waiting on a git subprocess in production.
             _ = await resumeIterator.value.next()
-            return WorktreeStatsStore.ComputeResult(defaultBranch: "main", stats: cannedStats)
+            return WorktreeStatsStore.ComputeResult(
+                defaultBranch: "main",
+                upstreamRefs: UpstreamRefs(defaultRef: "origin/main"),
+                stats: cannedStats
+            )
         }
 
         let store = WorktreeStatsStore(compute: compute)
 
-        store.refresh(worktreePath: "/wt", repoPath: "/r")
+        store.refresh(worktreePath: "/wt", repoPath: "/r", branch: "main")
         #expect(store.isInFlightForTesting("/wt"))
 
         // Clear while compute is suspended — bumps generation.

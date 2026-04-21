@@ -14,6 +14,14 @@ public final class WorktreeStatsStore {
     /// Keyed by worktree path. Absent key means "not computed yet or cleared".
     public private(set) var stats: [String: WorktreeStats] = [:]
 
+    /// Keyed by worktree path. The upstream refs the most recent
+    /// successful compute measured against. `baseRef` exposes
+    /// `.displayLabel` to the UI so the tooltip can render the actual
+    /// union (e.g. `"origin/main + origin/feature/foo"`) rather than a
+    /// recomputed guess.
+    @ObservationIgnored
+    private var upstreamRefsByPath: [String: UpstreamRefs] = [:]
+
     /// Cached origin default branch name (e.g. `"main"`) per repo path.
     /// `.some(nil)` caches a "no default branch resolvable" result so we
     /// don't retry on every poll. The name (not the ref) is stored because
@@ -67,22 +75,34 @@ public final class WorktreeStatsStore {
     private let compute: ComputeFunction
 
     /// Signature of the compute injection point. Sendable so the
-    /// detached-from-MainActor Task can invoke it safely.
+    /// detached-from-MainActor Task can invoke it safely. `branch` is
+    /// the worktree's current branch name from `WorktreeEntry.branch`
+    /// (empty when detached HEAD / unknown) — required so the base ref
+    /// can prefer `origin/<branch>` for per-worktree origin tracking.
     public typealias ComputeFunction = @Sendable (
         _ worktreePath: String,
         _ repoPath: String,
+        _ branch: String,
         _ cachedDefault: String?
     ) async -> ComputeResult
 
     /// Result of a background compute attempt. Carries the default branch
-    /// discovered (so we can cache it on main) plus the stats or nil if no
-    /// default branch exists for this repo.
+    /// discovered (so we can cache it on main), the upstream refs the
+    /// stats were measured against (cached so the UI tooltip shows the
+    /// truth — e.g. `"origin/main + origin/feature/foo"`), plus the
+    /// stats or nil if no default branch exists for this repo.
     public struct ComputeResult: Sendable {
         public let defaultBranch: String?
+        public let upstreamRefs: UpstreamRefs?
         public let stats: WorktreeStats?
 
-        public init(defaultBranch: String?, stats: WorktreeStats?) {
+        public init(
+            defaultBranch: String?,
+            upstreamRefs: UpstreamRefs?,
+            stats: WorktreeStats?
+        ) {
             self.defaultBranch = defaultBranch
+            self.upstreamRefs = upstreamRefs
             self.stats = stats
         }
     }
@@ -97,8 +117,7 @@ public final class WorktreeStatsStore {
 
     /// Signature of the fetch injection point.
     public typealias FetchFunction = @Sendable (
-        _ repoPath: String,
-        _ defaultBranch: String
+        _ repoPath: String
     ) async throws -> Void
 
     public init(
@@ -125,8 +144,11 @@ public final class WorktreeStatsStore {
     /// Drives `performRepoFetch` from tests without going through the
     /// private `pollTick`. `internal` visibility avoids making the real
     /// method public; tests use `@testable import`.
-    func performRepoFetchForTesting(repoPath: String, worktreePaths: [String]) async {
-        await performRepoFetch(repoPath: repoPath, worktreePaths: worktreePaths)
+    func performRepoFetchForTesting(
+        repoPath: String,
+        worktrees: [(path: String, branch: String)] = []
+    ) async {
+        await performRepoFetch(repoPath: repoPath, worktrees: worktrees)
     }
 
     /// Seed the repo's cached default-branch so
@@ -162,7 +184,7 @@ public final class WorktreeStatsStore {
         lastStatsRefresh[worktreePath] = date
     }
 
-    public func refresh(worktreePath: String, repoPath: String) {
+    public func refresh(worktreePath: String, repoPath: String, branch: String) {
         guard !inFlight.contains(worktreePath) else { return }
         inFlight.insert(worktreePath)
         let cached = defaultBranchByRepo[repoPath] ?? nil
@@ -170,7 +192,7 @@ public final class WorktreeStatsStore {
         let compute = self.compute
 
         Task {
-            let computed = await compute(worktreePath, repoPath, cached)
+            let computed = await compute(worktreePath, repoPath, branch, cached)
             self.apply(
                 worktreePath: worktreePath,
                 repoPath: repoPath,
@@ -182,6 +204,7 @@ public final class WorktreeStatsStore {
 
     public func clear(worktreePath: String) {
         stats.removeValue(forKey: worktreePath)
+        upstreamRefsByPath.removeValue(forKey: worktreePath)
         // Release the in-flight gate so a subsequent `refresh` isn't
         // silently suppressed while the prior Task drains. The Task's
         // late `apply` is handled by the generation check.
@@ -216,34 +239,41 @@ public final class WorktreeStatsStore {
         ticker = nil
     }
 
-    /// Returns the full base ref used for divergence computation for a
-    /// given worktree, or nil if the default branch hasn't been resolved
-    /// yet / isn't resolvable. Mirrors `computeOffMain`'s home-vs-linked
-    /// rule so the UI can render the same label the gutter's numbers
-    /// were measured against (e.g. "vs. origin/main" for the main
-    /// checkout, "vs. main" for a linked worktree).
+    /// Returns the display label for the upstream refs the most recent
+    /// successful compute measured against — `"origin/main"` alone for
+    /// a home checkout / never-pushed-branch worktree, or
+    /// `"origin/main + origin/feature/foo"` for a linked worktree whose
+    /// branch has an upstream. Nil until the first successful compute
+    /// lands. The UI tooltip uses this so the label always matches the
+    /// numbers it sits next to.
     public func baseRef(worktreePath: String, repoPath: String) -> String? {
-        guard let name = defaultBranchByRepo[repoPath] ?? nil else { return nil }
-        let isHomeWorktree = (worktreePath == repoPath)
-        return isHomeWorktree ? "origin/\(name)" : name
+        upstreamRefsByPath[worktreePath]?.displayLabel
     }
 
     // MARK: - Private
 
-    /// Production `FetchFunction` — runs `git fetch` via `GitRunner.run`.
-    /// `run` throws on non-zero exit so the caller's backoff (streak++)
-    /// fires on offline / auth-failure / rate-limited fetches.
-    public nonisolated static let defaultFetch: FetchFunction = { repoPath, defaultBranch in
+    /// Production `FetchFunction` — runs `git fetch` via `GitRunner.run`
+    /// with no explicit refspec, so the remote's configured fetch rules
+    /// (`remote.origin.fetch` = `+refs/heads/*:refs/remotes/origin/*` on
+    /// a clone) advance every tracked branch. Passing only
+    /// `<defaultBranch>` — the pre-fix shape — left `origin/<feature>`
+    /// frozen at whatever commit it was during the last manual fetch, so
+    /// polling couldn't surface teammate pushes on a linked worktree's
+    /// own branch. `run` throws on non-zero exit so the caller's backoff
+    /// (streak++) still fires on offline / auth / rate-limit failures.
+    public nonisolated static let defaultFetch: FetchFunction = { repoPath in
         _ = try await GitRunner.run(
-            args: ["fetch", "--no-tags", "--prune", "origin", defaultBranch],
+            args: ["fetch", "--no-tags", "--prune", "origin"],
             at: repoPath
         )
     }
 
     /// Production `ComputeFunction` — resolves the default branch and
-    /// computes divergence via `GitRunner`. `nonisolated` so `init`'s
-    /// default-parameter evaluation can reference it.
-    public nonisolated static let defaultCompute: ComputeFunction = { worktreePath, repoPath, cachedDefault in
+    /// the per-worktree upstream refs, then computes divergence via
+    /// `GitRunner`. `nonisolated` so `init`'s default-parameter
+    /// evaluation can reference it.
+    public nonisolated static let defaultCompute: ComputeFunction = { worktreePath, repoPath, branch, cachedDefault in
+        _ = repoPath // retained for future cache keys; compute itself is repo-agnostic
         let name: String?
         if let cached = cachedDefault {
             name = cached
@@ -251,20 +281,18 @@ public final class WorktreeStatsStore {
             name = await GitOriginDefaultBranch.resolve(repoPath: repoPath)
         }
         guard let name else {
-            return ComputeResult(defaultBranch: nil, stats: nil)
+            return ComputeResult(defaultBranch: nil, upstreamRefs: nil, stats: nil)
         }
-        // Home checkout (path == repo.path) compares against `origin/<name>`
-        // so the indicator surfaces unpushed work. Linked worktrees compare
-        // against the local `<name>` branch so feature branches show
-        // divergence from where they were branched rather than double-
-        // counting commits that are already on local main.
-        let isHomeWorktree = (worktreePath == repoPath)
-        let baseRef = isHomeWorktree ? "origin/\(name)" : name
+        let refs = await GitWorktreeStats.resolveUpstreamRefs(
+            worktreePath: worktreePath,
+            branch: branch,
+            defaultBranch: name
+        )
         let stats = try? await GitWorktreeStats.compute(
             worktreePath: worktreePath,
-            defaultBranchRef: baseRef
+            upstreamRefs: refs
         )
-        return ComputeResult(defaultBranch: name, stats: stats)
+        return ComputeResult(defaultBranch: name, upstreamRefs: refs, stats: stats)
     }
 
     private func apply(
@@ -294,11 +322,15 @@ public final class WorktreeStatsStore {
             if stats[worktreePath] != s {
                 stats[worktreePath] = s
             }
+            if let refs = result.upstreamRefs {
+                upstreamRefsByPath[worktreePath] = refs
+            }
         } else if result.defaultBranch == nil {
             // No default branch → no divergence to compute against.
             if stats[worktreePath] != nil {
                 stats.removeValue(forKey: worktreePath)
             }
+            upstreamRefsByPath.removeValue(forKey: worktreePath)
         }
         // `DIVERGE-4.9`: nil stats with a resolved defaultBranch
         // means compute threw — preserve the last-known ↑N ↓M.
@@ -306,7 +338,7 @@ public final class WorktreeStatsStore {
 
     nonisolated static func repoFetchCadence(failureStreak: Int) -> Duration {
         ExponentialBackoff.scale(
-            base: .seconds(5 * 60),
+            base: .seconds(30),
             streak: failureStreak,
             cap: .seconds(30 * 60)
         )
@@ -325,15 +357,16 @@ public final class WorktreeStatsStore {
         let now = Date()
         let statsInterval = Self.statsRefreshCadence()
         for repo in repos {
-            // Gate A: network `git fetch` on the 5-min cadence (DIVERGE-4.3).
-            // On success, performRepoFetch also kicks per-worktree refreshes,
-            // so we don't double-fire them in Gate B below for the same tick.
+            // Gate A: network `git fetch` on the repo-level cadence
+            // (DIVERGE-4.3). On success, performRepoFetch also kicks
+            // per-worktree refreshes, so we don't double-fire them in
+            // Gate B below for the same tick.
             let didDispatchRepoFetch = maybeDispatchRepoFetch(repo: repo, now: now)
 
             // Gate B: cheap local stats recompute per worktree (DIVERGE-4.6).
             // Skips any worktree the repo-fetch dispatch already scheduled —
-            // `performRepoFetch` calls `refresh(worktreePath:)` for each
-            // non-stale worktree after its fetch resolves.
+            // `performRepoFetch` calls `refresh` for each non-stale worktree
+            // after its fetch resolves.
             if didDispatchRepoFetch { continue }
             for wt in repo.worktrees where wt.state != .stale {
                 if inFlight.contains(wt.path) { continue }
@@ -341,7 +374,7 @@ public final class WorktreeStatsStore {
                    now.timeIntervalSince(last) < Double(statsInterval.components.seconds) {
                     continue
                 }
-                refresh(worktreePath: wt.path, repoPath: repo.path)
+                refresh(worktreePath: wt.path, repoPath: repo.path, branch: wt.branch)
             }
         }
     }
@@ -361,20 +394,23 @@ public final class WorktreeStatsStore {
         }
         inFlightRepos.insert(repo.path)
         let repoPath = repo.path
-        let worktreePaths = repo.worktrees
+        let worktrees = repo.worktrees
             .filter { $0.state != .stale }
-            .map(\.path)
+            .map { (path: $0.path, branch: $0.branch) }
 
         Task { [weak self] in
             await self?.performRepoFetch(
                 repoPath: repoPath,
-                worktreePaths: worktreePaths
+                worktrees: worktrees
             )
         }
         return true
     }
 
-    private func performRepoFetch(repoPath: String, worktreePaths: [String]) async {
+    func performRepoFetch(
+        repoPath: String,
+        worktrees: [(path: String, branch: String)]
+    ) async {
         defer { self.inFlightRepos.remove(repoPath) }
 
         let defaultBranchResult: String?
@@ -384,14 +420,14 @@ public final class WorktreeStatsStore {
             defaultBranchResult = await GitOriginDefaultBranch.resolve(repoPath: repoPath)
         }
         self.defaultBranchByRepo[repoPath] = defaultBranchResult
-        guard let defaultBranch = defaultBranchResult else {
+        guard defaultBranchResult != nil else {
             self.lastRepoFetch[repoPath] = Date()
             self.repoFailureStreak[repoPath] = 0
             return
         }
 
         do {
-            try await fetch(repoPath, defaultBranch)
+            try await fetch(repoPath)
             self.lastRepoFetch[repoPath] = Date()
             self.repoFailureStreak[repoPath] = 0
         } catch {
@@ -401,8 +437,8 @@ public final class WorktreeStatsStore {
         }
 
         // Recompute stats for each worktree on this repo after fetch succeeds.
-        for wtPath in worktreePaths {
-            self.refresh(worktreePath: wtPath, repoPath: repoPath)
+        for wt in worktrees {
+            self.refresh(worktreePath: wt.path, repoPath: repoPath, branch: wt.branch)
         }
     }
 }
