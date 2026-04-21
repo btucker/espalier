@@ -16,7 +16,11 @@ public final class ChannelSocketServer: @unchecked Sendable {
             let data = try JSONEncoder().encode(message)
             var payload = data
             payload.append(0x0A)  // newline
-            try payload.withUnsafeBytes { buf in
+            try writeRaw(payload)
+        }
+
+        public func writeRaw(_ data: Data) throws {
+            try data.withUnsafeBytes { buf in
                 guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                 try SocketIO.writeAll(fd: fd, bytes: base, count: buf.count)
             }
@@ -41,6 +45,7 @@ public final class ChannelSocketServer: @unchecked Sendable {
     deinit { stop() }
 
     public func start() throws {
+        guard listenFD < 0 else { return }  // already started; idempotent
         let pathBytes = socketPath.utf8.count
         guard pathBytes <= SocketServer.maxPathBytes else {
             throw SocketServerError.socketPathTooLong(bytes: pathBytes, maxBytes: SocketServer.maxPathBytes)

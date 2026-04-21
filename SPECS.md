@@ -987,7 +987,7 @@ shall surface an actionable alert rather than silently continue.
 
 ### 18.3 Launch Flag Composition
 
-**CHAN-3.1** While `channelsEnabled` is `true` and the user's `defaultCommand` begins with the `claude` binary name as a whole token, the application shall insert `--channels plugin:graftty-channel --dangerously-load-development-channels plugin:graftty-channel` between the binary name and any user-supplied arguments for all subsequently launched sessions.
+**CHAN-3.1** While `channelsEnabled` is `true` and the user's `defaultCommand` begins with the `claude` binary name as a whole token, the application shall insert `--dangerously-load-development-channels plugin:graftty-channel` between the binary name and any user-supplied arguments for all subsequently launched sessions.
 
 **CHAN-3.2** If `defaultCommand` does not begin with the `claude` binary name (e.g. "zsh", "claudex"), the composed launch string shall be unchanged regardless of `channelsEnabled`.
 

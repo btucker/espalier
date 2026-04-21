@@ -243,6 +243,11 @@ public final class PRStatusStore {
         guard let onTransition else { return }
         guard let previous else { return }  // initial discovery: not a transition
 
+        // Early return before the dict-allocation path when nothing changed.
+        guard previous.state != current.state || previous.checks != current.checks else {
+            return
+        }
+
         let common: [String: String] = [
             "pr_number": String(current.number),
             "pr_url": current.url.absoluteString,

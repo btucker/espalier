@@ -48,10 +48,11 @@ final class ChannelSettingsObserver {
     private func apply(enabled: Bool) {
         router.isEnabled = enabled
         if enabled {
-            // Router.start() is idempotent enough for our use — if already
-            // started, it will throw a bind error which we swallow. A more
-            // robust guard can come if this becomes a real concern.
-            try? router.start()
+            do {
+                try router.start()
+            } catch {
+                NSLog("[Graftty] ChannelRouter start failed: %@", String(describing: error))
+            }
         }
     }
 }

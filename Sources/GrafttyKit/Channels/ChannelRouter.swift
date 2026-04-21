@@ -9,9 +9,9 @@ import Observation
 public final class ChannelRouter {
     @ObservationIgnored private let server: ChannelSocketServer
     @ObservationIgnored private nonisolated(unsafe) let promptProvider: () -> String
-    @ObservationIgnored private var subscribers: [String: ChannelSocketServer.Connection] = [:]
+    private var subscribers: [String: ChannelSocketServer.Connection] = [:]
 
-    public private(set) var subscriberCount: Int = 0
+    public var subscriberCount: Int { subscribers.count }
 
     /// When false, `dispatch` and `broadcastInstructions` become no-ops.
     /// Subscribers remain connected. Mirrors the Settings enable toggle.
@@ -44,7 +44,6 @@ public final class ChannelRouter {
     public func stop() {
         server.stop()
         subscribers.removeAll()
-        subscriberCount = 0
     }
 
     /// Route a transition event to the matching subscriber, if any.
@@ -62,8 +61,16 @@ public final class ChannelRouter {
         let message = ChannelServerMessage.event(
             type: ChannelEventType.instructions, attrs: [:], body: body
         )
+        // Encode once; write raw bytes to every subscriber.
+        guard let encoded = try? JSONEncoder().encode(message) else { return }
+        var payload = encoded
+        payload.append(0x0A)
         for (worktree, conn) in subscribers {
-            writeOrPrune(conn: conn, message: message, worktreePath: worktree)
+            do {
+                try conn.writeRaw(payload)
+            } catch {
+                subscribers.removeValue(forKey: worktree)
+            }
         }
     }
 
@@ -72,14 +79,12 @@ public final class ChannelRouter {
     private func onSubscribe(message: ChannelClientMessage, conn: ChannelSocketServer.Connection) {
         guard case let .subscribe(worktree, _) = message else { return }
         subscribers[worktree] = conn
-        subscriberCount = subscribers.count
         // The initial `instructions` event was already written synchronously
         // from the server's connection thread in the init closure.
     }
 
     private func onDisconnect(conn: ChannelSocketServer.Connection) {
         subscribers = subscribers.filter { $0.value !== conn }
-        subscriberCount = subscribers.count
     }
 
     private func writeOrPrune(
@@ -91,7 +96,6 @@ public final class ChannelRouter {
             try conn.write(message)
         } catch {
             subscribers.removeValue(forKey: worktreePath)
-            subscriberCount = subscribers.count
         }
     }
 }

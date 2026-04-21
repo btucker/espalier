@@ -10,9 +10,6 @@ import SwiftUI
 /// - `channelPrompt` (String): the instructions text broadcast to every
 ///   subscribed Claude session as the initial `type=instructions` event.
 ///
-/// Subscriber-count caption ("N Claude sessions subscribed") is intentionally
-/// omitted here; it requires injecting the `ChannelRouter` via an environment
-/// object, which is wired up in a later task once `AppServices` owns a router.
 struct ChannelsSettingsPane: View {
     @AppStorage("channelsEnabled") private var channelsEnabled: Bool = false
     @AppStorage("channelPrompt") private var channelPrompt: String = ChannelsSettingsPane.defaultPrompt

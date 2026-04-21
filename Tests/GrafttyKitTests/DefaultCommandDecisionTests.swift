@@ -91,7 +91,7 @@ final class DefaultCommandDecisionTests: XCTestCase {
             channelsEnabled: true
         )
         XCTAssertEqual(decision, .type(
-            "claude --channels plugin:graftty-channel --dangerously-load-development-channels plugin:graftty-channel"
+            "claude --dangerously-load-development-channels plugin:graftty-channel"
         ))
     }
 
@@ -104,7 +104,7 @@ final class DefaultCommandDecisionTests: XCTestCase {
             channelsEnabled: true
         )
         XCTAssertEqual(decision, .type(
-            "claude --channels plugin:graftty-channel --dangerously-load-development-channels plugin:graftty-channel --model opus"
+            "claude --dangerously-load-development-channels plugin:graftty-channel --model opus"
         ))
     }
 

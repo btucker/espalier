@@ -49,7 +49,7 @@ internal func composeWithChannelFlags(command: String, channelsEnabled: Bool) ->
     // Token-match on the first whitespace-delimited piece.
     let parts = command.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
     guard let binary = parts.first, binary == "claude" else { return command }
-    let flags = "--channels plugin:graftty-channel --dangerously-load-development-channels plugin:graftty-channel"
+    let flags = "--dangerously-load-development-channels plugin:graftty-channel"
     if parts.count == 1 {
         return "claude \(flags)"
     } else {
