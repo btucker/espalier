@@ -31,6 +31,7 @@ struct MainWindow: View {
                 onSelectPane: selectPane,
                 onAddRepo: addRepository,
                 onAddPath: addPath,
+                onRemoveRepo: removeRepoWithConfirmation,
                 onStopWorktree: stopWorktreeWithConfirmation,
                 onDeleteWorktree: deleteWorktreeWithConfirmation,
                 onMovePane: movePane,
@@ -477,6 +478,40 @@ struct MainWindow: View {
         performDeleteWorktree(worktreePath)
     }
 
+    private func removeRepoWithConfirmation(_ repo: RepoEntry) {
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(repo.displayName)\"?"
+        alert.informativeText = "This removes the repository from Graftty but does not delete any files from disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        performRemoveRepo(repo)
+    }
+
+    /// Implements LAYOUT-4.3. Ordering of (a)–(d) before (e) matches the
+    /// orphan-surfaces / orphan-caches contracts in GIT-3.10 / GIT-4.10 /
+    /// GIT-3.13 / GIT-3.11. No git is invoked; no on-disk files are
+    /// touched.
+    private func performRemoveRepo(_ repo: RepoEntry) {
+        // (a) Tear down live surfaces for running worktrees. Covers
+        // stale-while-running surfaces kept alive by GIT-3.4.
+        for wt in repo.worktrees where wt.state == .running {
+            terminalManager.destroySurfaces(terminalIDs: wt.splitTree.allLeaves)
+        }
+        // (b) + (c) Stop repo-level and per-worktree watchers and clear
+        // per-path caches. Shared with the relocate cascade — see
+        // `RepoTeardown` for the rationale on the per-worktree loop.
+        RepoTeardown.stopWatchersAndClearCaches(
+            repo: repo,
+            worktreeMonitor: worktreeMonitor,
+            statsStore: statsStore,
+            prStatusStore: prStatusStore
+        )
+        // (d) + (e) `AppState.removeRepo` clears selection when victim.
+        appState.removeRepo(atPath: repo.path)
+    }
+
     /// Shared `git worktree remove` + teardown path used by both the
     /// user-initiated "Delete Worktree" menu action and the PR-merged
     /// offer dialog. Callers own the confirmation UX — this helper runs
@@ -636,7 +671,16 @@ struct MainWindow: View {
             }
             let worktrees = discovered.map { WorktreeEntry(path: $0.path, branch: $0.branch) }
             let displayName = URL(fileURLWithPath: repoPath).lastPathComponent
-            let repo = RepoEntry(path: repoPath, displayName: displayName, worktrees: worktrees)
+            let bookmark = try? RepoBookmark.mint(atPath: repoPath)
+            if bookmark == nil {
+                NSLog("[Graftty] addRepoFromPath: bookmark mint failed for %@; rename-recovery disabled for this entry", repoPath)
+            }
+            let repo = RepoEntry(
+                path: repoPath,
+                displayName: displayName,
+                worktrees: worktrees,
+                bookmark: bookmark
+            )
             appState.addRepo(repo)
 
             if let wt = selectWorktree {

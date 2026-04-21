@@ -8,7 +8,12 @@ public enum WorktreeState: String, Codable, Sendable {
 
 public struct WorktreeEntry: Codable, Sendable, Identifiable, Equatable {
     public let id: UUID
-    public let path: String
+    /// The worktree's absolute path on disk. Mutable so the relocate
+    /// cascade (LAYOUT-4.8) can rewrite it when a repo folder is renamed
+    /// or moved in Finder — carrying forward `id` / `splitTree` / state
+    /// fields while the containing repo moves to a new prefix. Outside
+    /// the relocate cascade, callers treat this as write-once.
+    public var path: String
     public var branch: String
     public var state: WorktreeState
     /// Worktree-scoped attention slot. Driven by the CLI
