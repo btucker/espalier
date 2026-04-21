@@ -82,6 +82,6 @@ Higher-level `performRemoveRepo` behavior (surface teardown, watcher stop, cache
 ## Non-goals
 
 - No deletion of any filesystem content. `git worktree remove`, `rm -rf`, and branch manipulation are all out of scope.
-- No undo. The next Add Repository re-discovers the same worktrees from disk; sub-second in-app state (focused pane per worktree, split-tree layouts, collapse state, offered-PR markers) is accepted as lost on remove.
+- No undo. The next Add Repository re-discovers the same worktrees from disk; transient in-app state (focused pane per worktree, split-tree layouts, collapse state, offered-PR markers) is accepted as lost on remove.
 - No keyboard shortcut. Right-click discovery is sufficient for a low-frequency action; a shortcut can be layered later without schema changes.
 - No bulk remove. Single-repo scope matches every other item in the existing sidebar context menus.
