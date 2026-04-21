@@ -72,7 +72,17 @@ struct SocketServerBufferCapTests {
             let line = #"{"type":"notify","path":"/tmp/wt","text":"\#(i)"}"# + "\n"
             line.withCString { ptr in _ = Darwin.write(fd, ptr, strlen(ptr)) }
         }
-        close(fd)
+        // Deliberately no explicit `close(fd)` here — the `defer` above
+        // runs the single close at function exit. An earlier version
+        // closed twice (explicit here + defer), and the kernel could
+        // reuse the freed FD number during the 400 ms sleep below —
+        // including for a NIO-owned accepted-child-channel FD in a
+        // concurrent `WebServer` suite. The defer's second `close` then
+        // closed NIO's FD out from under it, tripping NIO's EBADF
+        // precondition and crashing the whole test binary. The server's
+        // 4 KB per-client cap (ATTN-2.11) already stops its read loop
+        // without needing EOF from us, so the explicit close was
+        // redundant for the test's actual purpose.
 
         try await Task.sleep(for: .milliseconds(400))
 
