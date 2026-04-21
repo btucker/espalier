@@ -668,7 +668,16 @@ struct MainWindow: View {
             }
             let worktrees = discovered.map { WorktreeEntry(path: $0.path, branch: $0.branch) }
             let displayName = URL(fileURLWithPath: repoPath).lastPathComponent
-            let repo = RepoEntry(path: repoPath, displayName: displayName, worktrees: worktrees)
+            let bookmark = try? RepoBookmark.mint(atPath: repoPath)
+            if bookmark == nil {
+                NSLog("[Graftty] addRepoFromPath: bookmark mint failed for %@; rename-recovery disabled for this entry", repoPath)
+            }
+            let repo = RepoEntry(
+                path: repoPath,
+                displayName: displayName,
+                worktrees: worktrees,
+                bookmark: bookmark
+            )
             appState.addRepo(repo)
 
             if let wt = selectWorktree {
