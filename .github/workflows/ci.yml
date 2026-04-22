@@ -67,6 +67,10 @@ jobs:
         run: xcodegen generate
 
       - name: Build GrafttyMobile (iOS Simulator SDK)
+        # Let xcodebuild apply the default simulator ad-hoc signature
+        # (with application-identifier entitlement) — CODE_SIGN_IDENTITY=-
+        # in project.yml handles signing. Without a real signature the
+        # iOS Keychain rejects every SecItemAdd with errSecMissingEntitlement.
         run: |
           xcodebuild \
             -project Apps/GrafttyMobile/GrafttyMobile.xcodeproj \
@@ -75,5 +79,4 @@ jobs:
             -configuration Debug \
             -skipPackagePluginValidation \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
             build
