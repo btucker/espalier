@@ -222,22 +222,37 @@ public struct TailscaleLocalAPI {
     }
 
     /// Split Tailscale's `application/x-pem-file` response into the
-    /// cert-chain PEM and the private-key PEM. The response is simply
-    /// both blocks concatenated; split on the first "BEGIN .* PRIVATE KEY"
-    /// line. Both halves are returned with their trailing newline intact
-    /// so NIOSSL's PEM parser is happy. WEB-8.2.
+    /// cert-chain PEM and the private-key PEM. The response concatenates
+    /// both blocks; Tailscale 1.96+ emits the key first and the cert
+    /// chain after, but earlier versions (and the reverse ordering) are
+    /// equally valid — so we locate the private-key block's BEGIN/END
+    /// boundaries and treat everything outside it as the cert chain.
+    /// Both halves are returned with their trailing newline intact so
+    /// NIOSSL's PEM parser is happy. WEB-8.2.
     static func parseCertPair(_ data: Data) throws -> (cert: Data, key: Data) {
         guard let text = String(data: data, encoding: .utf8) else {
             throw Error.malformedResponse
         }
-        // Locate the first PRIVATE KEY boundary. Matches
-        // `-----BEGIN PRIVATE KEY-----`, `-----BEGIN EC PRIVATE KEY-----`, etc.
-        guard let keyRange = text.range(of: "-----BEGIN [A-Z ]*PRIVATE KEY-----",
-                                        options: .regularExpression) else {
+        // Matches `-----BEGIN PRIVATE KEY-----`, `-----BEGIN EC PRIVATE KEY-----`,
+        // `-----BEGIN RSA PRIVATE KEY-----`, etc. The trailing `\n?` on the
+        // END marker absorbs the separator so the cert-side slice doesn't
+        // start with a stray newline.
+        guard
+            let keyBegin = text.range(
+                of: "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+                options: .regularExpression
+            ),
+            let keyEnd = text.range(
+                of: "-----END [A-Z ]*PRIVATE KEY-----\\n?",
+                options: .regularExpression,
+                range: keyBegin.upperBound..<text.endIndex
+            )
+        else {
             throw Error.malformedResponse
         }
-        let certText = String(text[..<keyRange.lowerBound])
-        let keyText = String(text[keyRange.lowerBound...])
+        let keyText = String(text[keyBegin.lowerBound..<keyEnd.upperBound])
+        let certText = String(text[..<keyBegin.lowerBound])
+                     + String(text[keyEnd.upperBound...])
         // Require both BEGIN and END boundaries on the cert side so a
         // truncated response (recv hit EOF mid-cert) surfaces as a
         // typed `.malformedResponse` rather than an opaque NIOSSL
