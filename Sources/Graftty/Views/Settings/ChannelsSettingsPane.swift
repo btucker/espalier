@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Preferences pane for the Claude Code Channels feature — a research-preview
 /// integration that delivers PR state events into Claude sessions running in
@@ -14,6 +15,13 @@ struct ChannelsSettingsPane: View {
     @AppStorage("channelsEnabled") private var channelsEnabled: Bool = false
     @AppStorage("channelPrompt") private var channelPrompt: String = ChannelsSettingsPane.defaultPrompt
 
+    /// The exact flag users need to append when launching Claude for a
+    /// channel-subscribing session. `server:graftty-channel` targets the
+    /// manually-configured MCP server that Graftty merges into
+    /// `~/.claude/.mcp.json` on enable; `plugin:<name>@<marketplace>` would
+    /// require a marketplace registration we don't have.
+    static let launchFlag = "--dangerously-load-development-channels server:graftty-channel"
+
     var body: some View {
         Form {
             Section {
@@ -25,21 +33,41 @@ struct ChannelsSettingsPane: View {
 
             if channelsEnabled {
                 Section {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Label(
-                            "Research preview — launches Claude with a development flag",
-                            systemImage: "exclamationmark.triangle.fill"
+                            "Launch Claude with this flag",
+                            systemImage: "terminal"
                         )
-                        .foregroundStyle(.orange)
                         .font(.subheadline.bold())
 
                         Text(verbatim:
-                            "This prepends --dangerously-load-development-channels " +
-                            "plugin:graftty-channel to your Claude launch. The flag bypasses " +
-                            "Claude Code's channel allowlist only for this plugin. Events " +
-                            "originate from Graftty's local polling — no external senders."
+                            "Graftty installs an MCP server at ~/.claude/.mcp.json. " +
+                            "To receive channel events, launch Claude with:"
                         )
                         .font(.caption)
+
+                        HStack(spacing: 6) {
+                            Text(verbatim: Self.launchFlag)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(6)
+                                .background(Color.secondary.opacity(0.12))
+                                .cornerRadius(4)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(Self.launchFlag, forType: .string)
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                        }
+
+                        Text(verbatim:
+                            "Research preview — the --dangerously-load-development-channels " +
+                            "flag bypasses Claude Code's channel allowlist for this server only. " +
+                            "Events originate from Graftty's local polling; no external senders."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                         if let url = URL(string: "https://docs.claude.com/en/channels") {
                             Link("Learn more →", destination: url)
