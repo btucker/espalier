@@ -244,17 +244,19 @@ These are the requirements that will land in `SPECS.md` under a new top-level se
 
 #### 18.6 Input
 
-**IOS-6.1** Above the software keyboard, the application shall render a `KeyboardAccessoryBar` exposing, at minimum: Esc, Tab, Ctrl (sticky), ↑ ↓ ← →, `|`, `/`, `~`, `-`. The Ctrl key shall be a one-shot modifier — tapping Ctrl then a letter shall send `Ctrl+<letter>` to the focused pane; a second tap of Ctrl without an intervening letter shall clear the modifier.
+**IOS-6.1** Above the software keyboard, the application shall render a `KeyboardAccessoryBar` exposing, at minimum: Esc, Tab, Ctrl (sticky), ↑ ↓ ← →, `|`, `/`, `~`, `-`. The Ctrl key shall be a one-shot modifier — tapping Ctrl then any subsequent key (letter, digit, space, or symbol) shall send that key with the control modifier applied to the focused pane's `TerminalView` via libghostty-spm's key-event API; the modifier shall clear after that one key, or on a second Ctrl tap if no intervening key was pressed.
 
-**IOS-6.2** When a hardware keyboard is attached, the application shall publish a `UIKeyCommand` table covering Ctrl-letter, Cmd-letter (for app-level shortcuts only), and arrow-key events, routing them to the focused pane's `InMemoryTerminalSession`. libghostty's own key-event handling in the `TerminalView` shall not be bypassed — the `UIKeyCommand` table covers only events the `TerminalView` would otherwise not see, and forwards unmodified events to it.
+**IOS-6.2** libghostty-spm's `TerminalView` shall be the primary owner of key-event translation for every pane; software-keyboard text and hardware-keyboard key events shall reach it directly. The application shall additionally publish a `UIKeyCommand` table solely for **application-level** shortcuts that must be intercepted before the terminal sees them (e.g., Cmd-\\ to split on iPad, Cmd-1…9 to switch visible sessions). `UIKeyCommand` shall not be used to re-implement terminal chord translation — that path belongs to libghostty-spm.
 
 #### 18.7 Lifecycle
 
 **IOS-7.1** When the application enters the background, it shall close every active `URLSessionWebSocketTask` with WebSocket close code 1000 (normal closure) and tear down every `InMemoryTerminalSession`. The server's response (SIGTERM to each `zmx attach` child per `WEB-4.5`) leaves the zmx daemon alive per `ZMX-4.4`, so reconnect picks up the same session.
 
-**IOS-7.2** When the application foregrounds and the biometric gate is satisfied (either ≥5 min path with re-prompt per `IOS-3.2` or within-5-min fast path), the application shall re-dial every previously active pane and re-mount its `TerminalView`. Per `PERSIST-4.1` the application does not persist scrollback itself; whatever the zmx daemon still has is what the user sees.
+**IOS-7.2** When the application foregrounds and the biometric gate is satisfied (either the ≥5 min path with re-prompt per `IOS-3.2` or the within-5-min fast path), the application shall re-fetch `/sessions` for each host whose panes were previously active and then re-dial every pane whose session name is still present in the response, re-mounting its `TerminalView`. Per `PERSIST-4.1` the application does not persist scrollback itself; whatever the zmx daemon still has is what the user sees.
 
-**IOS-7.3** On WebSocket failure (upgrade failure, error, or close frame not initiated by the app), the application shall display a per-pane "disconnected" banner with "Reconnect" and "Back to sessions" buttons. While the host view is visible, the application shall retry automatically with exponential backoff starting at 1 second and capped at 30 seconds. When the host view is not visible, no automatic retry shall occur.
+**IOS-7.3** When a previously active pane's session name is absent from the fresh `/sessions` response (e.g., the worktree was stopped on the Mac while the iOS app was backgrounded), the application shall mark that pane as `sessionEnded` with a non-retryable banner and shall not open a WebSocket for it. The banner shall offer "Back to sessions" as the only action.
+
+**IOS-7.4** On WebSocket failure (upgrade failure, read/write error, or close frame not initiated by the app) for a pane whose session name is still listed in `/sessions`, the application shall display a per-pane "disconnected" banner with "Reconnect" and "Back to sessions" buttons. While the host view is visible, the application shall retry automatically with exponential backoff: the delay starts at 1 second, doubles after each successive failure, and is capped at 30 seconds. Each successful connect resets the delay to 1 second. When the host view is not visible, no automatic retry shall occur.
 
 #### 18.8 Non-goals (recorded for future specs)
 
