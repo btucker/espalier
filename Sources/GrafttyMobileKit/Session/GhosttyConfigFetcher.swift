@@ -1,6 +1,33 @@
 #if canImport(UIKit)
 import Foundation
 
+/// Process-local cache of resolved Ghostty configs keyed by baseURL.
+/// Fetched once per host per app launch — navigating pane→pane on the
+/// same host doesn't re-issue the HTTP request or re-parse the file.
+@MainActor
+private final class GhosttyConfigCache {
+    static let shared = GhosttyConfigCache()
+    private var byBaseURL: [URL: String] = [:]
+    private var inflight: [URL: Task<String?, Never>] = [:]
+
+    func configuredText(for baseURL: URL) async -> String? {
+        if let cached = byBaseURL[baseURL] { return cached }
+        if let existing = inflight[baseURL] { return await existing.value }
+        let task = Task<String?, Never> { [baseURL] in
+            await GhosttyConfigFetcher.fetchUncached(baseURL: baseURL)
+        }
+        inflight[baseURL] = task
+        let result = await task.value
+        inflight[baseURL] = nil
+        if let result { byBaseURL[baseURL] = result }
+        return result
+    }
+
+    func invalidate(baseURL: URL) {
+        byBaseURL.removeValue(forKey: baseURL)
+    }
+}
+
 /// Pulls the Mac server's resolved Ghostty config text from
 /// `GET <baseURL>/ghostty-config` so TerminalController can render with
 /// the same fonts/colors as the desktop app.
@@ -16,7 +43,21 @@ public enum GhosttyConfigFetcher {
     /// line to scale. 13 matches upstream Ghostty's built-in default.
     private static let defaultMacFontSize: Double = 13
 
-    public static func fetch(
+    /// Cached fetch. Prefer this from UI — identical results across
+    /// multiple pane views on the same host, one network round-trip per
+    /// host per app launch.
+    @MainActor
+    public static func fetch(baseURL: URL) async -> String? {
+        await GhosttyConfigCache.shared.configuredText(for: baseURL)
+    }
+
+    /// Bypass the cache — useful for a "reload config" UI if we add one.
+    @MainActor
+    public static func invalidateCache(for baseURL: URL) {
+        GhosttyConfigCache.shared.invalidate(baseURL: baseURL)
+    }
+
+    static func fetchUncached(
         baseURL: URL,
         session: URLSession = .shared
     ) async -> String? {

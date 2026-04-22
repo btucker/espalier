@@ -34,11 +34,14 @@ public final class SessionClient {
             write: { data in box.onBytes?(data) },
             resize: { viewport in box.onResize?(viewport) }
         )
-        box.onBytes = { [weak self] data in
-            Task { @MainActor [weak self] in
-                guard let self, !self.stopped else { return }
-                try? await self.ws.send(.binary(data))
-            }
+        // These callbacks are declared @Sendable by libghostty-spm so
+        // they can be invoked from any actor — the MainActor hop has
+        // to happen here. For `onBytes` the payload is just pushed
+        // onto the WebSocket which is itself async-to-anywhere, so we
+        // skip the hop and capture `ws` directly: zero per-keystroke
+        // main-actor work.
+        box.onBytes = { [ws] data in
+            Task { try? await ws.send(.binary(data)) }
         }
         box.onResize = { [weak self] viewport in
             Task { @MainActor [weak self] in
@@ -79,22 +82,35 @@ public final class SessionClient {
 
     public func sendResize(cols: UInt16, rows: UInt16) {
         lastViewport = (cols, rows)
-        let payload = WebControlEnvelope.resize(cols: cols, rows: rows).encoded()
-        Task { @MainActor [weak self] in
-            guard let self, !self.stopped else { return }
-            try? await self.ws.send(.text(payload))
-        }
+        enqueueSend(.text(WebControlEnvelope.resize(cols: cols, rows: rows).encoded()))
     }
 
     /// Re-send the most recent viewport dimensions. zmx treats every
     /// resize as "this client wants the terminal at these dimensions",
     /// so calling this makes iOS the size-leader: other attached
     /// clients (the Mac pane) get rewrapped down to the iOS width.
-    /// No-op before any resize has landed (i.e. before the terminal
-    /// has laid out once).
+    /// Debounced to at most one send per second because taps can fire
+    /// rapidly (every tap during cursor-positioning, selection, etc.)
+    /// and each un-debounced call is a full Tailscale round-trip.
     public func reassertSize() {
         guard let v = lastViewport else { return }
+        let now = Date()
+        if let last = lastReassertAt, now.timeIntervalSince(last) < 1.0 {
+            return
+        }
+        lastReassertAt = now
         sendResize(cols: v.cols, rows: v.rows)
+    }
+
+    private var lastReassertAt: Date?
+
+    /// Fire-and-forget async send. Used from sync callbacks that run on
+    /// MainActor (libghostty's write/resize callbacks) so we don't wrap
+    /// every single keystroke in an extra `Task { @MainActor }`.
+    private func enqueueSend(_ frame: WebSocketFrame) {
+        Task { [ws] in
+            try? await ws.send(frame)
+        }
     }
 }
 #endif
