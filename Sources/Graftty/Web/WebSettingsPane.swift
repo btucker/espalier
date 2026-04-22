@@ -5,6 +5,8 @@ struct WebSettingsPane: View {
     @StateObject private var settings = WebAccessSettings.shared
     @EnvironmentObject private var controller: WebServerController
 
+    private static let tailscaleAdminDNSURL = URL(string: "https://login.tailscale.com/admin/dns")!
+
     var body: some View {
         Form {
             Section {
@@ -12,8 +14,9 @@ struct WebSettingsPane: View {
                 TextField("Port", value: $settings.port, format: WebPortFormat.noGrouping)
                     .frame(width: 80)
                 statusRow
-                if case .listening = controller.status, let url = controller.currentURL {
-                    baseURLRow(url: url)
+                if case let .listening(_, port) = controller.status,
+                   let host = controller.serverHostname {
+                    baseURLRow(url: WebURLComposer.baseURL(host: host, port: port))
                 }
             } header: {
                 Text("Web Access")
@@ -74,25 +77,9 @@ struct WebSettingsPane: View {
             case .tailscaleUnavailable:
                 Text("Tailscale unavailable").foregroundStyle(.orange)
             case .magicDNSDisabled:
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("MagicDNS must be enabled on your tailnet.")
-                        .foregroundStyle(.orange)
-                    Link(
-                        "Open Tailscale admin",
-                        destination: URL(string: "https://login.tailscale.com/admin/dns")!
-                    )
-                    .font(.caption)
-                }
+                adminConsoleError("MagicDNS must be enabled on your tailnet.")
             case .httpsCertsNotEnabled:
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("HTTPS certificates must be enabled on your tailnet.")
-                        .foregroundStyle(.orange)
-                    Link(
-                        "Open Tailscale admin",
-                        destination: URL(string: "https://login.tailscale.com/admin/dns")!
-                    )
-                    .font(.caption)
-                }
+                adminConsoleError("HTTPS certificates must be enabled on your tailnet.")
             case .certFetchFailed(let msg):
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Could not fetch certificate: \(msg)")
@@ -107,6 +94,14 @@ struct WebSettingsPane: View {
             case .error(let msg):
                 Text("Error: \(msg)").foregroundStyle(.red).lineLimit(2)
             }
+        }
+    }
+
+    @ViewBuilder private func adminConsoleError(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(message).foregroundStyle(.orange)
+            Link("Open Tailscale admin", destination: Self.tailscaleAdminDNSURL)
+                .font(.caption)
         }
     }
 }

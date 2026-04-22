@@ -1,7 +1,6 @@
 import Foundation
 import GrafttyKit
 import Combine
-import NIOSSL
 
 /// Owns the `WebServer` lifetime at app scope. Subscribes to
 /// `WebAccessSettings` and starts/stops the server accordingly.
@@ -9,7 +8,6 @@ import NIOSSL
 final class WebServerController: ObservableObject {
 
     @Published private(set) var status: WebServer.Status = .stopped
-    @Published private(set) var currentURL: String? = nil
     @Published private(set) var serverHostname: String? = nil
 
     private var server: WebServer?
@@ -55,7 +53,6 @@ final class WebServerController: ObservableObject {
         server?.stop()
         server = nil
         status = .stopped
-        currentURL = nil
         serverHostname = nil
         lastApplied = nil
     }
@@ -103,7 +100,6 @@ final class WebServerController: ObservableObject {
         server?.stop()
         server = nil
         status = .stopped
-        currentURL = nil
         serverHostname = nil
         guard desired.enabled else { return }
         // Validate port BEFORE reaching into Tailscale / NIO. An
@@ -132,11 +128,6 @@ final class WebServerController: ObservableObject {
                 guard let whois = try? await api.whois(peerIP: peerIP) else { return false }
                 return whois.loginName == ownerLogin
             }
-            // Drops the prior `.allowingLoopback()` wrapper — 127.0.0.1 is
-            // no longer bound (WEB-1.1), so there's no loopback peer to
-            // bypass. Local connections arrive via the MagicDNS name
-            // (resolved locally by Tailscale's DNS proxy) and come in as
-            // normal Tailscale peers, passing the same-user whois check.
 
             let pair: (cert: Data, key: Data)
             do {
@@ -150,17 +141,18 @@ final class WebServerController: ObservableObject {
                 lastApplied = nil
                 return
             }
-            let tlsContext: NIOSSLContext
+            let provider: WebTLSContextProvider
             do {
-                tlsContext = try WebTLSCertFetcher.buildContext(
-                    certPEM: pair.cert, keyPEM: pair.key
+                provider = WebTLSContextProvider(
+                    initial: try WebTLSCertFetcher.buildContext(
+                        certPEM: pair.cert, keyPEM: pair.key
+                    )
                 )
             } catch {
                 status = .certFetchFailed("\(error)")
                 lastApplied = nil
                 return
             }
-            let provider = WebTLSContextProvider(initial: tlsContext)
             let sessionsProvider = self.sessionsProvider ?? { [] }
             let repos = reposProvider ?? { [] }
             let creator = worktreeCreator
@@ -180,7 +172,6 @@ final class WebServerController: ObservableObject {
             try s.start()
             server = s
             status = s.status
-            currentURL = WebURLComposer.baseURL(host: fqdn, port: desired.port)
             self.serverHostname = fqdn
 
             // Kick off the 24h renewal loop. Fresh bytes were just fetched

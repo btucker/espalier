@@ -173,19 +173,7 @@ struct WebServerAuthTests {
         // Swap in a freshly-built context for the same cert bytes and
         // confirm a new request still works (old context is released,
         // new context is picked up on the next accept).
-        let certURL = try #require(
-            Bundle.module.url(forResource: "test-tls-cert", withExtension: "pem",
-                              subdirectory: "Fixtures")
-        )
-        let keyURL = try #require(
-            Bundle.module.url(forResource: "test-tls-key", withExtension: "pem",
-                              subdirectory: "Fixtures")
-        )
-        let newCtx = try WebTLSCertFetcher.buildContext(
-            certPEM: try Data(contentsOf: certURL),
-            keyPEM: try Data(contentsOf: keyURL)
-        )
-        provider.swap(newCtx)
+        provider.swap(try makeTestTLSContext())
         let (_, r2) = try await session.data(
             from: URL(string: "https://localhost:\(port)/")!
         )

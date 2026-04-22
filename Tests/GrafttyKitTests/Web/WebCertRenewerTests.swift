@@ -6,23 +6,9 @@ import NIOSSL
 @Suite("WebCertRenewer")
 struct WebCertRenewerTests {
 
-    private func ctx() throws -> NIOSSLContext {
-        let certURL = try #require(
-            Bundle.module.url(forResource: "test-tls-cert", withExtension: "pem",
-                              subdirectory: "Fixtures")
-        )
-        let keyURL = try #require(
-            Bundle.module.url(forResource: "test-tls-key", withExtension: "pem",
-                              subdirectory: "Fixtures")
-        )
-        let certPEM = try Data(contentsOf: certURL)
-        let keyPEM = try Data(contentsOf: keyURL)
-        return try WebTLSCertFetcher.buildContext(certPEM: certPEM, keyPEM: keyPEM)
-    }
-
     @Test func renewNow_swapsContext() async throws {
-        let initial = try ctx()
-        let replacement = try ctx()
+        let initial = try makeTestTLSContext()
+        let replacement = try makeTestTLSContext()
         let provider = WebTLSContextProvider(initial: initial)
         let renewer = WebCertRenewer(
             provider: provider,
@@ -34,7 +20,7 @@ struct WebCertRenewerTests {
     }
 
     @Test func renewNow_swallowsFetchError() async throws {
-        let initial = try ctx()
+        let initial = try makeTestTLSContext()
         let provider = WebTLSContextProvider(initial: initial)
         struct FetchFailed: Error {}
         let renewer = WebCertRenewer(
@@ -49,7 +35,7 @@ struct WebCertRenewerTests {
     }
 
     @Test func startStop_doesNotLeakTask() async throws {
-        let provider = WebTLSContextProvider(initial: try ctx())
+        let provider = WebTLSContextProvider(initial: try makeTestTLSContext())
         let renewer = WebCertRenewer(
             provider: provider,
             interval: 0.01,

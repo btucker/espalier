@@ -4,13 +4,14 @@
 
 import Foundation
 import Testing
+import NIOSSL
 @testable import GrafttyKit
 
 /// Shared test helpers for HTTPS web-server tests.
 /// Used across WebServerAuthTests, WebServerPortInUseTests,
 /// WebServerIntegrationTests, and WebServerWorktreeEndpointTests.
 
-func makeTestTLSProvider() throws -> WebTLSContextProvider {
+func makeTestTLSContext() throws -> NIOSSLContext {
     let certURL = try #require(
         Bundle.module.url(forResource: "test-tls-cert", withExtension: "pem",
                           subdirectory: "Fixtures")
@@ -21,8 +22,11 @@ func makeTestTLSProvider() throws -> WebTLSContextProvider {
     )
     let certPEM = try Data(contentsOf: certURL)
     let keyPEM = try Data(contentsOf: keyURL)
-    let ctx = try WebTLSCertFetcher.buildContext(certPEM: certPEM, keyPEM: keyPEM)
-    return WebTLSContextProvider(initial: ctx)
+    return try WebTLSCertFetcher.buildContext(certPEM: certPEM, keyPEM: keyPEM)
+}
+
+func makeTestTLSProvider() throws -> WebTLSContextProvider {
+    WebTLSContextProvider(initial: try makeTestTLSContext())
 }
 
 /// URLSession delegate that trusts any server cert. Used only in
