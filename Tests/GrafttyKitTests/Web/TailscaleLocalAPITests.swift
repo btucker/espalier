@@ -40,6 +40,20 @@ struct TailscaleLocalAPIParsingTests {
             _ = try TailscaleLocalAPI.parseStatus(data)
         }
     }
+
+    @Test func parseStatus_extractsDNSNameStrippingTrailingDot() throws {
+        let data = try fixture("tailscale-status")
+        let status = try TailscaleLocalAPI.parseStatus(data)
+        #expect(status.dnsName == "macbook.tail-abc12.ts.net")
+    }
+
+    @Test func parseStatus_missingDNSNameReturnsNil() throws {
+        let raw = #"""
+        {"Self":{"UserID":1,"TailscaleIPs":["100.64.0.5"]},"User":{"1":{"LoginName":"a@b"}}}
+        """#
+        let status = try TailscaleLocalAPI.parseStatus(Data(raw.utf8))
+        #expect(status.dnsName == nil)
+    }
 }
 
 @Suite("TailscaleLocalAPI — autoDetected transport selection")

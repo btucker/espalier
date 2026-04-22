@@ -40,6 +40,11 @@ public struct TailscaleLocalAPI {
     public struct Status: Equatable {
         public let loginName: String
         public let tailscaleIPs: [String]
+        /// The machine's MagicDNS fully-qualified name, trailing dot
+        /// stripped. `nil` when the tailnet has MagicDNS disabled or
+        /// the response omits the field. Callers that need HTTPS
+        /// cert provisioning treat `nil` as fatal (WEB-8.1).
+        public let dnsName: String?
     }
 
     public struct Whois: Equatable {
@@ -152,6 +157,7 @@ public struct TailscaleLocalAPI {
             struct Me: Decodable {
                 let UserID: Int?
                 let TailscaleIPs: [String]?
+                let DNSName: String?
             }
             struct UserProfile: Decodable {
                 let LoginName: String
@@ -168,9 +174,14 @@ public struct TailscaleLocalAPI {
         else {
             throw Error.malformedResponse
         }
+        let trimmedDNS = me.DNSName
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
+            .flatMap { $0.isEmpty ? nil : $0 }
         return Status(
             loginName: profile.LoginName,
-            tailscaleIPs: me.TailscaleIPs ?? []
+            tailscaleIPs: me.TailscaleIPs ?? [],
+            dnsName: trimmedDNS
         )
     }
 

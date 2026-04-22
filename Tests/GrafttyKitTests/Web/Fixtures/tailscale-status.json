@@ -1,7 +1,8 @@
 {
     "Self": {
         "UserID": 123456,
-        "TailscaleIPs": ["100.64.0.5", "fd7a:115c:a1e0::5"]
+        "TailscaleIPs": ["100.64.0.5", "fd7a:115c:a1e0::5"],
+        "DNSName": "macbook.tail-abc12.ts.net."
     },
     "User": {
         "123456": {
