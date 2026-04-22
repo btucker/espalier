@@ -374,12 +374,14 @@ public final class WebServer {
                 let loop = context.eventLoop
                 let promise = loop.makePromise(of: Bool.self)
                 let auth = self.auth
-                loop.execute {
-                    Task {
-                        let allowed = await auth.isAllowed(peer)
-                        promise.succeed(allowed)
-                    }
-                }
+                // Register `whenComplete` *before* launching the Task so
+                // a very-fast auth check can't succeed the promise before
+                // the completion handler is hooked. Launch the Task
+                // directly — `promise.succeed` hops to the event loop
+                // internally, so wrapping the Task in
+                // `eventLoop.execute` is redundant and turned out to
+                // wedge on CI (macos-26) when nested bridges ran
+                // back-to-back (auth → endpoint handler → respond).
                 promise.futureResult.whenComplete { [weak self] result in
                     guard let self else { return }
                     let allowed = (try? result.get()) ?? false
@@ -397,6 +399,10 @@ public final class WebServer {
                     }
                     self.serveStatic(context: context, head: head, body: body)
                 }
+                Task {
+                    let allowed = await auth.isAllowed(peer)
+                    promise.succeed(allowed)
+                }
             }
         }
 
@@ -411,34 +417,26 @@ public final class WebServer {
             // WEB-5.4: session list endpoint for the client's minimal picker.
             if path == "/sessions" {
                 let provider = config.sessionsProvider
-                let eventLoop = context.eventLoop
-                let promise = eventLoop.makePromise(of: [SessionInfo].self)
-                eventLoop.execute {
-                    Task {
-                        let sessions = await provider()
-                        promise.succeed(sessions)
-                    }
-                }
+                let promise = context.eventLoop.makePromise(of: [SessionInfo].self)
                 promise.futureResult.whenComplete { result in
                     let sessions = (try? result.get()) ?? []
                     Self.respondEncodable(context: context, items: sessions)
+                }
+                Task {
+                    promise.succeed(await provider())
                 }
                 return
             }
             // WEB-7.1: repo list for the "Add Worktree" picker.
             if path == "/repos" {
                 let provider = config.reposProvider
-                let eventLoop = context.eventLoop
-                let promise = eventLoop.makePromise(of: [RepoInfo].self)
-                eventLoop.execute {
-                    Task {
-                        let repos = await provider()
-                        promise.succeed(repos)
-                    }
-                }
+                let promise = context.eventLoop.makePromise(of: [RepoInfo].self)
                 promise.futureResult.whenComplete { result in
                     let repos = (try? result.get()) ?? []
                     Self.respondEncodable(context: context, items: repos)
+                }
+                Task {
+                    promise.succeed(await provider())
                 }
                 return
             }
@@ -515,14 +513,7 @@ public final class WebServer {
                 return
             }
 
-            let eventLoop = context.eventLoop
-            let promise = eventLoop.makePromise(of: CreateWorktreeOutcome.self)
-            eventLoop.execute {
-                Task {
-                    let outcome = await creator(decoded)
-                    promise.succeed(outcome)
-                }
-            }
+            let promise = context.eventLoop.makePromise(of: CreateWorktreeOutcome.self)
             promise.futureResult.whenComplete { result in
                 let outcome = (try? result.get()) ?? .internalFailure("creator dispatch failed")
                 switch outcome {
@@ -549,6 +540,9 @@ public final class WebServer {
                 case .internalFailure(let msg):
                     Self.respondJSON(context: context, status: .internalServerError, error: msg)
                 }
+            }
+            Task {
+                promise.succeed(await creator(decoded))
             }
         }
 
