@@ -241,6 +241,33 @@ struct TailscaleLocalAPICertParsingTests {
         }
     }
 
+    /// Regression: Tailscale (verified against 1.96.2) emits the PRIVATE
+    /// KEY block BEFORE the cert chain in `/localapi/v0/cert/<fqdn>?type=pair`.
+    /// The earlier implementation split on the first PRIVATE KEY marker
+    /// and assigned everything _before_ it to `certText`, which was
+    /// empty under real Tailscale responses and surfaced as a spurious
+    /// `.malformedResponse` at "Enable web access". WEB-8.2.
+    @Test func parseCertPair_handlesKeyBeforeCertOrdering() throws {
+        let keyFirst = """
+        -----BEGIN EC PRIVATE KEY-----
+        MHcCAQEEICqs/E2oiX3QSpUN+F2Vmv3yQLxCpYGIfchcp7W2I+Bn
+        -----END EC PRIVATE KEY-----
+        -----BEGIN CERTIFICATE-----
+        MIIBjDCCATGgAwIBAgIUKqUwaLSqXnvi7NnqRF/IuIiNUgI
+        -----END CERTIFICATE-----
+
+        """
+        let pair = try TailscaleLocalAPI.parseCertPair(Data(keyFirst.utf8))
+        let certOut = String(data: pair.cert, encoding: .utf8) ?? ""
+        let keyOut = String(data: pair.key, encoding: .utf8) ?? ""
+        #expect(certOut.contains("-----BEGIN CERTIFICATE-----"))
+        #expect(certOut.contains("-----END CERTIFICATE-----"))
+        #expect(!certOut.contains("PRIVATE KEY"))
+        #expect(keyOut.contains("-----BEGIN EC PRIVATE KEY-----"))
+        #expect(keyOut.contains("-----END EC PRIVATE KEY-----"))
+        #expect(!keyOut.contains("CERTIFICATE"))
+    }
+
     @Test func classifyCertError_recognisesHTTPSDisabled() throws {
         let body = try fixture("tailscale-cert-disabled", ext: "json")
         #expect(TailscaleLocalAPI.isHTTPSCertsDisabled(httpStatus: 500, body: body))
