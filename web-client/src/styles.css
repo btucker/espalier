@@ -16,6 +16,13 @@ html, body, #root, #app {
 #term {
   width: 100vw;
   height: 100vh;
+  /* Mobile: don't let the browser interpret single-finger drag as
+     page-scroll/pan/zoom; our touch handler owns the gesture and
+     feeds it to the terminal's scrollback. */
+  touch-action: none;
+  /* Disable overscroll so iOS's rubber-band doesn't visually detach
+     the terminal from the viewport during scrollback drags. */
+  overscroll-behavior: none;
 }
 
 #status {
