@@ -98,6 +98,12 @@ public final class WebServer {
         /// native Mac app. Default is empty — clients see an empty body
         /// and fall back to libghostty-spm's defaults.
         public let ghosttyConfigProvider: @Sendable () async -> String
+        /// Source for `GET /worktrees/panes`. Returns one entry per
+        /// running worktree with the full pane split-tree + titles, so
+        /// a mobile client can render a worktree picker and the
+        /// faithful pane layout inside each. Default returns an empty
+        /// list.
+        public let worktreePanesProvider: @Sendable () async -> [WorktreePanes]
 
         public init(
             port: Int,
@@ -106,7 +112,8 @@ public final class WebServer {
             sessionsProvider: @escaping @Sendable () async -> [SessionInfo] = { [] },
             reposProvider: @escaping @Sendable () async -> [RepoInfo] = { [] },
             worktreeCreator: (@Sendable (CreateWorktreeRequest) async -> CreateWorktreeOutcome)? = nil,
-            ghosttyConfigProvider: @escaping @Sendable () async -> String = { "" }
+            ghosttyConfigProvider: @escaping @Sendable () async -> String = { "" },
+            worktreePanesProvider: @escaping @Sendable () async -> [WorktreePanes] = { [] }
         ) {
             self.port = port
             self.zmxExecutable = zmxExecutable
@@ -115,6 +122,7 @@ public final class WebServer {
             self.reposProvider = reposProvider
             self.worktreeCreator = worktreeCreator
             self.ghosttyConfigProvider = ghosttyConfigProvider
+            self.worktreePanesProvider = worktreePanesProvider
         }
 
         /// Accepts the range NIO's `bootstrap.bind(host:port:)` will accept
@@ -436,6 +444,18 @@ public final class WebServer {
                 Task {
                     promise.succeed(await provider())
                 }
+                return
+            }
+            // IOS-4.10: worktrees + split-faithful pane trees for the
+            // mobile client's worktree → pane drilldown.
+            if path == "/worktrees/panes" {
+                let provider = config.worktreePanesProvider
+                let promise = context.eventLoop.makePromise(of: [WorktreePanes].self)
+                promise.futureResult.whenComplete { result in
+                    let list = (try? result.get()) ?? []
+                    Self.respondEncodable(context: context, items: list)
+                }
+                Task { promise.succeed(await provider()) }
                 return
             }
             // IOS-4.7: the Mac's resolved Ghostty config, so a remote

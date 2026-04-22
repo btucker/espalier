@@ -23,6 +23,7 @@ final class WebServerController: ObservableObject {
     /// `terminalManager`'s session-name function exist. Nil before
     /// injection (default-empty provider is baked into `WebServer.Config`).
     private var sessionsProvider: (@Sendable () async -> [SessionInfo])?
+    private var worktreePanesProvider: (@Sendable () async -> [WorktreePanes])?
     /// Supplies `GET /repos` (`WEB-7.1`). Same injection timing as
     /// `sessionsProvider` — both read from `AppState`.
     private var reposProvider: (@Sendable () async -> [WebServer.RepoInfo])?
@@ -76,6 +77,16 @@ final class WebServerController: ObservableObject {
         _ provider: @escaping @Sendable () async -> [WebServer.RepoInfo]
     ) {
         reposProvider = provider
+        lastApplied = nil
+        reconcile()
+    }
+
+    /// Install the provider used for `GET /worktrees/panes`. Same
+    /// contract as `setSessionsProvider`.
+    func setWorktreePanesProvider(
+        _ provider: @escaping @Sendable () async -> [WorktreePanes]
+    ) {
+        worktreePanesProvider = provider
         lastApplied = nil
         reconcile()
     }
@@ -165,7 +176,8 @@ final class WebServerController: ObservableObject {
                     sessionsProvider: sessionsProvider,
                     reposProvider: repos,
                     worktreeCreator: creator,
-                    ghosttyConfigProvider: { GhosttyConfigReader.resolvedConfig() }
+                    ghosttyConfigProvider: { GhosttyConfigReader.resolvedConfig() },
+                    worktreePanesProvider: worktreePanesProvider ?? { [] }
                 ),
                 auth: auth,
                 bindAddresses: bind,

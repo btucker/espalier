@@ -499,6 +499,30 @@ struct GrafttyApp: App {
             }
         }
 
+        // IOS-4.10: per-worktree pane trees + titles for the mobile
+        // client's worktree→pane drilldown. Only running worktrees
+        // with at least one pane are returned.
+        let terminalManager = tm
+        webController.setWorktreePanesProvider {
+            await MainActor.run { () -> [WorktreePanes] in
+                var out: [WorktreePanes] = []
+                for repo in appStateBinding.wrappedValue.repos {
+                    let siblingPaths = repo.worktrees.map(\.path)
+                    for wt in repo.worktrees where wt.state == .running {
+                        guard let root = wt.splitTree.root else { continue }
+                        let layout = paneLayoutNode(from: root, titles: terminalManager.titles)
+                        out.append(WorktreePanes(
+                            path: wt.path,
+                            displayName: wt.displayName(amongSiblingPaths: siblingPaths),
+                            repoDisplayName: repo.displayName,
+                            layout: layout
+                        ))
+                    }
+                }
+                return out
+            }
+        }
+
         // WEB-7.1: feed the web server the repo list for the "Add
         // Worktree" picker. Mirrors the native sidebar's top-level
         // repos.
@@ -2088,5 +2112,30 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
             store.refresh(worktreePath: worktreePath, repoPath: repoPath, branch: match.branch)
             prStore.branchDidChange(worktreePath: worktreePath, repoPath: repoPath, branch: match.branch)
         }
+    }
+}
+
+/// Convert the Mac-side `SplitTree.Node` into the wire-format
+/// `PaneLayoutNode`. Leaves carry the ZMX session name + the pane's
+/// current title (or an empty string if libghostty hasn't emitted one
+/// yet). Splits preserve direction + ratio + children.
+@MainActor
+private func paneLayoutNode(
+    from node: SplitTree.Node,
+    titles: [TerminalID: String]
+) -> PaneLayoutNode {
+    switch node {
+    case let .leaf(id):
+        return .leaf(
+            sessionName: ZmxLauncher.sessionName(for: id.id),
+            title: titles[id] ?? ""
+        )
+    case let .split(s):
+        return .split(
+            direction: s.direction == .horizontal ? .horizontal : .vertical,
+            ratio: s.ratio,
+            left: paneLayoutNode(from: s.left, titles: titles),
+            right: paneLayoutNode(from: s.right, titles: titles)
+        )
     }
 }

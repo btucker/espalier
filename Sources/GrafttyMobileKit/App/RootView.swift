@@ -17,10 +17,24 @@ public struct RootView: View {
             NavigationStack(path: $navigationPath) {
                 HostPickerView(store: hostStore)
                     .navigationDestination(for: Host.self) { host in
-                        HostDetailView(host: host, navigationPath: $navigationPath)
+                        WorktreePickerView(host: host) { wt in
+                            navigationPath.append(WorktreeStep(host: host, worktree: wt))
+                        }
                     }
-                    .navigationDestination(for: PaneStep.self) { step in
-                        PaneGridView(step: step, navigationPath: $navigationPath)
+                    .navigationDestination(for: WorktreeStep.self) { step in
+                        WorktreeDetailView(
+                            host: step.host,
+                            worktree: step.worktree
+                        ) { sessionName in
+                            navigationPath.append(SessionStep(
+                                host: step.host,
+                                sessionName: sessionName,
+                                title: step.worktree.layout?.title(for: sessionName) ?? sessionName
+                            ))
+                        }
+                    }
+                    .navigationDestination(for: SessionStep.self) { step in
+                        SingleSessionView(step: step, navigationPath: $navigationPath)
                     }
             }
             if gate.state == .locked {
@@ -53,145 +67,100 @@ public struct RootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
     }
-}
 
-/// Identifies the "you opened one of these sessions as a pane" navigation
-/// level. Carries both the host and the initial session so `PaneGridView`
-/// can open it without re-asking the picker.
-struct PaneStep: Hashable {
-    let host: Host
-    let initialSession: String
-}
-
-/// Owns a HostController + session clients scoped to a single host. When
-/// SwiftUI pushes this destination, it is created fresh; when the user
-/// pops it (or navigates to a different host), it is deallocated and its
-/// clients stop. That lifecycle replaces the old "single activeController
-/// at the RootView level" which caused render-time state mutation and an
-/// infinite re-render loop when tapping a host.
-struct HostDetailView: View {
-    let host: Host
-    @Binding var navigationPath: NavigationPath
-    @State private var controller: HostController
-
-    init(host: Host, navigationPath: Binding<NavigationPath>) {
-        self.host = host
-        self._navigationPath = navigationPath
-        self._controller = State(initialValue: HostController(
-            host: host,
-            fetcher: { [host] in
-                (try? await SessionsFetcher.fetch(baseURL: host.baseURL)) ?? []
-            }
-        ))
-    }
-
-    var body: some View {
-        SessionPickerView(controller: controller) { info in
-            navigationPath.append(PaneStep(host: host, initialSession: info.name))
-        }
-        .task(id: host.id) {
-            // Pull the Mac's resolved Ghostty config once per host visit
-            // so TerminalController renders panes with the same fonts,
-            // theme, and colors as the desktop app. Silently falls back
-            // to libghostty-spm's defaults on 404/network error.
-            if let text = await GhosttyConfigFetcher.fetch(baseURL: host.baseURL) {
-                TerminalController.shared.updateConfigSource(.generated(text))
-            }
-        }
-    }
-}
-
-/// Owns the pane grid for one (host, initialSession). Pane clients are
-/// created as panes open and torn down when this view goes away.
-struct PaneGridView: View {
-    let step: PaneStep
-    @Binding var navigationPath: NavigationPath
-
-    @State private var controller: HostController
-    @State private var sessionClients: [UUID: SessionClient] = [:]
-    @State private var activePaneID: UUID?
-    @State private var isKeyboardVisible: Bool = false
-
-    init(step: PaneStep, navigationPath: Binding<NavigationPath>) {
-        self.step = step
-        self._navigationPath = navigationPath
-        self._controller = State(initialValue: HostController(
-            host: step.host,
-            fetcher: { [host = step.host] in
-                (try? await SessionsFetcher.fetch(baseURL: host.baseURL)) ?? []
-            }
-        ))
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SplitContainerView(panes: controller.panes) { id in
-                sessionClients[id]?.session
-            }
-            SessionSwitcherView(controller: controller, activePaneID: $activePaneID)
-        }
-        .ignoresSafeArea(edges: .top)
-        .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .bottomTrailing) {
-            if isKeyboardVisible {
-                Button {
-                    UIApplication.shared.sendAction(
-                        #selector(UIResponder.resignFirstResponder),
-                        to: nil, from: nil, for: nil
-                    )
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .font(.title2)
-                        .foregroundStyle(.primary)
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .shadow(radius: 1)
-                }
-                .padding(.trailing, 12)
-                .padding(.bottom, 12)
-                .accessibilityLabel("Hide keyboard")
-                .transition(.opacity.combined(with: .scale))
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: isKeyboardVisible)
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillShowNotification
-        )) { _ in isKeyboardVisible = true }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillHideNotification
-        )) { _ in isKeyboardVisible = false }
-        .task {
-            // Opening the initial pane on `.task` rather than `init` so the
-            // SessionClient's start() and its spawned Task run after the
-            // view is actually on screen.
-            guard controller.panes.isEmpty else { return }
-            openPane(sessionName: step.initialSession)
-        }
-        .onDisappear {
-            for c in sessionClients.values { c.stop() }
-            sessionClients.removeAll()
-        }
-    }
-
-    @MainActor
-    private func openPane(sessionName: String) {
-        let wsURL = RootView.makeWebSocketURL(base: step.host.baseURL, session: sessionName)
-        let ws = URLSessionWebSocketClient(url: wsURL)
-        let client = SessionClient(sessionName: sessionName, webSocket: ws)
-        client.start()
-        let pane = controller.openPane(sessionName: sessionName)
-        sessionClients[pane.id] = client
-        activePaneID = pane.id
-    }
-}
-
-extension RootView {
     static func makeWebSocketURL(base: URL, session: String) -> URL {
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false) ?? URLComponents()
         components.scheme = (base.scheme?.lowercased() == "https") ? "wss" : "ws"
         components.path = "/ws"
         components.queryItems = [URLQueryItem(name: "session", value: session)]
         return components.url ?? base
+    }
+}
+
+/// Second-level nav: picked a worktree, now show its pane tree.
+struct WorktreeStep: Hashable {
+    let host: Host
+    let worktree: WorktreePanes
+}
+
+/// Third-level nav: picked a pane, now show its terminal fullscreen.
+struct SessionStep: Hashable {
+    let host: Host
+    let sessionName: String
+    let title: String
+}
+
+/// Fullscreen terminal view for one session. Owns the WebSocket and
+/// InMemoryTerminalSession for its lifetime; both are torn down when
+/// the view pops from the stack.
+struct SingleSessionView: View {
+    let step: SessionStep
+    @Binding var navigationPath: NavigationPath
+
+    @State private var client: SessionClient
+    @State private var isKeyboardVisible: Bool = false
+
+    init(step: SessionStep, navigationPath: Binding<NavigationPath>) {
+        self.step = step
+        self._navigationPath = navigationPath
+        let wsURL = RootView.makeWebSocketURL(base: step.host.baseURL, session: step.sessionName)
+        let ws = URLSessionWebSocketClient(url: wsURL)
+        self._client = State(initialValue: SessionClient(sessionName: step.sessionName, webSocket: ws))
+    }
+
+    var body: some View {
+        TerminalPaneView(session: client.session)
+            .ignoresSafeArea(edges: .top)
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .bottomTrailing) {
+                if isKeyboardVisible {
+                    Button {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil, from: nil, for: nil
+                        )
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.title2)
+                            .foregroundStyle(.primary)
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .shadow(radius: 1)
+                    }
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
+                    .accessibilityLabel("Hide keyboard")
+                    .transition(.opacity.combined(with: .scale))
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isKeyboardVisible)
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillShowNotification
+            )) { _ in isKeyboardVisible = true }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification
+            )) { _ in isKeyboardVisible = false }
+            .task { client.start() }
+            .task(id: step.host.id) {
+                if let text = await GhosttyConfigFetcher.fetch(baseURL: step.host.baseURL) {
+                    TerminalController.shared.updateConfigSource(.generated(text))
+                }
+            }
+            .onDisappear { client.stop() }
+    }
+}
+
+extension PaneLayoutNode {
+    /// Walk the tree to find the title of the leaf whose `sessionName`
+    /// matches. Used by SessionStep construction so the terminal view
+    /// shows a human title (falls back to session name on miss).
+    func title(for sessionName: String) -> String? {
+        switch self {
+        case let .leaf(name, title):
+            return name == sessionName ? title : nil
+        case let .split(_, _, left, right):
+            return left.title(for: sessionName) ?? right.title(for: sessionName)
+        }
     }
 }
 #endif
