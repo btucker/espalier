@@ -8,9 +8,10 @@ import Combine
 final class WebServerController: ObservableObject {
 
     @Published private(set) var status: WebServer.Status = .stopped
-    @Published private(set) var currentURL: String? = nil
+    @Published private(set) var serverHostname: String? = nil
 
     private var server: WebServer?
+    private var renewer: WebCertRenewer?
     private let settings: WebAccessSettings
     private let zmxExecutable: URL
     private let zmxDir: URL
@@ -47,10 +48,12 @@ final class WebServerController: ObservableObject {
     }
 
     func stop() {
+        renewer?.stop()
+        renewer = nil
         server?.stop()
         server = nil
         status = .stopped
-        currentURL = nil
+        serverHostname = nil
         lastApplied = nil
     }
 
@@ -92,10 +95,12 @@ final class WebServerController: ObservableObject {
         if let last = lastApplied, last == desired { return }
         lastApplied = desired
 
+        renewer?.stop()
+        renewer = nil
         server?.stop()
         server = nil
         status = .stopped
-        currentURL = nil
+        serverHostname = nil
         guard desired.enabled else { return }
         // Validate port BEFORE reaching into Tailscale / NIO. An
         // out-of-range `WebAccessSettings.port` (e.g. the user typed
@@ -109,14 +114,46 @@ final class WebServerController: ObservableObject {
         do {
             let api = try TailscaleLocalAPI.autoDetected()
             let tailscaleStatus = try runBlocking { try await api.status() }
-            var bind = tailscaleStatus.tailscaleIPs
-            bind.append("127.0.0.1")
+            guard let fqdn = tailscaleStatus.dnsName else {
+                status = .magicDNSDisabled
+                // Clear lastApplied so the next settings pulse re-probes;
+                // otherwise the user has to toggle web access off + on to
+                // recover after enabling MagicDNS in the admin console.
+                lastApplied = nil
+                return
+            }
+            let bind = tailscaleStatus.tailscaleIPs
             let ownerLogin = tailscaleStatus.loginName
             let auth = WebServer.AuthPolicy { [api] peerIP in
                 guard let whois = try? await api.whois(peerIP: peerIP) else { return false }
                 return whois.loginName == ownerLogin
-            }.allowingLoopback()
-            let provider = sessionsProvider ?? { [] }
+            }
+
+            let pair: (cert: Data, key: Data)
+            do {
+                pair = try runBlocking { try await api.certPair(for: fqdn) }
+            } catch TailscaleLocalAPI.Error.httpsCertsDisabled {
+                status = .httpsCertsNotEnabled
+                lastApplied = nil
+                return
+            } catch {
+                status = .certFetchFailed("\(error)")
+                lastApplied = nil
+                return
+            }
+            let provider: WebTLSContextProvider
+            do {
+                provider = WebTLSContextProvider(
+                    initial: try WebTLSCertFetcher.buildContext(
+                        certPEM: pair.cert, keyPEM: pair.key
+                    )
+                )
+            } catch {
+                status = .certFetchFailed("\(error)")
+                lastApplied = nil
+                return
+            }
+            let sessionsProvider = self.sessionsProvider ?? { [] }
             let repos = reposProvider ?? { [] }
             let creator = worktreeCreator
             let s = WebServer(
@@ -124,21 +161,39 @@ final class WebServerController: ObservableObject {
                     port: desired.port,
                     zmxExecutable: zmxExecutable,
                     zmxDir: zmxDir,
-                    sessionsProvider: provider,
+                    sessionsProvider: sessionsProvider,
                     reposProvider: repos,
                     worktreeCreator: creator
                 ),
                 auth: auth,
-                bindAddresses: bind
+                bindAddresses: bind,
+                tlsProvider: provider
             )
             try s.start()
             server = s
             status = s.status
-            if let host = WebURLComposer.chooseHost(from: tailscaleStatus.tailscaleIPs) {
-                currentURL = WebURLComposer.baseURL(host: host, port: desired.port)
-            }
+            self.serverHostname = fqdn
+
+            // Kick off the 24h renewal loop. Fresh bytes were just fetched
+            // above — no need for an immediate renewNow here. Re-auto-detect
+            // the LocalAPI transport inside the closure so a Tailscale
+            // restart that rotates the socket path / TCP port doesn't
+            // silently freeze renewal against a stale endpoint.
+            let renewer = WebCertRenewer(
+                provider: provider,
+                interval: 24 * 60 * 60,
+                fetch: {
+                    let api = try TailscaleLocalAPI.autoDetected()
+                    let pair = try await api.certPair(for: fqdn)
+                    return try WebTLSCertFetcher.buildContext(
+                        certPEM: pair.cert, keyPEM: pair.key
+                    )
+                }
+            )
+            renewer.start()
+            self.renewer = renewer
         } catch TailscaleLocalAPI.Error.socketUnreachable {
-            status = .disabledNoTailscale
+            status = .tailscaleUnavailable
         } catch {
             // `WEB-1.11`: classify via the shared helper so the
             // Settings pane renders "Port in use" instead of the raw

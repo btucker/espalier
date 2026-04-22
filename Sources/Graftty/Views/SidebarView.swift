@@ -247,10 +247,8 @@ struct SidebarView: View {
             currentWorktree: currentWorktree,
             currentRepo: currentRepo
         )
-        if case let .listening(addresses, port) = webController.status,
-           let host = WebURLComposer.chooseHost(
-               from: addresses.filter { $0 != "127.0.0.1" }
-           ) {
+        if case let .listening(_, port) = webController.status,
+           let host = webController.serverHostname {
             Divider()
             Button("Copy web URL") {
                 Pasteboard.copy(WebURLComposer.url(
