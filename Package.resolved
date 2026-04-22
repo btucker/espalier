@@ -1,5 +1,5 @@
 {
-  "originHash" : "17c1d93d071c4bce785e97818c8e426292ac426cc7761088971d598415e37026",
+  "originHash" : "64dd1de790ae8a3806540499145623aa655ced6f954faef29496d2ee4ca1bc45",
   "pins" : [
     {
       "identity" : "libghostty-spm",
@@ -53,6 +53,15 @@
       "state" : {
         "revision" : "cd6710454f25733900e133c6caf5188952763c36",
         "version" : "2.98.0"
+      }
+    },
+    {
+      "identity" : "swift-nio-ssl",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio-ssl.git",
+      "state" : {
+        "revision" : "3f337058ccd7243c4cac7911477d8ad4c598d4da",
+        "version" : "2.37.0"
       }
     },
     {
