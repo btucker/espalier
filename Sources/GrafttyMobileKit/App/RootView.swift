@@ -125,6 +125,15 @@ struct SingleSessionView: View {
             // bounds, so the unsafe areas pick up the terminal's own
             // background rather than the SwiftUI default.
             .ignoresSafeArea()
+            // Every tap on the terminal re-asserts this client as the
+            // zmx size-leader — zmx rewraps the shared session to match
+            // the iOS viewport, so the Mac pane narrows to our width
+            // whenever a remote user touches the iOS screen. Uses
+            // .simultaneousGesture so libghostty's own gesture handlers
+            // (tap-to-position-cursor, selection) continue to run.
+            .simultaneousGesture(
+                TapGesture().onEnded { _ in client.reassertSize() }
+            )
             .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .bottomTrailing) {
                 keyboardButton

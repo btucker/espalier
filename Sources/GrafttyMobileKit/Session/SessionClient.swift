@@ -15,6 +15,11 @@ public final class SessionClient {
     private let ws: WebSocketClient
     private var receiveTask: Task<Void, Never>?
     private var stopped = false
+    /// Last dimensions libghostty reported for this client's viewport.
+    /// Tracked so `reassertSize()` can re-send them on demand — tapping
+    /// the terminal on iOS should make this client the size-leader
+    /// against zmx, which rewraps the shared session to match.
+    private var lastViewport: (cols: UInt16, rows: UInt16)?
 
     public init(sessionName: String, webSocket: WebSocketClient) {
         self.sessionName = sessionName
@@ -73,11 +78,23 @@ public final class SessionClient {
     }
 
     public func sendResize(cols: UInt16, rows: UInt16) {
+        lastViewport = (cols, rows)
         let payload = WebControlEnvelope.resize(cols: cols, rows: rows).encoded()
         Task { @MainActor [weak self] in
             guard let self, !self.stopped else { return }
             try? await self.ws.send(.text(payload))
         }
+    }
+
+    /// Re-send the most recent viewport dimensions. zmx treats every
+    /// resize as "this client wants the terminal at these dimensions",
+    /// so calling this makes iOS the size-leader: other attached
+    /// clients (the Mac pane) get rewrapped down to the iOS width.
+    /// No-op before any resize has landed (i.e. before the terminal
+    /// has laid out once).
+    public func reassertSize() {
+        guard let v = lastViewport else { return }
+        sendResize(cols: v.cols, rows: v.rows)
     }
 }
 #endif
