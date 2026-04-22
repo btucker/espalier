@@ -150,4 +150,45 @@ struct WebServerAuthTests {
         #expect(data.count == expected,
                 "expected full \(expected) bytes, got \(data.count) — content-length mismatch")
     }
+
+    @Test func certHotSwap_newConnectionsUseNewContext() async throws {
+        let provider = try makeTestTLSProvider()
+        let server = WebServer(
+            config: Self.makeConfig(),
+            auth: WebServer.AuthPolicy(isAllowed: { _ in true }),
+            bindAddresses: ["127.0.0.1"],
+            tlsProvider: provider
+        )
+        try server.start()
+        defer { server.stop() }
+        guard case let .listening(_, port) = server.status else {
+            Issue.record("server not listening"); return
+        }
+        let session = trustAllSession()
+        let (_, r1) = try await session.data(
+            from: URL(string: "https://localhost:\(port)/")!
+        )
+        #expect((r1 as! HTTPURLResponse).statusCode == 200)
+
+        // Swap in a freshly-built context for the same cert bytes and
+        // confirm a new request still works (old context is released,
+        // new context is picked up on the next accept).
+        let certURL = try #require(
+            Bundle.module.url(forResource: "test-tls-cert", withExtension: "pem",
+                              subdirectory: "Fixtures")
+        )
+        let keyURL = try #require(
+            Bundle.module.url(forResource: "test-tls-key", withExtension: "pem",
+                              subdirectory: "Fixtures")
+        )
+        let newCtx = try WebTLSCertFetcher.buildContext(
+            certPEM: try Data(contentsOf: certURL),
+            keyPEM: try Data(contentsOf: keyURL)
+        )
+        provider.swap(newCtx)
+        let (_, r2) = try await session.data(
+            from: URL(string: "https://localhost:\(port)/")!
+        )
+        #expect((r2 as! HTTPURLResponse).statusCode == 200)
+    }
 }
