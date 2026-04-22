@@ -1,0 +1,321 @@
+import Testing
+import Foundation
+import Darwin
+@testable import GrafttyKit
+
+/// Verifies TIOCSWINSZ on a `zmx attach` PTY propagates to the zmx
+/// daemon's inner session — the invariant `WEB-4.7` protects.
+///
+/// `.serialized` because `PtyProcess.spawn` uses raw `fork(2)` to set
+/// up `setsid` + `TIOCSCTTY`; two concurrent forks from Swift Testing's
+/// parallel tasks can deadlock the child inside libmalloc (fork from
+/// a multi-threaded process is only async-signal-safe until `execve`).
+@Suite("Zmx — SIGWINCH resize propagation", .serialized)
+struct ZmxResizePropagationTests {
+
+    // MARK: - Shared helpers
+
+    /// Distinctive size chosen to be unlikely to appear in zmx's default
+    /// paths (24×80 is the POSIX default, 1×1 is our pre-layout init, and
+    /// we avoid common values). Unique match on `resize rows=29 cols=73`.
+    private static let targetRows: UInt16 = 29
+    private static let targetCols: UInt16 = 73
+
+    /// Initial size we set on the outer PTY BEFORE spawning `zmx attach`,
+    /// so the client's startup `ipc.getTerminalSize(STDOUT_FILENO)` reads
+    /// this value and sends Init with it. The daemon applies that size to
+    /// the inner PTY; any subsequent resize has to come from SIGWINCH.
+    /// 24×80 (POSIX default) is the natural "starting point size" — it
+    /// keeps zmx's inner shell well-behaved while still differing from
+    /// our distinctive target, so a post-init resize has to actually
+    /// propagate to show up.
+    private static let initialRows: UInt16 = 24
+    private static let initialCols: UInt16 = 80
+
+    /// A running `zmx attach` child with a properly-configured PTY
+    /// (setsid + TIOCSCTTY + dup2 in the child, via PtyProcess.spawn),
+    /// so TIOCSWINSZ on `masterFd` actually fires SIGWINCH at the
+    /// child's process group. Cleans up via `terminate()`.
+    struct PtyAttach {
+        let pid: pid_t
+        let masterFd: Int32
+
+        /// Aggressively tear down: SIGKILL the attach client directly
+        /// (no wait, no subprocess kill-by-session — this test doesn't
+        /// care whether the daemon gets cleaned up, only that we don't
+        /// block here. Leftover zmx daemons get reaped by launchd at
+        /// session end; the scoped ZMX_DIR keeps their state isolated
+        /// from other tests).
+        func terminate() {
+            _ = Darwin.kill(pid, SIGKILL)
+            Darwin.close(masterFd)
+        }
+    }
+
+    /// Scope an ephemeral ZMX_DIR for a single test. Unlike
+    /// `ZmxSurvivalIntegrationTests.withScopedZmxDir`, this does NOT
+    /// enumerate + `launcher.kill(sessionName:)` on teardown — that path
+    /// spawns `zmx kill --force`, which hangs when the daemon is in the
+    /// degraded state this test creates. Removes the temp dir
+    /// best-effort; any surviving daemon gets reaped by launchd at
+    /// session end.
+    private static func withScopedZmxDir<T>(_ body: (ZmxLauncher) throws -> T) throws -> T {
+        let zmx = try #require(
+            ZmxSurvivalIntegrationTests.vendoredZmx(),
+            "zmx binary not vendored — run scripts/bump-zmx.sh"
+        )
+        // /tmp (4-char base) leaves ample room under the 104-byte
+        // Unix-domain-socket path limit for our 16-char session name.
+        let tmpDir = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("zmx-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        let launcher = ZmxLauncher(executable: zmx, zmxDir: tmpDir)
+        defer {
+            // Best-effort: remove the tmp dir. If a daemon still has
+            // files open here we may leave breadcrumbs, but we don't
+            // block on subprocess cleanup.
+            try? FileManager.default.removeItem(at: tmpDir)
+        }
+        return try body(launcher)
+    }
+
+    /// Spawn a `zmx attach` child whose outer PTY starts at
+    /// `(cols, rows)`. Uses `PtyProcess.spawn` directly so the child
+    /// becomes the foreground process group leader of the slave PTY —
+    /// required for any TIOCSWINSZ to actually deliver SIGWINCH.
+    private static func spawnAttachWithInitialSize(
+        launcher: ZmxLauncher,
+        sessionName: String,
+        cols: UInt16,
+        rows: UInt16
+    ) throws -> PtyAttach {
+        let env = launcher.subprocessEnv(from: ProcessInfo.processInfo.environment)
+            .merging(["SHELL": "/bin/sh"]) { _, new in new }
+        let spawned = try PtyProcess.spawn(
+            argv: launcher.attachArgv(sessionName: sessionName, userShell: "/bin/sh"),
+            env: env,
+            initialSize: (cols: cols, rows: rows)
+        )
+
+        // Non-blocking master so test reads don't hang if we ever decide
+        // to drain output. (We mostly avoid reading in these tests — the
+        // whole point is to observe zmx's log file side-channel, not
+        // what the inner shell prints.)
+        let flags = fcntl(spawned.masterFD, F_GETFL)
+        _ = fcntl(spawned.masterFD, F_SETFL, flags | O_NONBLOCK)
+
+        return PtyAttach(pid: spawned.pid, masterFd: spawned.masterFD)
+    }
+
+    /// Read the session's zmx daemon log file and return its full contents.
+    /// Returns an empty string if the file doesn't exist yet.
+    private static func readSessionLog(
+        launcher: ZmxLauncher,
+        sessionName: String
+    ) -> String {
+        let url = launcher.logFile(forSession: sessionName)
+        guard let data = try? Data(contentsOf: url) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Poll the session log for a substring until `deadline` elapses.
+    /// Returns the final log contents regardless of whether the match
+    /// appeared — tests inspect it to produce a useful failure message.
+    private static func waitForLogContains(
+        launcher: ZmxLauncher,
+        sessionName: String,
+        needle: String,
+        timeout: TimeInterval
+    ) -> String {
+        let deadline = Date().addingTimeInterval(timeout)
+        var log = ""
+        while Date() < deadline {
+            log = readSessionLog(launcher: launcher, sessionName: sessionName)
+            if log.contains(needle) { return log }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return log
+    }
+
+    /// Needle matching the daemon's post-init `handleResize` log line
+    /// for the given dimensions. The scope prefix `(default): ` is what
+    /// distinguishes it from `(default): init resize rows=…` which also
+    /// contains the same numbers on startup but is emitted by
+    /// `handleInit`, not `handleResize`.
+    private static func resizeNeedle(rows: UInt16, cols: UInt16) -> String {
+        "(default): resize rows=\(rows) cols=\(cols)"
+    }
+
+    /// Wait until the daemon has fully processed the startup Init → setLeader
+    /// → Resize round-trip (indicated by `resize rows=<initial> cols=<initial>`
+    /// appearing in the session log). At that point the attach client is in
+    /// its steady-state poll loop — the SIGWINCH handler is installed and
+    /// the subsequent TIOCSWINSZ we perform will be observed as a real
+    /// resize event, not lost to the "signal delivered before handler
+    /// installed" startup window.
+    private static func waitForSteadyState(
+        launcher: ZmxLauncher,
+        sessionName: String,
+        initialCols: UInt16,
+        initialRows: UInt16,
+        timeout: TimeInterval = 5
+    ) throws {
+        let needle = resizeNeedle(rows: initialRows, cols: initialCols)
+        let log = waitForLogContains(
+            launcher: launcher,
+            sessionName: sessionName,
+            needle: needle,
+            timeout: timeout
+        )
+        if !log.contains(needle) {
+            throw NSError(
+                domain: "ZmxResizePropagationTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "session \(sessionName) never reached steady state within \(timeout)s; log=\(log)"]
+            )
+        }
+    }
+
+    // MARK: - Tests
+
+    /// Disabled: depends on an upstream zmx fix. `zmx attach`'s client
+    /// loop has a SIGWINCH → `poll(-1)` race — if SIGWINCH arrives
+    /// between the flag check at loop-top and the `poll` syscall entry,
+    /// the kernel has already delivered the signal and `poll` blocks
+    /// anyway. Without any subsequent fd activity, the flag stays set
+    /// but never drains into a Resize IPC, so the daemon's inner PTY
+    /// keeps its old size.
+    ///
+    /// This matches the user-visible symptom where `vim` in a just-
+    /// rehydrated pane paints at the pre-resize dimensions until the
+    /// user types. The Graftty-side signal-mask fix in `PtyProcess.spawn`
+    /// gets SIGWINCH to zmx's handler; draining the flag without any
+    /// other wake-up still requires zmx to use `ppoll` or self-pipe.
+    ///
+    /// Enable this test once the vendored zmx includes a fix (the
+    /// remaining red asserts exactly the end-to-end invariant).
+    @Test(
+        .disabled("awaiting upstream zmx fix for the swap→poll signal race; see comment above"),
+        .timeLimit(.minutes(1))
+    )
+    func resizeIsPropagatedWithoutUserInput() throws {
+        try Self.withScopedZmxDir { launcher in
+            let session = launcher.sessionName(for: UUID())
+            let attach = try Self.spawnAttachWithInitialSize(
+                launcher: launcher,
+                sessionName: session,
+                cols: Self.initialCols,
+                rows: Self.initialRows
+            )
+            defer { attach.terminate() }
+
+            // Wait for the daemon to register the session and process its
+            // startup Init → setLeader → Resize round-trip. The
+            // `resize rows=24 cols=80` log line is emitted by the daemon
+            // only AFTER the attach client has completed its Init, been
+            // promoted to leader, and responded to the daemon's Resize
+            // query — i.e. the client is now in its main poll loop with
+            // its SIGWINCH handler installed. That's the state we need
+            // to isolate the swap-to-poll race.
+            try Self.waitForSteadyState(
+                launcher: launcher,
+                sessionName: session,
+                initialCols: Self.initialCols,
+                initialRows: Self.initialRows
+            )
+
+            try PtyProcess.resize(
+                masterFD: attach.masterFd,
+                cols: Self.targetCols,
+                rows: Self.targetRows
+            )
+
+            let needle = Self.resizeNeedle(rows: Self.targetRows, cols: Self.targetCols)
+            let log = Self.waitForLogContains(
+                launcher: launcher,
+                sessionName: session,
+                needle: needle,
+                timeout: 2.0
+            )
+
+            #expect(
+                log.contains(needle),
+                """
+                daemon session log never showed `\(needle)` within 2s \
+                of TIOCSWINSZ — SIGWINCH appears to have been lost in \
+                zmx's poll-race window. Full log:
+                \(log)
+                """
+            )
+        }
+    }
+
+    /// Regression test for the Graftty-side half of the resize bug:
+    /// SIGWINCH must actually reach zmx-attach's handler. We set up
+    /// steady state, TIOCSWINSZ, then nudge with a single LF — any
+    /// byte zmx's `isUserInput` considers "real" input. If SIGWINCH
+    /// landed in zmx's swap-to-poll race window, its flag is still
+    /// set, and the LF waking `poll` drains that flag into a Resize
+    /// IPC. The daemon logs `resize rows=29 cols=73` and we pass.
+    ///
+    /// Before `PtyProcess.spawn` switched to `posix_spawn` with
+    /// `POSIX_SPAWN_SETSIGMASK`, the Swift runtime's inherited sigmask
+    /// blocked SIGWINCH delivery to zmx entirely — the handler never
+    /// fired, so even the LF nudge couldn't recover a resize that was
+    /// never seen. This test asserts that's no longer the case.
+    @Test(.timeLimit(.minutes(1)))
+    func resizeIsPropagatedAfterUserInput() throws {
+        try Self.withScopedZmxDir { launcher in
+            let session = launcher.sessionName(for: UUID())
+            let attach = try Self.spawnAttachWithInitialSize(
+                launcher: launcher,
+                sessionName: session,
+                cols: Self.initialCols,
+                rows: Self.initialRows
+            )
+            defer { attach.terminate() }
+
+            try Self.waitForSteadyState(
+                launcher: launcher,
+                sessionName: session,
+                initialCols: Self.initialCols,
+                initialRows: Self.initialRows
+            )
+
+            try PtyProcess.resize(
+                masterFD: attach.masterFd,
+                cols: Self.targetCols,
+                rows: Self.targetRows
+            )
+
+            // Small settle so the race (if hit) has a chance to strand
+            // the flag, then nudge with input. A bare newline is the
+            // smallest "user input" zmx recognizes (isUserInput matches
+            // LF via the `execute` branch).
+            Thread.sleep(forTimeInterval: 0.2)
+            let newline: [UInt8] = [0x0A]
+            _ = newline.withUnsafeBufferPointer { ptr in
+                Darwin.write(attach.masterFd, ptr.baseAddress, ptr.count)
+            }
+
+            let needle = Self.resizeNeedle(rows: Self.targetRows, cols: Self.targetCols)
+            let log = Self.waitForLogContains(
+                launcher: launcher,
+                sessionName: session,
+                needle: needle,
+                timeout: 2.0
+            )
+
+            #expect(
+                log.contains(needle),
+                """
+                daemon session log never showed `\(needle)` even after \
+                an input byte — something's wrong with the test setup, \
+                not the SIGWINCH race. Full log:
+                \(log)
+                """
+            )
+        }
+    }
+}
