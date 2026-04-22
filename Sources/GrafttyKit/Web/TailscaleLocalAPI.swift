@@ -12,12 +12,18 @@ import Foundation
 ///   `/Library/Tailscale/sameuserproof-<port>` (root-owned, group
 ///   `admin`). Auth is `Basic base64(":<token>")`.
 ///
-/// We call two endpoints only:
+/// We call three endpoints:
 ///
 /// - `GET /localapi/v0/status` — returns the local tailnet identity
-///   (our LoginName) and the TailscaleIPs assigned to this host.
+///   (our LoginName), the TailscaleIPs assigned to this host, and
+///   the machine's MagicDNS FQDN.
 /// - `GET /localapi/v0/whois?addr=<ip>:<port>` — returns the
 ///   UserProfile of the tailnet peer at that address.
+/// - `GET /localapi/v0/cert/<fqdn>?type=pair` — returns a Let's
+///   Encrypt cert + key PEM pair Tailscale has minted for the
+///   machine's MagicDNS name. Used to bind the HTTPS web server
+///   (WEB-8.2). Requires the tailnet admin to have HTTPS
+///   Certificates enabled in the admin console.
 ///
 /// # Lifetime
 /// Stateless. Each call opens + closes the transport.
@@ -232,7 +238,12 @@ public struct TailscaleLocalAPI {
         }
         let certText = String(text[..<keyRange.lowerBound])
         let keyText = String(text[keyRange.lowerBound...])
-        if !certText.contains("-----BEGIN CERTIFICATE-----") {
+        // Require both BEGIN and END boundaries on the cert side so a
+        // truncated response (recv hit EOF mid-cert) surfaces as a
+        // typed `.malformedResponse` rather than an opaque NIOSSL
+        // parse error downstream.
+        if !certText.contains("-----BEGIN CERTIFICATE-----")
+            || !certText.contains("-----END CERTIFICATE-----") {
             throw Error.malformedResponse
         }
         return (Data(certText.utf8), Data(keyText.utf8))
