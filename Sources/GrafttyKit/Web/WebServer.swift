@@ -410,18 +410,36 @@ public final class WebServer {
             }
             // WEB-5.4: session list endpoint for the client's minimal picker.
             if path == "/sessions" {
-                Self.serveJSONProvider(
-                    context: context,
-                    provider: config.sessionsProvider
-                )
+                let provider = config.sessionsProvider
+                let eventLoop = context.eventLoop
+                let promise = eventLoop.makePromise(of: [SessionInfo].self)
+                eventLoop.execute {
+                    Task {
+                        let sessions = await provider()
+                        promise.succeed(sessions)
+                    }
+                }
+                promise.futureResult.whenComplete { result in
+                    let sessions = (try? result.get()) ?? []
+                    Self.respondEncodable(context: context, items: sessions)
+                }
                 return
             }
             // WEB-7.1: repo list for the "Add Worktree" picker.
             if path == "/repos" {
-                Self.serveJSONProvider(
-                    context: context,
-                    provider: config.reposProvider
-                )
+                let provider = config.reposProvider
+                let eventLoop = context.eventLoop
+                let promise = eventLoop.makePromise(of: [RepoInfo].self)
+                eventLoop.execute {
+                    Task {
+                        let repos = await provider()
+                        promise.succeed(repos)
+                    }
+                }
+                promise.futureResult.whenComplete { result in
+                    let repos = (try? result.get()) ?? []
+                    Self.respondEncodable(context: context, items: repos)
+                }
                 return
             }
             // WEB-7.2: create a new worktree. POST-only; other verbs get
@@ -534,40 +552,30 @@ public final class WebServer {
             }
         }
 
-        /// Encode a Codable-array provider result and respond with
-        /// 200 / 500 depending on JSON encoding success. Shared by the
-        /// `/sessions` and `/repos` endpoints so both handle the empty
-        /// list case identically and neither accidentally diverges on
-        /// Content-Type.
-        private static func serveJSONProvider<T: Encodable & Sendable>(
+        /// Encode a concrete array and respond 200 (or 500 on encoding
+        /// failure). Called from the `/sessions` and `/repos` handlers
+        /// once they've resolved their respective providers — kept
+        /// non-generic so there's no runtime-generic dispatch on NIO's
+        /// event loop, which surfaced as an unreachable-test hang on
+        /// CI when the first call site was generic.
+        private static func respondEncodable<T: Encodable>(
             context: ChannelHandlerContext,
-            provider: @escaping @Sendable () async -> [T]
+            items: [T]
         ) {
-            let eventLoop = context.eventLoop
-            let promise = eventLoop.makePromise(of: [T].self)
-            eventLoop.execute {
-                Task {
-                    let items = await provider()
-                    promise.succeed(items)
-                }
-            }
-            promise.futureResult.whenComplete { result in
-                let items = (try? result.get()) ?? []
-                do {
-                    let data = try JSONEncoder().encode(items)
-                    Self.respond(
-                        context: context,
-                        status: .ok,
-                        body: data,
-                        contentType: "application/json; charset=utf-8"
-                    )
-                } catch {
-                    Self.respondJSON(
-                        context: context,
-                        status: .internalServerError,
-                        error: "encoding error"
-                    )
-                }
+            do {
+                let data = try JSONEncoder().encode(items)
+                Self.respond(
+                    context: context,
+                    status: .ok,
+                    body: data,
+                    contentType: "application/json; charset=utf-8"
+                )
+            } catch {
+                Self.respondJSON(
+                    context: context,
+                    status: .internalServerError,
+                    error: "encoding error"
+                )
             }
         }
 
