@@ -118,23 +118,17 @@ struct SingleSessionView: View {
     }
 
     var body: some View {
-        TerminalPaneView(session: client.session, focusRequestCount: focusRequestCount)
-            // Fill every edge — top (under the notch), bottom (under the
-            // home indicator), and in landscape the left/right safe-area
-            // strips. libghostty renders its background color to the full
-            // bounds, so the unsafe areas pick up the terminal's own
-            // background rather than the SwiftUI default.
-            .ignoresSafeArea()
-            // Every tap on the terminal re-asserts this client as the
-            // zmx size-leader — zmx rewraps the shared session to match
-            // the iOS viewport, so the Mac pane narrows to our width
-            // whenever a remote user touches the iOS screen. Uses
-            // .simultaneousGesture so libghostty's own gesture handlers
-            // (tap-to-position-cursor, selection) continue to run.
-            .simultaneousGesture(
-                TapGesture().onEnded { _ in client.reassertSize() }
-            )
-            .toolbar(.hidden, for: .navigationBar)
+        GeometryReader { geo in
+            terminalContent(containerSize: geo.size)
+        }
+        // Fill the container edges (notch, home indicator, landscape
+        // side-bands) — but .container not .all, so SwiftUI still
+        // respects the `.keyboard` safe-area region and pushes the
+        // terminal up when the software keyboard rises. libghostty
+        // paints its background color behind its view; the unsafe
+        // regions outside our `.container` inherit that color.
+        .ignoresSafeArea(.container, edges: .all)
+        .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .bottomTrailing) {
                 keyboardButton
                     .padding(.trailing, 12)
@@ -198,6 +192,41 @@ struct SingleSessionView: View {
             }
             .accessibilityLabel("Show keyboard")
         }
+    }
+
+    /// The terminal body, wrapped in a horizontal ScrollView only when
+    /// the server's grid is wider than the container can render at a
+    /// typical cell width. When the Mac pane is running a 120-col
+    /// window on an iPhone that can comfortably show ~60, the outer
+    /// ScrollView lets the user pan; the inner TerminalPaneView takes
+    /// the full server-grid width so libghostty's VT parser renders
+    /// every column faithfully (no line-wrap artifacts from a mismatch
+    /// between our local grid and the server's).
+    @ViewBuilder
+    private func terminalContent(containerSize: CGSize) -> some View {
+        let cellWidth = estimatedCellWidth
+        let visibleCols = containerSize.width / cellWidth
+        let serverCols = CGFloat(client.serverGrid?.cols ?? 0)
+        if serverCols > visibleCols + 0.5 {
+            ScrollView(.horizontal, showsIndicators: true) {
+                TerminalPaneView(session: client.session, focusRequestCount: focusRequestCount)
+                    .frame(width: serverCols * cellWidth, height: containerSize.height)
+            }
+        } else {
+            TerminalPaneView(session: client.session, focusRequestCount: focusRequestCount)
+        }
+    }
+
+    /// Best-effort monospace cell width in points. Exact value from
+    /// libghostty isn't available at SwiftUI-layout time (it reports
+    /// after the surface is attached), so we estimate from the iOS
+    /// 20%-reduced default font (~10.4pt). An error of a few pt here
+    /// only affects when we flip into horizontal-scroll mode; the
+    /// actual rendering always matches libghostty's real cell size.
+    private var estimatedCellWidth: CGFloat {
+        // 0.56 is typical monospace aspect for common terminal fonts
+        // at 10pt; close enough for "wider than screen" detection.
+        return 10.4 * 0.56
     }
 
     private func keyboardGlyph(_ systemName: String) -> some View {

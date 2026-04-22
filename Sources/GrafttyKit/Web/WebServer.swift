@@ -699,6 +699,16 @@ public final class WebServer {
                     channel.close(promise: nil)
                 }
             }
+            sess.onPTYSize = { [weak self] cols, rows in
+                guard let self, let channel = self.channel else { return }
+                let payload = WebControlEnvelope.grid(cols: cols, rows: rows).encoded()
+                channel.eventLoop.execute {
+                    var buf = channel.allocator.buffer(capacity: payload.utf8.count)
+                    buf.writeString(payload)
+                    let frame = WebSocketFrame(fin: true, opcode: .text, data: buf)
+                    channel.writeAndFlush(frame, promise: nil)
+                }
+            }
             do {
                 try sess.start()
                 session = sess

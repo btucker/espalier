@@ -57,8 +57,8 @@ struct WebSettingsPane: View {
         HStack(alignment: .top, spacing: 12) {
             QRCodeView(text: url, size: 160)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Scan with GrafttyMobile").font(.caption).foregroundStyle(.secondary)
-                Text("On your iPhone or iPad on this tailnet, open GrafttyMobile → + → scan this QR to add this Mac as a saved host.")
+                Text("Scan with Graftty").font(.caption).foregroundStyle(.secondary)
+                Text("On your iPhone or iPad on this tailnet, open Graftty → + → scan this QR to add this Mac as a saved host.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

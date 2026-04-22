@@ -2,54 +2,80 @@
 import Foundation
 import GhosttyTerminal
 import GrafttyProtocol
+import Observation
 
 /// Owns one WebSocket + one libghostty InMemoryTerminalSession. Wires
 /// terminal-input → binary WS out; binary WS in → terminal.receive;
-/// resize events → JSON text WS out.
+/// server-announced grid → `serverGrid` (observable, for sizing);
+/// first user keystroke → resize (iOS takes over leadership).
+@Observable
 @MainActor
 public final class SessionClient {
 
     public let sessionName: String
     public let session: InMemoryTerminalSession
 
+    /// The PTY's current dimensions, as reported by the server's
+    /// `grid` control envelope. Nil before the first announcement
+    /// arrives (WebSocket still connecting). Observers use this to
+    /// size their rendering surface to match — wider than screen →
+    /// horizontal scroll.
+    public private(set) var serverGrid: GridSize?
+
+    public struct GridSize: Equatable, Hashable, Sendable {
+        public let cols: UInt16
+        public let rows: UInt16
+    }
+
     private let ws: WebSocketClient
     private var receiveTask: Task<Void, Never>?
     private var stopped = false
-    /// Last dimensions libghostty reported for this client's viewport.
-    /// Tracked so `reassertSize()` can re-send them on demand — tapping
-    /// the terminal on iOS should make this client the size-leader
-    /// against zmx, which rewraps the shared session to match.
-    private var lastViewport: (cols: UInt16, rows: UInt16)?
+    /// Last (cols, rows) libghostty reported for the iOS-side view.
+    /// Resent to the server on first keystroke to claim leadership.
+    private var lastIOSViewport: (cols: UInt16, rows: UInt16)?
+    /// True once we've sent our first keystroke-triggered resize —
+    /// from then on, libghostty's layout-driven resize events are
+    /// forwarded to the server (iOS is the leader). Before the first
+    /// keystroke, we stay silent on layout changes so the Mac pane
+    /// keeps control of the PTY's dimensions.
+    private var isLeader = false
 
     public init(sessionName: String, webSocket: WebSocketClient) {
         self.sessionName = sessionName
         self.ws = webSocket
 
-        // Indirection box lets the `write`/`resize` callbacks reach back
-        // into `self` after it is fully initialized.
-        final class Box { var onBytes: (@Sendable (Data) -> Void)?
-                          var onResize: (@Sendable (InMemoryTerminalViewport) -> Void)? }
+        final class Box {
+            var onBytes: (@Sendable (Data) -> Void)?
+            var onResize: (@Sendable (InMemoryTerminalViewport) -> Void)?
+        }
         let box = Box()
         self.session = InMemoryTerminalSession(
             write: { data in box.onBytes?(data) },
             resize: { viewport in box.onResize?(viewport) }
         )
-        // These callbacks are declared @Sendable by libghostty-spm so
-        // they can be invoked from any actor — the MainActor hop has
-        // to happen here. For `onBytes` the payload is just pushed
-        // onto the WebSocket which is itself async-to-anywhere, so we
-        // skip the hop and capture `ws` directly: zero per-keystroke
-        // main-actor work.
-        box.onBytes = { [ws] data in
-            Task { try? await ws.send(.binary(data)) }
+        // Keystroke path: user-typed bytes go straight onto the WS
+        // from the callback's own context (ws.send is thread-safe).
+        // First keystroke also claims leadership.
+        box.onBytes = { [ws, weak self] data in
+            Task { [ws] in try? await ws.send(.binary(data)) }
+            Task { @MainActor [weak self] in
+                self?.claimLeadershipIfNeeded()
+            }
         }
+        // Layout path: libghostty tells us "the iOS view is now N×M".
+        // We memoize, but we do NOT send to the server unless we're
+        // already the leader. Before the first keystroke, the Mac
+        // pane's width dictates the PTY's width and we render into a
+        // scroll view sized to match.
         box.onResize = { [weak self] viewport in
             Task { @MainActor [weak self] in
                 guard let self, !self.stopped else { return }
-                self.sendResize(
-                    cols: max(1, viewport.columns),
-                    rows: max(1, viewport.rows)
-                )
+                let cols = max(1, viewport.columns)
+                let rows = max(1, viewport.rows)
+                self.lastIOSViewport = (cols, rows)
+                if self.isLeader {
+                    self.sendResizeToServer(cols: cols, rows: rows)
+                }
             }
         }
     }
@@ -62,8 +88,8 @@ public final class SessionClient {
                     switch frame {
                     case .binary(let data):
                         self.session.receive(data)
-                    case .text:
-                        break
+                    case .text(let text):
+                        self.handleTextFrame(text)
                     }
                 } catch {
                     break
@@ -80,36 +106,33 @@ public final class SessionClient {
         ws.close()
     }
 
-    public func sendResize(cols: UInt16, rows: UInt16) {
-        lastViewport = (cols, rows)
-        enqueueSend(.text(WebControlEnvelope.resize(cols: cols, rows: rows).encoded()))
+    /// Called from `SingleSessionView` when the user interacts — taps,
+    /// scrolls, etc. No-op for now (leadership is claimed only on real
+    /// keystrokes, not on scroll-view interaction), but left as a
+    /// seam in case we later want tap-to-claim behavior back.
+    public func userDidInteract() {
+        // intentionally empty
     }
 
-    /// Re-send the most recent viewport dimensions. zmx treats every
-    /// resize as "this client wants the terminal at these dimensions",
-    /// so calling this makes iOS the size-leader: other attached
-    /// clients (the Mac pane) get rewrapped down to the iOS width.
-    /// Debounced to at most one send per second because taps can fire
-    /// rapidly (every tap during cursor-positioning, selection, etc.)
-    /// and each un-debounced call is a full Tailscale round-trip.
-    public func reassertSize() {
-        guard let v = lastViewport else { return }
-        let now = Date()
-        if let last = lastReassertAt, now.timeIntervalSince(last) < 1.0 {
-            return
-        }
-        lastReassertAt = now
-        sendResize(cols: v.cols, rows: v.rows)
+    private func claimLeadershipIfNeeded() {
+        guard !isLeader, !stopped, let v = lastIOSViewport else { return }
+        isLeader = true
+        sendResizeToServer(cols: v.cols, rows: v.rows)
     }
 
-    private var lastReassertAt: Date?
+    private func sendResizeToServer(cols: UInt16, rows: UInt16) {
+        let payload = WebControlEnvelope.resize(cols: cols, rows: rows).encoded()
+        Task { [ws] in try? await ws.send(.text(payload)) }
+    }
 
-    /// Fire-and-forget async send. Used from sync callbacks that run on
-    /// MainActor (libghostty's write/resize callbacks) so we don't wrap
-    /// every single keystroke in an extra `Task { @MainActor }`.
-    private func enqueueSend(_ frame: WebSocketFrame) {
-        Task { [ws] in
-            try? await ws.send(frame)
+    private func handleTextFrame(_ text: String) {
+        guard let envelope = try? WebControlEnvelope.parse(Data(text.utf8)) else { return }
+        switch envelope {
+        case let .grid(cols, rows):
+            serverGrid = GridSize(cols: cols, rows: rows)
+        case .resize:
+            // Client never receives resize; ignore.
+            break
         }
     }
 }
