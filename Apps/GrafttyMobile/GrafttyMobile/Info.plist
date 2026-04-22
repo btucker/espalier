@@ -28,7 +28,14 @@
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UILaunchScreen</key>
-    <dict/>
+    <dict>
+        <key>UIImageName</key>
+        <string>LaunchImage</string>
+        <key>UIImageRespectsSafeAreaInsets</key>
+        <false/>
+        <key>UIColorName</key>
+        <string>AccentColor</string>
+    </dict>
     <key>NSCameraUsageDescription</key>
     <string>Scan a Graftty QR code from your Mac to add a saved host.</string>
     <key>NSFaceIDUsageDescription</key>
