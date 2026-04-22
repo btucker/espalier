@@ -47,9 +47,6 @@ let package = Package(
                 "GrafttyKit",
                 .product(name: "GhosttyKit", package: "libghostty-spm"),
             ],
-            resources: [
-                .copy("Resources/plugins"),
-            ],
             swiftSettings: strictWarnings
         ),
         .executableTarget(

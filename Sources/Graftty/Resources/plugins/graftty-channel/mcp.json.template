@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "graftty-channel": {
-      "command": "{{CLI_PATH}}",
-      "args": ["mcp-channel"]
-    }
-  }
-}

@@ -1003,29 +1003,31 @@ shall surface an actionable alert rather than silently continue.
 
 **CHAN-2.3** While `channelsEnabled` is `false`, the Channels pane shall hide the research-preview disclosure banner and the prompt editor, showing only the toggle and its caption.
 
-**CHAN-2.4** When `channelsEnabled` is `true`, the Channels pane shall display a highlighted research-preview banner that names the `--dangerously-load-development-channels plugin:graftty-channel` flag injected into the Claude launch, clarifies that the flag bypasses Claude Code's channel allowlist only for this plugin, and notes that events originate from Graftty's local polling.
+**CHAN-2.4** When `channelsEnabled` is `true`, the Channels pane shall display a highlighted instructional panel containing the verbatim launch flag string `--dangerously-load-development-channels server:graftty-channel`, a one-click "Copy" button that writes that string to the system pasteboard, a note that the `--dangerously-load-development-channels` flag bypasses Claude Code's channel allowlist only for this server, and a note that events originate from Graftty's local polling. The application shall not auto-inject the flag into `defaultCommand` or any other launched command — the user is responsible for adding it to their own `claude` launch.
 
 **CHAN-2.5** When `channelsEnabled` is `true`, the Channels pane shall render an editable prompt textarea bound to `@AppStorage("channelPrompt")`, seeded on first read with the default prompt template that documents the event tag format and how Claude should respond to `pr_state_changed` and `ci_conclusion_changed` events.
 
 **CHAN-2.6** When the user clicks "Restore default" in the prompt section, the application shall overwrite `channelPrompt` with the built-in default prompt template.
 
-### 18.3 Launch Flag Composition
+### 18.3 Launch Flag Disclosure
 
-**CHAN-3.1** While `channelsEnabled` is `true` and the user's `defaultCommand` begins with the `claude` binary name as a whole token, the application shall insert `--dangerously-load-development-channels plugin:graftty-channel` between the binary name and any user-supplied arguments for all subsequently launched sessions.
+**CHAN-3.1** The canonical launch-flag string the Channels pane shall disclose is `--dangerously-load-development-channels server:graftty-channel`. The `server:<name>` form addresses the MCP server entry Graftty merges into `~/.claude/.mcp.json` per CHAN-4.*. The `plugin:<name>@<marketplace>` form is not used, because local plugins under `~/.claude/plugins/` are not registered under any marketplace by default and the flag rejects bare `plugin:<name>`.
 
-**CHAN-3.2** If `defaultCommand` does not begin with the `claude` binary name (e.g. "zsh", "claudex"), the composed launch string shall be unchanged regardless of `channelsEnabled`.
+**CHAN-3.2** The application shall never modify the user's `defaultCommand` string, nor inject channel flags into any command it types into a terminal. The user is the sole author of the Claude launch line.
 
-**CHAN-3.3** While `channelsEnabled` is `false`, the composed launch string shall be unchanged regardless of the user's `defaultCommand`.
+**CHAN-3.3** Existing `claude` sessions shall continue with their original launch flags when `channelsEnabled` is toggled mid-session; only sessions started by the user after toggling shall see the change. Retroactively attaching channels to a running `claude` requires the user to restart it with the launch flag appended.
 
-**CHAN-3.4** Existing `claude` sessions shall continue with their original launch flags when `channelsEnabled` is toggled mid-session; only newly launched sessions shall pick up the change. Retroactively attaching channels to a running claude requires restarting that session.
+### 18.4 MCP Server Installation
 
-### 18.4 Plugin Installation
+**CHAN-4.1** While `channelsEnabled` is `true`, on app launch the application shall merge an `mcpServers.graftty-channel` entry into `~/.claude/.mcp.json` whose `command` is the absolute path of the bundled Graftty CLI binary and whose `args` are `["mcp-channel"]`. The merge shall preserve every other key at the document root and every other key under `mcpServers`; only the `graftty-channel` key shall be written.
 
-**CHAN-4.1** While `channelsEnabled` is `true`, on app launch the application shall render the bundled `plugin.json` and `mcp.json.template` from its own resources into `~/.claude/plugins/graftty-channel/`, substituting the absolute path of the Graftty CLI binary for `{{CLI_PATH}}` in the template and writing the output as `.mcp.json` (with leading dot).
+**CHAN-4.2** The MCP server install shall be idempotent: repeated invocations with the same CLI path shall produce byte-identical output. A subsequent install with a different CLI path (e.g. after the user reinstalls Graftty to a new location) shall overwrite the `graftty-channel` entry while leaving other `mcpServers` entries untouched.
 
-**CHAN-4.2** The plugin installation shall be idempotent: repeated invocations with the same inputs shall leave exactly two files in `~/.claude/plugins/graftty-channel/` (`.mcp.json` and `plugin.json`) with no stray intermediate files.
+**CHAN-4.3** If `~/.claude/.mcp.json` exists but its contents are not valid JSON, or its `mcpServers` key is present and is not a JSON object, the application shall log the failure via `NSLog` and leave the file byte-for-byte unchanged rather than clobber a user edit that may be mid-flight. Startup shall continue without channels in that case.
 
-**CHAN-4.3** If the bundled plugin resources cannot be read or the target directory cannot be written, the application shall log the failure via `NSLog` and continue app startup without channels, rather than aborting the launch.
+**CHAN-4.4** If the bundled CLI binary is not present at the expected path (e.g. when running from `swift run` in a development build), the application shall log and skip the install, rather than writing an `.mcp.json` entry pointing at a nonexistent binary — a poisoned entry would break any Claude session the user opens outside Graftty.
+
+**CHAN-4.5** On app launch, the application shall remove any leftover `~/.claude/plugins/graftty-channel/` directory from prior versions that installed the plugin-wrapper shape. The removal shall be a no-op when the directory is absent.
 
 ### 18.5 Event Emission
 

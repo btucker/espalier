@@ -28,7 +28,7 @@ final class AppServices {
         self.channelRouter = router
         self.channelSettingsObserver = ChannelSettingsObserver(
             router: router,
-            onEnable: { GrafttyApp.installChannelPluginFromBundle() }
+            onEnable: { GrafttyApp.installChannelMCPServer() }
         )
 
         self.worktreeMonitor = WorktreeMonitor()
@@ -385,12 +385,15 @@ struct GrafttyApp: App {
         }
 
         // Claude Code Channels — only active when the user has enabled the
-        // feature. On enable, install the plugin into ~/.claude/plugins/
-        // (idempotent) and start the router so new Claude sessions spawned
-        // under `--dangerously-load-development-channels plugin:graftty-channel`
-        // connect successfully.
+        // feature. On enable, merge the graftty-channel MCP server into
+        // `~/.claude/.mcp.json` (idempotent) and start the router so new
+        // Claude sessions launched by the user with
+        // `--dangerously-load-development-channels server:graftty-channel`
+        // connect successfully. The user is responsible for the launch
+        // flag — Graftty no longer auto-injects it, since the injection
+        // only covered sessions started from `defaultCommand`.
         if UserDefaults.standard.bool(forKey: "channelsEnabled") {
-            Self.installChannelPluginFromBundle()
+            Self.installChannelMCPServer()
             do {
                 try services.channelRouter.start()
             } catch {
@@ -1591,8 +1594,7 @@ struct GrafttyApp: App {
             defaultCommand: command,
             firstPaneOnly: firstPaneOnly,
             isFirstPane: terminalManager.isFirstPane(terminalID),
-            wasRehydrated: terminalManager.wasRehydrated(terminalID),
-            channelsEnabled: defaults.bool(forKey: "channelsEnabled")
+            wasRehydrated: terminalManager.wasRehydrated(terminalID)
         )
 
         switch decision {
@@ -1743,26 +1745,17 @@ struct GrafttyApp: App {
         }
     }
 
-    /// Render the bundled plugin resources into `~/.claude/plugins/graftty-channel/`
-    /// with the current absolute path to our CLI binary. Idempotent — safe to
-    /// call on every launch. Logs on failure; does not throw.
+    /// Merge the graftty-channel MCP server entry into `~/.claude/.mcp.json`,
+    /// and remove any leftover `~/.claude/plugins/graftty-channel/` directory
+    /// from prior versions. Idempotent — safe to call on every launch.
+    /// Logs on failure; does not throw.
     ///
     /// Static so that both `startup()` and `ChannelSettingsObserver`'s
     /// `onEnable` closure can call it without needing a live `GrafttyApp`
     /// struct instance (the struct is a SwiftUI App value type; capturing
     /// `self` across scenes is awkward).
     @MainActor
-    static func installChannelPluginFromBundle() {
-        let pluginDir = Bundle.module.bundleURL
-            .appendingPathComponent("plugins/graftty-channel")
-        guard
-            let manifest = try? String(contentsOf: pluginDir.appendingPathComponent("plugin.json"), encoding: .utf8),
-            let template = try? String(contentsOf: pluginDir.appendingPathComponent("mcp.json.template"), encoding: .utf8)
-        else {
-            NSLog("[Graftty] Channels plugin install skipped: missing bundled resources")
-            return
-        }
-
+    static func installChannelMCPServer() {
         // Absolute path to the CLI binary. When Graftty is bundled, the CLI
         // lives at Graftty.app/Contents/Helpers/graftty per `scripts/bundle.sh`
         // and `installCLI()` below.
@@ -1772,25 +1765,27 @@ struct GrafttyApp: App {
 
         // When running from `swift run` there's no bundled CLI — the path
         // resolves to a file inside `.build/` or similar that doesn't exist
-        // at the computed location. Installing a .mcp.json pointing at a
-        // nonexistent binary would poison the user's real ~/.claude/plugins/
+        // at the computed location. Installing an entry pointing at a
+        // nonexistent binary would poison the user's real ~/.claude/.mcp.json
         // and break any Claude session they open outside Graftty. Skip
         // install in that case.
         guard FileManager.default.fileExists(atPath: cliPath) else {
-            NSLog("[Graftty] Channels plugin install skipped: bundled CLI not found at %@", cliPath)
+            NSLog("[Graftty] Channels install skipped: bundled CLI not found at %@", cliPath)
             return
         }
 
         do {
-            try ChannelPluginInstaller.install(
-                pluginsRoot: ChannelPluginInstaller.defaultPluginsRoot(),
-                cliPath: cliPath,
-                manifest: manifest,
-                mcpTemplate: template
+            try ChannelMCPInstaller.install(
+                mcpConfigPath: ChannelMCPInstaller.defaultMCPConfigPath(),
+                cliPath: cliPath
             )
         } catch {
-            NSLog("[Graftty] Channels plugin install failed: %@", String(describing: error))
+            NSLog("[Graftty] Channels install failed: %@", String(describing: error))
         }
+
+        ChannelMCPInstaller.removeLegacyPluginDirectory(
+            pluginsRoot: ChannelMCPInstaller.defaultLegacyPluginsRoot()
+        )
     }
 
     private func installCLI() {
