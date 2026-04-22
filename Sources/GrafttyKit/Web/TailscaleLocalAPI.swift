@@ -175,7 +175,7 @@ public struct TailscaleLocalAPI {
             throw Error.malformedResponse
         }
         let trimmedDNS = me.DNSName
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
             .flatMap { $0.isEmpty ? nil : $0 }
         return Status(
