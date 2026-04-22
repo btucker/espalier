@@ -4,27 +4,12 @@ import Darwin
 @testable import GrafttyKit
 
 /// Verifies TIOCSWINSZ on a `zmx attach` PTY propagates to the zmx
-/// daemon's inner session — the underlying invariant that makes
-/// WebSocket browser-terminal resizes actually resize the running
-/// shell/app.
+/// daemon's inner session — the invariant `WEB-4.7` protects.
 ///
-/// Before the fix landed in `PtyProcess.spawn`, a child forked from
-/// the Swift runtime inherited a sigmask with SIGWINCH blocked (the
-/// Swift runtime blocks signals on its service threads for GCD). Plain
-/// `execve` carried that mask across into the exec'd image; zmx-attach
-/// installed its SIGWINCH handler correctly, but because the signal
-/// was blocked at the process level, the handler never fired — resize
-/// events silently vanished. Switching the final transition to
-/// `posix_spawn(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK)` with
-/// an empty mask resets that at the kernel boundary.
-///
-/// `.serialized` because the helper uses raw `fork(2)` under the hood
-/// (required for `setsid` + `TIOCSCTTY`), and Swift Testing would
-/// otherwise run these tests on parallel tasks. Two concurrent
-/// `PtyProcess.spawn`s can deadlock the child inside `libmalloc` —
-/// forking from a multi-threaded Swift process is only async-signal-
-/// safe until `execve`, and libmalloc may hold internal locks across
-/// the fork. One fork at a time.
+/// `.serialized` because `PtyProcess.spawn` uses raw `fork(2)` to set
+/// up `setsid` + `TIOCSCTTY`; two concurrent forks from Swift Testing's
+/// parallel tasks can deadlock the child inside libmalloc (fork from
+/// a multi-threaded process is only async-signal-safe until `execve`).
 @Suite("Zmx — SIGWINCH resize propagation", .serialized)
 struct ZmxResizePropagationTests {
 
@@ -47,20 +32,6 @@ struct ZmxResizePropagationTests {
     private static let initialRows: UInt16 = 24
     private static let initialCols: UInt16 = 80
 
-    /// TIOCSWINSZ on `fd`. Mirrors `PtyProcess.resize` but callable in
-    /// this test file without routing through EspalierKit's internal path,
-    /// and with explicit ws_xpixel/ws_ypixel zeros like libghostty does.
-    private static func setWinsize(fd: Int32, cols: UInt16, rows: UInt16) throws {
-        var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        if ioctl(fd, UInt(TIOCSWINSZ), &ws) != 0 {
-            throw NSError(
-                domain: NSPOSIXErrorDomain,
-                code: Int(errno),
-                userInfo: [NSLocalizedDescriptionKey: "TIOCSWINSZ failed"]
-            )
-        }
-    }
-
     /// A running `zmx attach` child with a properly-configured PTY
     /// (setsid + TIOCSCTTY + dup2 in the child, via PtyProcess.spawn),
     /// so TIOCSWINSZ on `masterFd` actually fires SIGWINCH at the
@@ -82,11 +53,12 @@ struct ZmxResizePropagationTests {
     }
 
     /// Scope an ephemeral ZMX_DIR for a single test. Unlike
-    /// `Self.withScopedZmxDir`, this does NOT
-    /// call `launcher.kill(sessionName:)` on teardown — that path spawns
-    /// `zmx kill --force` which hangs when the daemon's in a degraded
-    /// state (exactly the state this test *creates*). Leaves the temp
-    /// dir + any daemon behind for OS cleanup; isolates tests by UUID.
+    /// `ZmxSurvivalIntegrationTests.withScopedZmxDir`, this does NOT
+    /// enumerate + `launcher.kill(sessionName:)` on teardown — that path
+    /// spawns `zmx kill --force`, which hangs when the daemon is in the
+    /// degraded state this test creates. Removes the temp dir
+    /// best-effort; any surviving daemon gets reaped by launchd at
+    /// session end.
     private static func withScopedZmxDir<T>(_ body: (ZmxLauncher) throws -> T) throws -> T {
         let zmx = try #require(
             ZmxSurvivalIntegrationTests.vendoredZmx(),
@@ -253,15 +225,11 @@ struct ZmxResizePropagationTests {
                 initialRows: Self.initialRows
             )
 
-            try Self.setWinsize(
-                fd: attach.masterFd,
+            try PtyProcess.resize(
+                masterFD: attach.masterFd,
                 cols: Self.targetCols,
                 rows: Self.targetRows
             )
-
-            // CRITICAL: send NO bytes to the PTY master. The whole point
-            // of the bug is that the resize only takes effect after the
-            // user types something — if we write here, we mask the bug.
 
             let needle = Self.resizeNeedle(rows: Self.targetRows, cols: Self.targetCols)
             let log = Self.waitForLogContains(
@@ -315,8 +283,8 @@ struct ZmxResizePropagationTests {
                 initialRows: Self.initialRows
             )
 
-            try Self.setWinsize(
-                fd: attach.masterFd,
+            try PtyProcess.resize(
+                masterFD: attach.masterFd,
                 cols: Self.targetCols,
                 rows: Self.targetRows
             )

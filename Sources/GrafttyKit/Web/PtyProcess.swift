@@ -148,47 +148,24 @@ public enum PtyProcess {
                 close(fd)
                 fd += 1
             }
-            // Launch via posix_spawn with POSIX_SPAWN_SETEXEC +
-            // POSIX_SPAWN_SETSIGMASK (+ signal-defaults) instead of
-            // `execve`. The setsigmask guarantees the child process
-            // starts with an *empty* signal mask — a plain execve
-            // carries the forked parent's mask across, and when that
-            // parent is a Swift app the mask typically has signals
-            // blocked that GCD/Dispatch intercepts on its service
-            // threads. `zmx attach` relies on SIGWINCH delivery to
-            // learn about PTY resizes; with the mask left in place the
-            // kernel sets SIGWINCH pending but never delivers it to
-            // zmx's handler, so the resize never propagates (see
-            // `Tests/GrafttyKitTests/Zmx/ZmxResizePropagationTests`).
-            //
-            // Why posix_spawn and not `sigprocmask(SIG_SETMASK, empty)`
-            // directly: the explicit sigprocmask-in-fork-child approach
-            // was attempted and the tests continued to fail — the mask
-            // reset didn't take effect in the exec'd image for reasons
-            // that look like libsystem-internal state leaking through.
-            // POSIX_SPAWN_SETSIGMASK is the kernel-level, documented
-            // way to pin the new image's initial mask.
-            //
-            // POSIX_SPAWN_SETEXEC makes this call replace the current
-            // process image (like execve) rather than fork+exec. We
-            // needed our own fork above for `setsid()` + `TIOCSCTTY`,
-            // since those aren't expressible via spawnattr_t.
+            // Exec via posix_spawn with SETSIGMASK (empty mask) rather
+            // than plain execve. fork(2) preserves the parent sigmask
+            // and execve carries it into the new image; the Swift
+            // runtime blocks a family of signals on its GCD service
+            // threads, so a child inheriting that mask starts with
+            // SIGWINCH blocked and zmx's resize handler never fires.
+            // SETEXEC makes posix_spawn replace the current image
+            // rather than fork+exec, so we keep the setsid/TIOCSCTTY
+            // setup done above (neither is expressible via spawnattr).
             var spawnAttrs: posix_spawnattr_t?
             guard posix_spawnattr_init(&spawnAttrs) == 0 else { _exit(127) }
-            defer { posix_spawnattr_destroy(&spawnAttrs) }
 
             var emptyMask = sigset_t()
             sigemptyset(&emptyMask)
-            var allMask = sigset_t()
-            sigfillset(&allMask)
             _ = posix_spawnattr_setsigmask(&spawnAttrs, &emptyMask)
-            // Also defensively request SIG_DFL for every signal — this
-            // guards against any inherited `SIG_IGN` action that might
-            // carry over despite execve's action-reset semantics.
-            _ = posix_spawnattr_setsigdefault(&spawnAttrs, &allMask)
             _ = posix_spawnattr_setflags(
                 &spawnAttrs,
-                Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
+                Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK)
             )
 
             var spawnedPid: pid_t = 0
@@ -204,9 +181,6 @@ public enum PtyProcess {
                     )
                 }
             }
-            // POSIX_SPAWN_SETEXEC means posix_spawn only returns on
-            // failure — success replaces the image and we never get
-            // here. So reaching this point is a spawn failure.
             _exit(127)
         }
 
