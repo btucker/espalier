@@ -34,8 +34,7 @@ struct WebSettingsPane: View {
     /// default browser plus an `NSPasteboard` copy button. Falls back to
     /// plain selectable text if the string somehow isn't a parseable URL
     /// (shouldn't happen: WebURLComposer always emits a well-formed URL).
-    /// Also shows a collapsible QR code for iOS onboarding (WEB-6.1).
-    /// WEB-1.12.
+    /// Also shows an inline QR code for iOS onboarding (WEB-1.13). WEB-1.12.
     @ViewBuilder private func baseURLRow(url: String) -> some View {
         HStack(spacing: 8) {
             Text("Base URL:")
@@ -55,13 +54,18 @@ struct WebSettingsPane: View {
             .help("Copy URL")
             .accessibilityLabel("Copy URL")
         }
-        DisclosureGroup("Show QR code") {
-            QRCodeView(
-                text: url,
-                size: 200
-            )
-            .padding(.vertical, 8)
+        HStack(alignment: .top, spacing: 12) {
+            QRCodeView(text: url, size: 160)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Scan with GrafttyMobile").font(.caption).foregroundStyle(.secondary)
+                Text("On your iPhone or iPad on this tailnet, open GrafttyMobile → + → scan this QR to add this Mac as a saved host.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(.top, 4)
     }
 
     @ViewBuilder private var statusRow: some View {
