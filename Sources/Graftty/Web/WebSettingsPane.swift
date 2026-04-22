@@ -34,6 +34,7 @@ struct WebSettingsPane: View {
     /// default browser plus an `NSPasteboard` copy button. Falls back to
     /// plain selectable text if the string somehow isn't a parseable URL
     /// (shouldn't happen: WebURLComposer always emits a well-formed URL).
+    /// Also shows a collapsible QR code for iOS onboarding (WEB-6.1).
     /// WEB-1.12.
     @ViewBuilder private func baseURLRow(url: String) -> some View {
         HStack(spacing: 8) {
@@ -53,6 +54,13 @@ struct WebSettingsPane: View {
             .buttonStyle(.borderless)
             .help("Copy URL")
             .accessibilityLabel("Copy URL")
+        }
+        DisclosureGroup("Show QR code") {
+            QRCodeView(
+                text: url,
+                size: 200
+            )
+            .padding(.vertical, 8)
         }
     }
 

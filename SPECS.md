@@ -755,6 +755,8 @@ The sweep runs once at `GrafttyApp.init()`. `ZmxLauncher.subprocessEnv` addition
 
 **WEB-1.12** While the server is listening, the Settings pane shall render a **Base URL** row distinct from the diagnostic "Listening on" row. The Base URL is the HTTPS URL composed from the machine's MagicDNS FQDN (WEB-8.1) and the listening port — the URL a user copies to open the web client. It renders as a clickable `Link` opening the default browser, plus a copy button (`doc.on.doc`, accessible label "Copy URL") that writes to `NSPasteboard.general`. The "Listening on" row below is informational (which sockets are actually up) and must not be conflated with the Base URL. Plain selectable text is not sufficient for the Base URL — users were expected to triple-click, copy, then switch apps and paste (four steps for one ask).
 
+**WEB-1.13** While the server is listening, the Settings pane shall render a collapsible "Show QR code" disclosure group beneath the Base URL row. When expanded, it shall display a 200 pt QR code encoding the Base URL so that an iOS client can scan it on first run to add a saved host. When the server is not listening (empty URL), the QR code area shall render an "Unavailable" placeholder rather than attempting to encode an empty string.
+
 ### 15.2 Authorization
 
 **WEB-2.1** The application shall resolve each incoming peer IP via Tailscale LocalAPI `whois` before serving any content at any path.
