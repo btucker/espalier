@@ -1127,6 +1127,12 @@ shall surface an actionable alert rather than silently continue.
 
 **IOS-4.6** On subsequent terminal resizes (viewport change, keyboard appearance, rotation), the application shall send a `{"type":"resize",...}` text frame matching the new viewport, mirroring `WEB-5.3`.
 
+**IOS-4.7** When the user selects a saved host, the application shall issue `GET <baseURL>/ghostty-config` and, if the response is a non-empty 2xx body, pass it to `TerminalController.shared.updateConfigSource(.generated(text))` before mounting any `TerminalPaneView`. A missing or empty response is a non-fatal condition — the client shall fall back to `libghostty-spm`'s default configuration. The endpoint is a concatenation of the user's on-disk Ghostty configs (`$XDG_CONFIG_HOME/ghostty/config`, then `~/Library/Application Support/com.mitchellh.ghostty/config`) in the same priority order the Mac app applies them at launch, so terminals render with the same fonts, theme, and colors as the desktop.
+
+**IOS-4.8** While a pane is mounted, the application shall hide the navigation bar (`.toolbar(.hidden, for: .navigationBar)`) and extend the terminal beneath the top safe area (`.ignoresSafeArea(edges: .top)`) so the terminal grid claims every available pixel. The user returns to the session picker via the system edge-swipe-back gesture rather than an explicit button.
+
+**IOS-4.9** While the software keyboard is visible, the application shall display a floating "Hide keyboard" button at the bottom-trailing corner of the pane view, using the `keyboard.chevron.compact.down` SF Symbol to match the appearance of iPadOS's built-in keyboard-dismiss affordance. Tapping the button shall resign first-responder on the key window so the keyboard retracts. While the keyboard is hidden, the button shall be hidden as well.
+
 ### 19.5 Multi-pane layout
 
 **IOS-5.1** On iPad (regular `horizontalSizeClass`), the application shall render a `NavigationSplitView` sidebar + detail layout. The sidebar shall show saved hosts; tapping a host reveals the session picker; tapping a session renders the detail as a terminal pane.

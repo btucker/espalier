@@ -92,6 +92,12 @@ public final class WebServer {
         /// creator; the default exists for tests and early-boot states
         /// where `AppState` isn't wired yet.
         public let worktreeCreator: (@Sendable (CreateWorktreeRequest) async -> CreateWorktreeOutcome)?
+        /// Source for `GET /ghostty-config`. Returns the Mac-resolved
+        /// Ghostty config so a remote client (GrafttyMobile) can render
+        /// terminals with the same fonts, theme, and colors as the
+        /// native Mac app. Default is empty — clients see an empty body
+        /// and fall back to libghostty-spm's defaults.
+        public let ghosttyConfigProvider: @Sendable () async -> String
 
         public init(
             port: Int,
@@ -99,7 +105,8 @@ public final class WebServer {
             zmxDir: URL,
             sessionsProvider: @escaping @Sendable () async -> [SessionInfo] = { [] },
             reposProvider: @escaping @Sendable () async -> [RepoInfo] = { [] },
-            worktreeCreator: (@Sendable (CreateWorktreeRequest) async -> CreateWorktreeOutcome)? = nil
+            worktreeCreator: (@Sendable (CreateWorktreeRequest) async -> CreateWorktreeOutcome)? = nil,
+            ghosttyConfigProvider: @escaping @Sendable () async -> String = { "" }
         ) {
             self.port = port
             self.zmxExecutable = zmxExecutable
@@ -107,6 +114,7 @@ public final class WebServer {
             self.sessionsProvider = sessionsProvider
             self.reposProvider = reposProvider
             self.worktreeCreator = worktreeCreator
+            self.ghosttyConfigProvider = ghosttyConfigProvider
         }
 
         /// Accepts the range NIO's `bootstrap.bind(host:port:)` will accept
@@ -428,6 +436,23 @@ public final class WebServer {
                 Task {
                     promise.succeed(await provider())
                 }
+                return
+            }
+            // IOS-4.7: the Mac's resolved Ghostty config, so a remote
+            // client can render terminals identically to the desktop.
+            if path == "/ghostty-config" {
+                let provider = config.ghosttyConfigProvider
+                let promise = context.eventLoop.makePromise(of: String.self)
+                promise.futureResult.whenComplete { result in
+                    let text = (try? result.get()) ?? ""
+                    Self.respond(
+                        context: context,
+                        status: .ok,
+                        body: Data(text.utf8),
+                        contentType: "text/plain; charset=utf-8"
+                    )
+                }
+                Task { promise.succeed(await provider()) }
                 return
             }
             // WEB-7.2: create a new worktree. POST-only; other verbs get

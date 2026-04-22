@@ -164,7 +164,8 @@ final class WebServerController: ObservableObject {
                     zmxDir: zmxDir,
                     sessionsProvider: sessionsProvider,
                     reposProvider: repos,
-                    worktreeCreator: creator
+                    worktreeCreator: creator,
+                    ghosttyConfigProvider: { GhosttyConfigReader.resolvedConfig() }
                 ),
                 auth: auth,
                 bindAddresses: bind,

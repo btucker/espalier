@@ -89,6 +89,15 @@ struct HostDetailView: View {
         SessionPickerView(controller: controller) { info in
             navigationPath.append(PaneStep(host: host, initialSession: info.name))
         }
+        .task(id: host.id) {
+            // Pull the Mac's resolved Ghostty config once per host visit
+            // so TerminalController renders panes with the same fonts,
+            // theme, and colors as the desktop app. Silently falls back
+            // to libghostty-spm's defaults on 404/network error.
+            if let text = await GhosttyConfigFetcher.fetch(baseURL: host.baseURL) {
+                TerminalController.shared.updateConfigSource(.generated(text))
+            }
+        }
     }
 }
 
@@ -101,6 +110,7 @@ struct PaneGridView: View {
     @State private var controller: HostController
     @State private var sessionClients: [UUID: SessionClient] = [:]
     @State private var activePaneID: UUID?
+    @State private var isKeyboardVisible: Bool = false
 
     init(step: PaneStep, navigationPath: Binding<NavigationPath>) {
         self.step = step
@@ -120,12 +130,36 @@ struct PaneGridView: View {
             }
             SessionSwitcherView(controller: controller, activePaneID: $activePaneID)
         }
-        .navigationTitle(step.host.label)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("Close") { navigationPath.removeLast() }
+        .ignoresSafeArea(edges: .top)
+        .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .bottomTrailing) {
+            if isKeyboardVisible {
+                Button {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.title2)
+                        .foregroundStyle(.primary)
+                        .padding(10)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .shadow(radius: 1)
+                }
+                .padding(.trailing, 12)
+                .padding(.bottom, 12)
+                .accessibilityLabel("Hide keyboard")
+                .transition(.opacity.combined(with: .scale))
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: isKeyboardVisible)
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillShowNotification
+        )) { _ in isKeyboardVisible = true }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillHideNotification
+        )) { _ in isKeyboardVisible = false }
         .task {
             // Opening the initial pane on `.task` rather than `init` so the
             // SessionClient's start() and its spawned Task run after the
