@@ -39,7 +39,21 @@ public enum PtyProcess {
     /// Spawn `argv[0]` with `argv[1...]` as arguments and `env` as
     /// the environment. The child's stdin/stdout/stderr are the PTY
     /// slave; the master fd is returned for the parent to use.
-    public static func spawn(argv: [String], env: [String: String]) throws -> Spawned {
+    ///
+    /// `initialSize` (optional) applies a starting winsize to the PTY
+    /// *before* the child execs, so the child's first `TIOCGWINSZ`
+    /// read sees it. `zmx attach` uses that initial size to populate
+    /// its `Init` IPC; if callers want deterministic startup sizing
+    /// (tests, or propagating the host-side known viewport), pass it
+    /// here rather than race an initial TIOCSWINSZ against the child's
+    /// startup path. On macOS the ioctl is applied after the parent
+    /// has opened the slave — winsize storage is slave-backed and
+    /// returns ENOTTY until at least one slave open has occurred.
+    public static func spawn(
+        argv: [String],
+        env: [String: String],
+        initialSize: (cols: UInt16, rows: UInt16)? = nil
+    ) throws -> Spawned {
         precondition(!argv.isEmpty, "argv must not be empty")
 
         let master = posix_openpt(O_RDWR | O_NOCTTY)
@@ -71,6 +85,16 @@ public enum PtyProcess {
         if parentSlaveFD < 0 {
             close(master)
             throw Error.ptsnameFailed
+        }
+
+        if let size = initialSize {
+            var ws = winsize(
+                ws_row: size.rows,
+                ws_col: size.cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0
+            )
+            _ = ioctl(master, UInt(TIOCSWINSZ), &ws)
         }
 
         // After fork the child inherits and execs; the C strings' lifetime
@@ -124,11 +148,65 @@ public enum PtyProcess {
                 close(fd)
                 fd += 1
             }
+            // Launch via posix_spawn with POSIX_SPAWN_SETEXEC +
+            // POSIX_SPAWN_SETSIGMASK (+ signal-defaults) instead of
+            // `execve`. The setsigmask guarantees the child process
+            // starts with an *empty* signal mask — a plain execve
+            // carries the forked parent's mask across, and when that
+            // parent is a Swift app the mask typically has signals
+            // blocked that GCD/Dispatch intercepts on its service
+            // threads. `zmx attach` relies on SIGWINCH delivery to
+            // learn about PTY resizes; with the mask left in place the
+            // kernel sets SIGWINCH pending but never delivers it to
+            // zmx's handler, so the resize never propagates (see
+            // `Tests/GrafttyKitTests/Zmx/ZmxResizePropagationTests`).
+            //
+            // Why posix_spawn and not `sigprocmask(SIG_SETMASK, empty)`
+            // directly: the explicit sigprocmask-in-fork-child approach
+            // was attempted and the tests continued to fail — the mask
+            // reset didn't take effect in the exec'd image for reasons
+            // that look like libsystem-internal state leaking through.
+            // POSIX_SPAWN_SETSIGMASK is the kernel-level, documented
+            // way to pin the new image's initial mask.
+            //
+            // POSIX_SPAWN_SETEXEC makes this call replace the current
+            // process image (like execve) rather than fork+exec. We
+            // needed our own fork above for `setsid()` + `TIOCSCTTY`,
+            // since those aren't expressible via spawnattr_t.
+            var spawnAttrs: posix_spawnattr_t?
+            guard posix_spawnattr_init(&spawnAttrs) == 0 else { _exit(127) }
+            defer { posix_spawnattr_destroy(&spawnAttrs) }
+
+            var emptyMask = sigset_t()
+            sigemptyset(&emptyMask)
+            var allMask = sigset_t()
+            sigfillset(&allMask)
+            _ = posix_spawnattr_setsigmask(&spawnAttrs, &emptyMask)
+            // Also defensively request SIG_DFL for every signal — this
+            // guards against any inherited `SIG_IGN` action that might
+            // carry over despite execve's action-reset semantics.
+            _ = posix_spawnattr_setsigdefault(&spawnAttrs, &allMask)
+            _ = posix_spawnattr_setflags(
+                &spawnAttrs,
+                Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
+            )
+
+            var spawnedPid: pid_t = 0
             _ = argvPointers.withUnsafeMutableBufferPointer { argvBuf in
                 envPointers.withUnsafeMutableBufferPointer { envBuf in
-                    execve(argvBuf.baseAddress![0], argvBuf.baseAddress, envBuf.baseAddress)
+                    posix_spawn(
+                        &spawnedPid,
+                        argvBuf.baseAddress![0],
+                        nil,
+                        &spawnAttrs,
+                        argvBuf.baseAddress,
+                        envBuf.baseAddress
+                    )
                 }
             }
+            // POSIX_SPAWN_SETEXEC means posix_spawn only returns on
+            // failure — success replaces the image and we never get
+            // here. So reaching this point is a spawn failure.
             _exit(127)
         }
 
