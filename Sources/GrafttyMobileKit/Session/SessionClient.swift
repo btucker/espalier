@@ -106,14 +106,6 @@ public final class SessionClient {
         ws.close()
     }
 
-    /// Called from `SingleSessionView` when the user interacts — taps,
-    /// scrolls, etc. No-op for now (leadership is claimed only on real
-    /// keystrokes, not on scroll-view interaction), but left as a
-    /// seam in case we later want tap-to-claim behavior back.
-    public func userDidInteract() {
-        // intentionally empty
-    }
-
     private func claimLeadershipIfNeeded() {
         guard !isLeader, !stopped, let v = lastIOSViewport else { return }
         isLeader = true

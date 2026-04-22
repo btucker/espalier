@@ -222,24 +222,20 @@ struct SingleSessionView: View {
     @ViewBuilder
     private func terminalContent(containerSize: CGSize) -> some View {
         if let controller {
+            let pane = TerminalPaneView(
+                session: client.session,
+                controller: controller,
+                focusRequestCount: focusRequestCount
+            )
             let cellWidth = estimatedCellWidth
             let visibleCols = containerSize.width / cellWidth
             let serverCols = CGFloat(client.serverGrid?.cols ?? 0)
             if serverCols > visibleCols + 0.5 {
                 ScrollView(.horizontal, showsIndicators: true) {
-                    TerminalPaneView(
-                        session: client.session,
-                        controller: controller,
-                        focusRequestCount: focusRequestCount
-                    )
-                    .frame(width: serverCols * cellWidth, height: containerSize.height)
+                    pane.frame(width: serverCols * cellWidth, height: containerSize.height)
                 }
             } else {
-                TerminalPaneView(
-                    session: client.session,
-                    controller: controller,
-                    focusRequestCount: focusRequestCount
-                )
+                pane
             }
         } else {
             // TerminalController not yet constructed (Mac config fetch

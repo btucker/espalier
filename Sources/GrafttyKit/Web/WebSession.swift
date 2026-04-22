@@ -176,19 +176,31 @@ public final class WebSession {
         let thread = Thread { [weak self] in
             while true {
                 guard let self else { break }
+                // Single critical section per iteration: check that the
+                // session hasn't been closed (the `close()` path sets
+                // isClosed=true then Darwin.close(fd)) AND read the last
+                // known size. Doing the ioctl *inside* the lock prevents
+                // the close+fd-reuse race where a freshly-opened fd of
+                // the same integer value would get a spurious TIOCGWINSZ.
                 self.stateLock.lock()
                 let closed = self.isClosed
-                self.stateLock.unlock()
-                if closed { break }
-                if let size = PtyProcess.currentSize(masterFD: fd) {
-                    self.stateLock.lock()
+                guard !closed else {
+                    self.stateLock.unlock()
+                    break
+                }
+                let size = PtyProcess.currentSize(masterFD: fd)
+                var emit: (UInt16, UInt16)?
+                if let size {
                     let changed = (self.lastKnownSize?.cols != size.cols)
                                 || (self.lastKnownSize?.rows != size.rows)
-                    if changed { self.lastKnownSize = size }
-                    let cb = self.onPTYSize
-                    self.stateLock.unlock()
-                    if changed { cb?(size.cols, size.rows) }
+                    if changed {
+                        self.lastKnownSize = size
+                        emit = (size.cols, size.rows)
+                    }
                 }
+                let cb = self.onPTYSize
+                self.stateLock.unlock()
+                if let (cols, rows) = emit { cb?(cols, rows) }
                 Thread.sleep(forTimeInterval: 0.25)
             }
         }

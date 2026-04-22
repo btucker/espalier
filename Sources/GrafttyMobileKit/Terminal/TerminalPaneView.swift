@@ -15,18 +15,15 @@ public struct TerminalPaneView: UIViewRepresentable {
     public let session: InMemoryTerminalSession
     public let controller: TerminalController
     public let focusRequestCount: Int
-    public let onFocus: () -> Void
 
     public init(
         session: InMemoryTerminalSession,
         controller: TerminalController,
-        focusRequestCount: Int = 0,
-        onFocus: @escaping () -> Void = {}
+        focusRequestCount: Int = 0
     ) {
         self.session = session
         self.controller = controller
         self.focusRequestCount = focusRequestCount
-        self.onFocus = onFocus
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator() }
