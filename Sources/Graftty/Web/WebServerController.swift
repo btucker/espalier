@@ -120,6 +120,10 @@ final class WebServerController: ObservableObject {
             let tailscaleStatus = try runBlocking { try await api.status() }
             guard let fqdn = tailscaleStatus.dnsName else {
                 status = .magicDNSDisabled
+                // Clear lastApplied so the next settings pulse re-probes;
+                // otherwise the user has to toggle web access off + on to
+                // recover after enabling MagicDNS in the admin console.
+                lastApplied = nil
                 return
             }
             let bind = tailscaleStatus.tailscaleIPs
@@ -139,9 +143,11 @@ final class WebServerController: ObservableObject {
                 pair = try runBlocking { try await api.certPair(for: fqdn) }
             } catch TailscaleLocalAPI.Error.httpsCertsDisabled {
                 status = .httpsCertsNotEnabled
+                lastApplied = nil
                 return
             } catch {
                 status = .certFetchFailed("\(error)")
+                lastApplied = nil
                 return
             }
             let tlsContext: NIOSSLContext
@@ -151,6 +157,7 @@ final class WebServerController: ObservableObject {
                 )
             } catch {
                 status = .certFetchFailed("\(error)")
+                lastApplied = nil
                 return
             }
             let provider = WebTLSContextProvider(initial: tlsContext)
@@ -177,11 +184,15 @@ final class WebServerController: ObservableObject {
             self.serverHostname = fqdn
 
             // Kick off the 24h renewal loop. Fresh bytes were just fetched
-            // above — no need for an immediate renewNow here.
+            // above — no need for an immediate renewNow here. Re-auto-detect
+            // the LocalAPI transport inside the closure so a Tailscale
+            // restart that rotates the socket path / TCP port doesn't
+            // silently freeze renewal against a stale endpoint.
             let renewer = WebCertRenewer(
                 provider: provider,
                 interval: 24 * 60 * 60,
                 fetch: {
+                    let api = try TailscaleLocalAPI.autoDetected()
                     let pair = try await api.certPair(for: fqdn)
                     return try WebTLSCertFetcher.buildContext(
                         certPEM: pair.cert, keyPEM: pair.key
