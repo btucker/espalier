@@ -13,15 +13,18 @@ import UIKit
 /// the user having to tap the terminal itself.
 public struct TerminalPaneView: UIViewRepresentable {
     public let session: InMemoryTerminalSession
+    public let controller: TerminalController
     public let focusRequestCount: Int
     public let onFocus: () -> Void
 
     public init(
         session: InMemoryTerminalSession,
+        controller: TerminalController,
         focusRequestCount: Int = 0,
         onFocus: @escaping () -> Void = {}
     ) {
         self.session = session
+        self.controller = controller
         self.focusRequestCount = focusRequestCount
         self.onFocus = onFocus
     }
@@ -34,7 +37,7 @@ public struct TerminalPaneView: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> UITerminalView {
         let view = UITerminalView(frame: .zero)
-        view.controller = TerminalController.shared
+        view.controller = controller
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         context.coordinator.lastFocusRequest = focusRequestCount
         return view
@@ -44,9 +47,6 @@ public struct TerminalPaneView: UIViewRepresentable {
         view.configuration = TerminalSurfaceOptions(backend: .inMemory(session))
         if context.coordinator.lastFocusRequest != focusRequestCount {
             context.coordinator.lastFocusRequest = focusRequestCount
-            // Async hop so the call happens outside the current view-update
-            // transaction; UIKit is happier when responder changes aren't
-            // driven synchronously from a SwiftUI render pass.
             DispatchQueue.main.async {
                 _ = view.becomeFirstResponder()
             }

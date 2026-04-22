@@ -98,6 +98,14 @@ struct SingleSessionView: View {
     @Binding var navigationPath: NavigationPath
 
     @State private var client: SessionClient
+    /// Per-host TerminalController constructed with the Mac's ghostty
+    /// config as its `configSource` — so `baseConfigTemplate` holds
+    /// the Mac config, and libghostty-spm's on-trait-change
+    /// `setColorScheme()` reconfigures on top of it instead of
+    /// replacing it with the library default. Nil while we're still
+    /// fetching the Mac config; replaced with a real controller
+    /// once the fetch lands.
+    @State private var controller: TerminalController?
     /// Actual system state (driven by keyboardWillShow/Hide).
     @State private var isKeyboardVisible: Bool = false
     /// User-controlled: false after the user taps "Hide keyboard". A
@@ -157,8 +165,17 @@ struct SingleSessionView: View {
             )) { _ in isKeyboardVisible = false }
             .task { client.start() }
             .task(id: step.host.id) {
-                if let text = await GhosttyConfigFetcher.fetch(baseURL: step.host.baseURL) {
-                    TerminalController.shared.updateConfigSource(.generated(text))
+                // Fetch Mac config, then construct the per-host
+                // TerminalController with it baked into the init source.
+                // Doing it this way (vs. TerminalController.shared +
+                // updateConfigSource) means `baseConfigTemplate` captures
+                // the Mac config, so scene-phase / trait-collection
+                // color-scheme recomputes preserve the Mac theme.
+                let text = await GhosttyConfigFetcher.fetch(baseURL: step.host.baseURL)
+                if controller == nil {
+                    controller = TerminalController(
+                        configSource: text.map { .generated($0) } ?? .none
+                    )
                 }
             }
             .onDisappear { client.stop() }
@@ -204,16 +221,33 @@ struct SingleSessionView: View {
     /// between our local grid and the server's).
     @ViewBuilder
     private func terminalContent(containerSize: CGSize) -> some View {
-        let cellWidth = estimatedCellWidth
-        let visibleCols = containerSize.width / cellWidth
-        let serverCols = CGFloat(client.serverGrid?.cols ?? 0)
-        if serverCols > visibleCols + 0.5 {
-            ScrollView(.horizontal, showsIndicators: true) {
-                TerminalPaneView(session: client.session, focusRequestCount: focusRequestCount)
+        if let controller {
+            let cellWidth = estimatedCellWidth
+            let visibleCols = containerSize.width / cellWidth
+            let serverCols = CGFloat(client.serverGrid?.cols ?? 0)
+            if serverCols > visibleCols + 0.5 {
+                ScrollView(.horizontal, showsIndicators: true) {
+                    TerminalPaneView(
+                        session: client.session,
+                        controller: controller,
+                        focusRequestCount: focusRequestCount
+                    )
                     .frame(width: serverCols * cellWidth, height: containerSize.height)
+                }
+            } else {
+                TerminalPaneView(
+                    session: client.session,
+                    controller: controller,
+                    focusRequestCount: focusRequestCount
+                )
             }
         } else {
-            TerminalPaneView(session: client.session, focusRequestCount: focusRequestCount)
+            // TerminalController not yet constructed (Mac config fetch
+            // in flight). Minimal placeholder; expected lifetime is a
+            // few tens of ms on cache hits, up to one round-trip on
+            // the first pane of a new host.
+            Color.black
+                .overlay(ProgressView().tint(.white))
         }
     }
 
