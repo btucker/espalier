@@ -27,7 +27,7 @@ struct WebSettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, minHeight: 240)
+        .frame(minWidth: 420, minHeight: 440)
     }
 
     /// "Base URL: <link>  [copy]" — a clickable `Link` that opens in the
