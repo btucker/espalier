@@ -31,9 +31,9 @@ public final class WebCertRenewer: @unchecked Sendable {
     public func start() {
         lock.lock(); defer { lock.unlock() }
         guard task == nil else { return }
-        let provider = self.provider
+        // Snapshot the sleep interval so the timer can fire before the
+        // `guard let self` strong-anchors the owner for fetch+swap.
         let interval = self.interval
-        let fetch = self.fetch
         task = Task.detached { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -41,10 +41,12 @@ public final class WebCertRenewer: @unchecked Sendable {
                 } catch {
                     return
                 }
-                guard self != nil else { return }
+                // guard-let anchors a strong `self` for the remainder of
+                // this iteration so stop() can't race the fetch+swap.
+                guard let self else { return }
                 do {
-                    let new = try await fetch()
-                    provider.swap(new)
+                    let new = try await self.fetch()
+                    self.provider.swap(new)
                 } catch {
                     NSLog("[WebCertRenewer] renewal fetch failed: \(error)")
                 }
