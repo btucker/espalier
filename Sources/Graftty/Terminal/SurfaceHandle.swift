@@ -198,29 +198,21 @@ final class SurfaceHandle {
 
     func setFocus(_ focused: Bool) {
         ghostty_surface_set_focus(surface, focused)
-        // Keep AppKit's first-responder in sync with libghostty's focus
-        // state. `setFocus(true)` is an authoritative "this pane is now
-        // the active one" signal from the model (split, CLI pane-add,
-        // keybind goto-split, sidebar selection), so we must claim first
-        // responder even if another SurfaceNSView currently holds it —
-        // that's exactly the case a split produces.
-        //
-        // If the view is already in a window, promote synchronously.
-        // If not — fresh surfaces created by `splitPane` / CLI add sit
-        // outside the view hierarchy until SwiftUI's next render pass —
-        // retry on the next main-queue turn. We cannot lean on
-        // `SurfaceNSView.viewDidMoveToWindow` for this: that path
-        // deliberately yields to an existing SurfaceNSView first
-        // responder so an incidentally-remounted view doesn't yank focus
-        // from the user's current pane, but that also blocks the split
-        // case where the previous pane's view is still first responder
-        // at the moment the new view mounts. TERM-7.7.
+        // `setFocus(true)` is an authoritative "claim AppKit first
+        // responder now" — claim even if another SurfaceNSView already
+        // holds it, which is exactly the case a split produces. Fresh
+        // surfaces sit outside the view hierarchy until SwiftUI's next
+        // render pass; `SurfaceNSView.viewDidMoveToWindow` can't cover
+        // that case because it deliberately yields to an existing
+        // SurfaceNSView first responder, and the previous pane still
+        // holds it at mount time. Retry on the next main-queue turn
+        // when the view isn't in a window yet. TERM-7.7.
         guard focused, let surfaceView = view as? SurfaceNSView else { return }
         if let window = surfaceView.window {
             window.makeFirstResponder(surfaceView)
         } else {
-            DispatchQueue.main.async { [weak surfaceView] in
-                guard let surfaceView,
+            DispatchQueue.main.async { [weak self] in
+                guard let surfaceView = self?.view as? SurfaceNSView,
                       let window = surfaceView.window else { return }
                 window.makeFirstResponder(surfaceView)
             }

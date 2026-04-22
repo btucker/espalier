@@ -50,15 +50,9 @@ struct GrafttyApp: App {
     @StateObject private var webController: WebServerController
     private let services: AppServices
 
-    // @State on the App struct persists across WindowGroup scene
-    // re-creations. The reopen path (dock-click after cmd+W, or
-    // File → New Window) re-runs the WindowGroup's content closure,
-    // so `.onAppear` fires on every new window — but `startup()`'s
-    // work (ghostty_init, socket listener, pollers, NotificationCenter
-    // observers, reconcileOnLaunch) is all one-time-per-launch.
-    // Without this guard, a dock-click after cmd+W hits
-    // `TerminalManager.initialize()`'s ghosttyApp==nil precondition
-    // and traps the process. LAYOUT-5.3.
+    // SwiftUI re-fires `.onAppear` on dock-reopen and File → New Window
+    // because the WindowGroup content closure reruns; `startup()` is
+    // one-time-per-launch (ghostty_init, pollers, observers). LAYOUT-5.3.
     @State private var didStartup = false
 
     init() {
