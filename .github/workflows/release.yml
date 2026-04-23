@@ -89,6 +89,27 @@ jobs:
           echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
           echo "length=$LENGTH" >> "$GITHUB_OUTPUT"
 
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.zip.outputs.zip }}
+        run: |
+          set -euo pipefail
+          # Create the release if it doesn't already exist. Re-runs of a
+          # partially-failed workflow (e.g., the tap update step crashed) need
+          # to be safe — `gh release create` errors with "release already
+          # exists" otherwise. Splitting create from upload lets us use
+          # `--clobber` on upload so the zip is always the latest.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — re-uploading zip"
+          else
+            gh release create "v$VERSION" \
+              --title "v$VERSION" \
+              --generate-notes
+          fi
+          gh release upload "v$VERSION" "$ZIP" --clobber
+
       - name: Fetch release notes for appcast
         id: notes
         env:
@@ -96,6 +117,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          # Runs after `Create GitHub release` so the body (produced by
+          # `--generate-notes`) is guaranteed to exist.
           NOTES_FILE="$(mktemp)"
           gh release view "v$VERSION" --json body --jq '.body' > "$NOTES_FILE"
           echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
@@ -139,27 +162,6 @@ jobs:
           fi
           git commit -m "appcast: v$VERSION"
           git push origin main
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          ZIP: ${{ steps.zip.outputs.zip }}
-        run: |
-          set -euo pipefail
-          # Create the release if it doesn't already exist. Re-runs of a
-          # partially-failed workflow (e.g., the tap update step crashed) need
-          # to be safe — `gh release create` errors with "release already
-          # exists" otherwise. Splitting create from upload lets us use
-          # `--clobber` on upload so the zip is always the latest.
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Release v$VERSION already exists — re-uploading zip"
-          else
-            gh release create "v$VERSION" \
-              --title "v$VERSION" \
-              --generate-notes
-          fi
-          gh release upload "v$VERSION" "$ZIP" --clobber
 
       - name: Update Homebrew tap
         env:
