@@ -7,6 +7,22 @@ struct GitLabPRFetcherTests {
     let origin = HostingOrigin(provider: .gitlab, host: "gitlab.com", owner: "foo", repo: "bar")
     let branch = "feature/blindspots"
 
+    // PR-5.3: opened-only MR listing for the current glab CLI has no
+    // state flag (default = opened). This shape also pins us against
+    // glab's removal of the old `--state <opened|merged>` flag: if
+    // glab changes again, the stub won't match and the tests will yell.
+    var listOpenedArgs: [String] {
+        ["mr", "list", "--repo", "foo/bar", "--source-branch", branch, "--per-page", "5", "-F", "json"]
+    }
+
+    var listMergedArgs: [String] {
+        ["mr", "list", "--repo", "foo/bar", "--source-branch", branch, "--per-page", "5", "-F", "json", "--merged"]
+    }
+
+    func viewArgs(_ iid: Int) -> [String] {
+        ["mr", "view", String(iid), "--repo", "foo/bar", "-F", "json"]
+    }
+
     func loadFixture(_ name: String) -> String {
         let url = Bundle.module.url(forResource: name, withExtension: "json")!
         return try! String(contentsOf: url, encoding: .utf8)
@@ -16,15 +32,13 @@ struct GitLabPRFetcherTests {
         let fake = FakeCLIExecutor()
         fake.stub(
             command: "glab",
-            args: [
-                "mr", "list",
-                "--repo", "foo/bar",
-                "--source-branch", branch,
-                "--state", "opened",
-                "--per-page", "5",
-                "-F", "json"
-            ],
+            args: listOpenedArgs,
             output: CLIOutput(stdout: loadFixture("glab-mr-opened"), stderr: "", exitCode: 0)
+        )
+        fake.stub(
+            command: "glab",
+            args: viewArgs(512),
+            output: CLIOutput(stdout: loadFixture("glab-mr-view-pipeline-success"), stderr: "", exitCode: 0)
         )
 
         let fetcher = GitLabPRFetcher(executor: fake, now: { Date() })
@@ -43,15 +57,13 @@ struct GitLabPRFetcherTests {
         let fake = FakeCLIExecutor()
         fake.stub(
             command: "glab",
-            args: [
-                "mr", "list",
-                "--repo", "foo/bar",
-                "--source-branch", branch,
-                "--state", "opened",
-                "--per-page", "5",
-                "-F", "json"
-            ],
+            args: listOpenedArgs,
             output: CLIOutput(stdout: loadFixture("glab-mr-fork-open"), stderr: "", exitCode: 0)
+        )
+        fake.stub(
+            command: "glab",
+            args: viewArgs(512),
+            output: CLIOutput(stdout: loadFixture("glab-mr-view-pipeline-success"), stderr: "", exitCode: 0)
         )
 
         let fetcher = GitLabPRFetcher(executor: fake, now: { Date() })
@@ -65,26 +77,12 @@ struct GitLabPRFetcherTests {
         let fake = FakeCLIExecutor()
         fake.stub(
             command: "glab",
-            args: [
-                "mr", "list",
-                "--repo", "foo/bar",
-                "--source-branch", branch,
-                "--state", "opened",
-                "--per-page", "5",
-                "-F", "json"
-            ],
+            args: listOpenedArgs,
             output: CLIOutput(stdout: loadFixture("glab-mr-empty"), stderr: "", exitCode: 0)
         )
         fake.stub(
             command: "glab",
-            args: [
-                "mr", "list",
-                "--repo", "foo/bar",
-                "--source-branch", branch,
-                "--state", "merged",
-                "--per-page", "5",
-                "-F", "json"
-            ],
+            args: listMergedArgs,
             output: CLIOutput(stdout: loadFixture("glab-mr-merged"), stderr: "", exitCode: 0)
         )
 
@@ -92,6 +90,30 @@ struct GitLabPRFetcherTests {
         let mr = try await fetcher.fetch(origin: origin, branch: branch)
         #expect(mr?.number == 498)
         #expect(mr?.state == .merged)
+        #expect(mr?.checks == PRInfo.Checks.none)
+    }
+
+    // PR-5.4 parity: if the pipeline-status view call fails after the
+    // list call succeeded, still surface the MR with `.none` checks
+    // rather than losing the whole PRInfo. Hiding the `#<iid>` badge
+    // because pipeline couldn't resolve is worse UX than a neutral dot.
+    @Test func pipelineViewFailureFallsBackToNoneChecks() async throws {
+        let fake = FakeCLIExecutor()
+        fake.stub(
+            command: "glab",
+            args: listOpenedArgs,
+            output: CLIOutput(stdout: loadFixture("glab-mr-opened"), stderr: "", exitCode: 0)
+        )
+        fake.stub(
+            command: "glab",
+            args: viewArgs(512),
+            error: .nonZeroExit(command: "glab", exitCode: 1, stderr: "network hiccup")
+        )
+
+        let fetcher = GitLabPRFetcher(executor: fake, now: { Date() })
+        let mr = try await fetcher.fetch(origin: origin, branch: branch)
+        #expect(mr?.number == 512)
+        #expect(mr?.state == .open)
         #expect(mr?.checks == PRInfo.Checks.none)
     }
 }
