@@ -27,7 +27,7 @@ public final class SessionClient {
         public let rows: UInt16
     }
 
-    private let ws: WebSocketClient
+    nonisolated private let ws: WebSocketClient
     private var receiveTask: Task<Void, Never>?
     private var stopped = false
     /// Last (cols, rows) libghostty reported for the iOS-side view.
@@ -39,6 +39,9 @@ public final class SessionClient {
     /// keystroke, we stay silent on layout changes so the Mac pane
     /// keeps control of the PTY's dimensions.
     private var isLeader = false
+
+    nonisolated private static let lf = Data([0x0A])
+    nonisolated private static let cr = Data([0x0D])
 
     public init(sessionName: String, webSocket: WebSocketClient) {
         self.sessionName = sessionName
@@ -55,9 +58,12 @@ public final class SessionClient {
         )
         // Keystroke path: user-typed bytes go straight onto the WS
         // from the callback's own context (ws.send is thread-safe).
-        // First keystroke also claims leadership.
-        box.onBytes = { [ws, weak self] data in
-            Task { [ws] in try? await ws.send(.binary(data)) }
+        // First keystroke also claims leadership. IOS-6.3: a standalone
+        // LF is the soft-keyboard Return; translate to CR so TUIs see
+        // "submit" rather than "insert newline."
+        box.onBytes = { [weak self] data in
+            let isSoftReturn = data.count == 1 && data.first == 0x0A
+            self?.sendBinary(isSoftReturn ? Self.cr : data)
             Task { @MainActor [weak self] in
                 self?.claimLeadershipIfNeeded()
             }
@@ -98,6 +104,12 @@ public final class SessionClient {
         }
     }
 
+    /// IOS-6.4: send literal LF, bypassing the IOS-6.3 translation.
+    public func insertNewline() {
+        sendBinary(Self.lf)
+        claimLeadershipIfNeeded()
+    }
+
     public func stop() {
         guard !stopped else { return }
         stopped = true
@@ -113,8 +125,15 @@ public final class SessionClient {
     }
 
     private func sendResizeToServer(cols: UInt16, rows: UInt16) {
-        let payload = WebControlEnvelope.resize(cols: cols, rows: rows).encoded()
-        Task { [ws] in try? await ws.send(.text(payload)) }
+        sendText(WebControlEnvelope.resize(cols: cols, rows: rows).encoded())
+    }
+
+    nonisolated private func sendBinary(_ data: Data) {
+        Task { [ws] in try? await ws.send(.binary(data)) }
+    }
+
+    nonisolated private func sendText(_ text: String) {
+        Task { [ws] in try? await ws.send(.text(text)) }
     }
 
     private func handleTextFrame(_ text: String) {

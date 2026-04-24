@@ -138,10 +138,16 @@ struct SingleSessionView: View {
         .ignoresSafeArea(.container, edges: .all)
         .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .bottomTrailing) {
-                keyboardButton
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 12)
-                    .transition(.opacity.combined(with: .scale))
+                HStack(spacing: 8) {
+                    if isKeyboardVisible {
+                        newlineButton
+                            .transition(.opacity.combined(with: .scale))
+                    }
+                    keyboardButton
+                        .transition(.opacity.combined(with: .scale))
+                }
+                .padding(.trailing, 12)
+                .padding(.bottom, 12)
             }
             .animation(.easeInOut(duration: 0.15), value: isKeyboardVisible)
             .animation(.easeInOut(duration: 0.15), value: keyboardAllowed)
@@ -179,6 +185,16 @@ struct SingleSessionView: View {
                 }
             }
             .onDisappear { client.stop() }
+    }
+
+    /// IOS-6.4: inserts a literal newline; the keyboard's Return submits.
+    private var newlineButton: some View {
+        Button {
+            client.insertNewline()
+        } label: {
+            keyboardGlyph("arrow.turn.down.left")
+        }
+        .accessibilityLabel("Insert newline")
     }
 
     /// Tri-state floating button:
