@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import GrafttyKit
+import GrafttyProtocol
 
 /// Sheet for creating a new worktree under a repo. Collects a directory
 /// name (used for the worktree path at `<repo>/.worktrees/<name>`) and a
@@ -120,20 +121,9 @@ struct AddWorktreeSheet: View {
         }
     }
 
-    /// Characters stripped from either end when finalizing submission. We
-    /// don't trim these as-you-type (it would swallow the separator between
-    /// words) but a leading or trailing '-' or '.' in the final name is
-    /// never what the user wants — and git rejects a leading '.' anyway.
-    private static let submitTrimSet: CharacterSet = {
-        var set = CharacterSet.whitespaces
-        set.insert(charactersIn: "-.")
-        return set
-    }()
-
     private var canSubmit: Bool {
-        let wt = worktreeName.trimmingCharacters(in: Self.submitTrimSet)
-        let br = branchName.trimmingCharacters(in: Self.submitTrimSet)
-        return !wt.isEmpty && !br.isEmpty
+        !WorktreeNameSanitizer.trimForSubmit(worktreeName).isEmpty
+            && !WorktreeNameSanitizer.trimForSubmit(branchName).isEmpty
     }
 
     private func submit() async {
@@ -141,8 +131,8 @@ struct AddWorktreeSheet: View {
         isSubmitting = true
         defer { isSubmitting = false }
 
-        let wt = worktreeName.trimmingCharacters(in: Self.submitTrimSet)
-        let br = branchName.trimmingCharacters(in: Self.submitTrimSet)
+        let wt = WorktreeNameSanitizer.trimForSubmit(worktreeName)
+        let br = WorktreeNameSanitizer.trimForSubmit(branchName)
         if let err = await onSubmit(wt, br) {
             errorMessage = err
         }

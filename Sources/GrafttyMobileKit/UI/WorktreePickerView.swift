@@ -2,11 +2,9 @@
 import GrafttyProtocol
 import SwiftUI
 
-/// First "inside a host" screen — one row per running worktree, grouped
-/// by repo name to mirror the Mac sidebar. Tapping a row pushes a
-/// worktree-scoped destination where the user sees the pane split tree.
 public struct WorktreePickerView: View {
     @State private var state: LoadState = .loading
+    @State private var isAddSheetPresented: Bool = false
     public let host: Host
     public let onSelect: (WorktreePanes) -> Void
 
@@ -60,11 +58,30 @@ public struct WorktreePickerView: View {
             }
         }
         .navigationTitle(host.label)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isAddSheetPresented = true
+                } label: {
+                    Label("Add Worktree", systemImage: "plus")
+                }
+                .accessibilityLabel("Add Worktree")
+            }
+        }
+        .sheet(isPresented: $isAddSheetPresented) {
+            AddWorktreeSheetView(host: host) { response in
+                Task { await handleCreated(response) }
+            }
+        }
         .task { await load() }
     }
 
     private func load() async {
         state = .loading
+        await refresh()
+    }
+
+    private func refresh() async {
         do {
             let list = try await WorktreePanesFetcher.fetch(baseURL: host.baseURL)
             state = .loaded(list)
@@ -76,6 +93,16 @@ public struct WorktreePickerView: View {
             state = .error("The server sent a response this version can't read.")
         } catch {
             state = .error("Couldn't reach the server.")
+        }
+    }
+
+    /// Re-fetch without blanking the existing list so the user isn't
+    /// shown a spinner over a list they just saw populated.
+    private func handleCreated(_ response: CreateWorktreeClient.Response) async {
+        await refresh()
+        guard case .loaded(let list) = state else { return }
+        if let match = list.first(where: { $0.path == response.worktreePath }) {
+            onSelect(match)
         }
     }
 

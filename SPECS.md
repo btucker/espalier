@@ -1247,10 +1247,24 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 
 **IOS-8.2** The v1 iOS app shall not forward terminal mouse events, OSC 52 clipboard reads, or Kitty graphics/keyboard-protocol sequences. (Mirrors `WEB-6.2`.)
 
-**IOS-8.3** The v1 iOS app shall not initiate any pane / worktree / session lifecycle operations on the Mac (create, close, split, move, stop). Any such control surface is deferred to a future spec.
+**IOS-8.3** The v1 iOS app shall not initiate pane lifecycle operations on the Mac (close, split, move, stop) nor worktree-stop or session-kill operations. Worktree **creation** is supported per §19.9. Any other such control surface is deferred to a future spec.
 
 **IOS-8.4** The v1 iOS app shall not persist terminal scrollback on the device. On reconnect, it renders whatever the zmx daemon's buffer still contains.
 
 **IOS-8.5** The v1 iOS app shall not use push notifications for PR status, build completions, or session events.
 
-**CHAN-8.2** The channels socket shall be distinct from the control socket at `graftty.sock`; a failure affecting one shall not disrupt the other.
+### 19.9 Creating worktrees from the iOS client
+
+**IOS-9.1** The worktree-picker screen (`IOS-4.1`) shall display an "Add Worktree" action as a primary toolbar item. Tapping it shall present a modal sheet collecting the fields required by `POST /worktrees` (`WEB-7.2`): a repository picker populated from `GET /repos` (hidden when only one repo is tracked), a worktree-name field, and a branch-name field.
+
+**IOS-9.2** Both the worktree-name and branch-name fields shall sanitize input live with `WorktreeNameSanitizer` (same allowed set as the Mac sheet and the web client: `A-Z a-z 0-9 . _ - /`, consecutive disallowed chars collapsing to a single `-`). The branch field shall auto-mirror the worktree-name field until the user types a branch that differs, at which point the mirror breaks and further edits to the worktree field stop overwriting the branch. On submit, both fields shall be trimmed of leading/trailing whitespace plus `-` and `.` (matching the macOS sheet's `submitTrimSet` and the web client's `trimForSubmit`). The sheet's Create button shall be disabled while either field is empty after trim.
+
+**IOS-9.3** On submit, the application shall issue `POST <baseURL>/worktrees` with `{repoPath, worktreeName, branchName}` and handle the response per the server's status-code contract (`WEB-7.3` / `WEB-7.4`):
+  - `200`: decode `{sessionName, worktreePath}`, dismiss the sheet, refresh the worktree picker via `GET /worktrees/panes`, and push the newly created worktree's detail view onto the navigation stack so the user lands on the new entry — parity with the Mac sidebar auto-selecting the freshly added worktree.
+  - `400` / `409` / `500` / `503`: keep the sheet open and render the server's `{error}` body verbatim inline beneath the form. For git failures (`409`) this surfaces the captured stderr so the user sees messages like `fatal: A branch named 'foo' already exists.` unchanged.
+  - `403`: render "Not authorized — is this device on your tailnet?" (parallels `IOS-4.2`).
+  - transport/decode failures: render a stable fallback string ("Couldn't reach the server.", "The server sent a response this version can't read.") rather than raw bytes.
+
+**IOS-9.4** When `GET /repos` returns an empty list, the sheet shall render an empty-state "No repositories tracked — open a repository in Graftty on the Mac first." and shall not show the input fields. The iOS app shall not implement repository-adding (the Mac-side file-picker + security-scoped bookmark mint has no iOS equivalent, same stance as `WEB-7.7`).
+
+**IOS-9.5** While a `POST /worktrees` call is in flight, the Create button shall be replaced by an in-flight indicator, the Cancel button and both input fields shall be disabled, and the repository picker shall be disabled. Once the call resolves (success or failure) all controls shall re-enable.

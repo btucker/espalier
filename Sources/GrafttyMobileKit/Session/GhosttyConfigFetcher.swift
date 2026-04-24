@@ -61,10 +61,7 @@ public enum GhosttyConfigFetcher {
         baseURL: URL,
         session: URLSession = .shared
     ) async -> String? {
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        let base = components?.path ?? ""
-        components?.path = base.hasSuffix("/") ? base + "ghostty-config" : base + "/ghostty-config"
-        guard let url = components?.url else { return nil }
+        guard let url = baseURL.appendingAPIPath("ghostty-config") else { return nil }
 
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
