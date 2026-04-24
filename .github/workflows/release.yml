@@ -62,16 +62,21 @@ jobs:
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "Zip: $ZIP ($SHA256)"
 
-      - name: Build Sparkle sign_update
+      - name: Fetch Sparkle sign_update
         run: |
           set -euo pipefail
-          # Clone Sparkle at the same version our SwiftPM package
-          # resolves to. Package.resolved is the source of truth.
+          # Sparkle's SPM manifest is a binary-wrapper for their XCFramework
+          # and declares no buildable targets — `swift build --product
+          # sign_update` cannot work against it. Fetch the prebuilt tool
+          # from Sparkle's release tarball instead. Package.resolved pins
+          # the version so the signer matches the embedded framework.
           SPARKLE_VERSION="$(jq -r '.pins[] | select(.identity=="sparkle") | .state.version' Package.resolved)"
-          git clone --depth 1 --branch "$SPARKLE_VERSION" \
-            https://github.com/sparkle-project/Sparkle.git /tmp/sparkle
-          (cd /tmp/sparkle && swift build -c release --product sign_update)
-          cp /tmp/sparkle/.build/release/sign_update ./sign_update
+          curl -fsSL -o /tmp/sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir -p /tmp/sparkle-extract
+          tar -xJf /tmp/sparkle.tar.xz -C /tmp/sparkle-extract
+          cp /tmp/sparkle-extract/bin/sign_update ./sign_update
+          chmod +x ./sign_update
 
       - name: Sign release zip
         id: sign
