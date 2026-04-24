@@ -6,6 +6,12 @@ import Foundation
 /// ends up with the valid identifier `my-feature-foo-` rather than a
 /// later `git worktree add` failure.
 ///
+/// Lives in `GrafttyProtocol` (not `GrafttyKit`) so the Mac sheet, the
+/// web client's `sanitizeWorktreeName` port, and the iOS "Add worktree"
+/// sheet all resolve the same byte-identical name for the same user
+/// input — a name typed on any client must round-trip to the same
+/// on-disk path the server creates (IOS-1.3 / WEB-7.6).
+///
 /// The allowed set is intentionally narrow and ASCII-only:
 /// `A-Z a-z 0-9 . _ - /`. This is a subset of what both macOS paths and
 /// `git check-ref-format` accept, so a sanitized name is valid for both.
@@ -68,5 +74,20 @@ public enum WorktreeNameSanitizer {
         default:
             return false
         }
+    }
+
+    /// Characters stripped from either end when finalizing submission.
+    /// We don't trim as-you-type (it swallows the separator between the
+    /// current word and the next keystroke) but leading/trailing `-` or
+    /// `.` in the final name is never what the user wants, and git
+    /// rejects a leading `.` anyway.
+    public static let submitTrimCharacters: CharacterSet = {
+        var set = CharacterSet.whitespaces
+        set.insert(charactersIn: "-.")
+        return set
+    }()
+
+    public static func trimForSubmit(_ s: String) -> String {
+        s.trimmingCharacters(in: submitTrimCharacters)
     }
 }

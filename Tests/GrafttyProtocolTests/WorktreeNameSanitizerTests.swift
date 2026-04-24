@@ -1,5 +1,5 @@
 import Testing
-@testable import GrafttyKit
+@testable import GrafttyProtocol
 
 @Suite("WorktreeNameSanitizer")
 struct WorktreeNameSanitizerTests {
@@ -122,5 +122,22 @@ struct WorktreeNameSanitizerTests {
 
     @Test func prefillPreservesSlashes() {
         #expect(WorktreeNameSanitizer.sanitizeForPrefill("a/b/c-feature") == "a/b/c-feature")
+    }
+
+    @Test func trimForSubmitStripsWhitespaceDashesAndDotsFromBothEnds() {
+        #expect(WorktreeNameSanitizer.trimForSubmit("  feature-xyz  ") == "feature-xyz")
+        #expect(WorktreeNameSanitizer.trimForSubmit("-feature-") == "feature")
+        #expect(WorktreeNameSanitizer.trimForSubmit(".feature.") == "feature")
+        #expect(WorktreeNameSanitizer.trimForSubmit("- .-feature-. -") == "feature")
+    }
+
+    @Test func trimForSubmitPreservesInteriorCharacters() {
+        #expect(WorktreeNameSanitizer.trimForSubmit("feat-ure/foo") == "feat-ure/foo")
+        #expect(WorktreeNameSanitizer.trimForSubmit("a.b.c") == "a.b.c")
+    }
+
+    @Test func trimForSubmitReturnsEmptyForDashOnlyInput() {
+        #expect(WorktreeNameSanitizer.trimForSubmit("---") == "")
+        #expect(WorktreeNameSanitizer.trimForSubmit("") == "")
     }
 }

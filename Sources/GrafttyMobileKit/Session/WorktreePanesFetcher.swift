@@ -19,10 +19,7 @@ public enum WorktreePanesFetcher {
         baseURL: URL,
         session: URLSession = .shared
     ) async throws -> [WorktreePanes] {
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        let base = components?.path ?? ""
-        components?.path = base.hasSuffix("/") ? base + "worktrees/panes" : base + "/worktrees/panes"
-        guard let url = components?.url else { throw FetchError.transport }
+        guard let url = baseURL.appendingAPIPath("worktrees/panes") else { throw FetchError.transport }
 
         var req = URLRequest(url: url)
         req.httpMethod = "GET"

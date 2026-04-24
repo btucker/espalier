@@ -12,16 +12,7 @@ public enum SessionsFetcher {
     }
 
     public static func request(baseURL: URL) -> URLRequest {
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        let existing = components?.path ?? ""
-        let newPath: String
-        if existing.hasSuffix("/") {
-            newPath = existing + "sessions"
-        } else {
-            newPath = existing + "/sessions"
-        }
-        components?.path = newPath
-        let url = components?.url ?? baseURL.appendingPathComponent("sessions")
+        let url = baseURL.appendingAPIPath("sessions") ?? baseURL.appendingPathComponent("sessions")
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
