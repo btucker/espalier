@@ -71,4 +71,11 @@ struct TeamViewTests {
         #expect(view.memberNamed("alice")?.branch == "alice")
         #expect(view.memberNamed("nobody") == nil)
     }
+
+    @Test func membersSortedWithLeadFirst() {
+        let repo = makeRepo(path: "/r/multi", displayName: "multi", branches: ["main", "a", "b"])
+        let view = TeamView.team(for: repo.worktrees[0], in: [repo], teamsEnabled: true)!
+        #expect(view.members[0].role == .lead)
+        #expect(view.members[0].worktreePath == "/r/multi")
+    }
 }

@@ -35,11 +35,21 @@ public struct TeamMember: Sendable, Equatable {
 public struct TeamView: Sendable, Equatable {
     public let repoPath: String
     public let repoDisplayName: String
-    public let members: [TeamMember]   // members[0] is always the lead
+    /// members[0] is always the lead, enforced by the static factory `team(for:in:teamsEnabled:)`.
+    public let members: [TeamMember]
+
+    /// Internal so external modules must construct via `team(for:in:teamsEnabled:)`,
+    /// which enforces the "members[0] is the lead, count >= 2" invariant.
+    internal init(repoPath: String, repoDisplayName: String, members: [TeamMember]) {
+        self.repoPath = repoPath
+        self.repoDisplayName = repoDisplayName
+        self.members = members
+    }
 
     public var lead: TeamMember {
+        // Guaranteed non-empty by the static factory.
         members.first(where: { $0.role == .lead })
-            ?? members[0]   // safety: should never fall through given construction below
+            ?? members[0]
     }
 
     public func memberNamed(_ name: String) -> TeamMember? {
