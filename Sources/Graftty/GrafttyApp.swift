@@ -38,8 +38,7 @@ final class AppServices {
                     return observer.composedPrompt(forWorktree: worktreePath)
                 }
                 // Fallback before observer is wired (should not normally happen).
-                return UserDefaults.standard.string(forKey: SettingsKeys.channelPrompt)
-                    ?? AgentTeamsSettingsPane.defaultPrompt
+                return ""
             }
         )
         let observer = ChannelSettingsObserver(

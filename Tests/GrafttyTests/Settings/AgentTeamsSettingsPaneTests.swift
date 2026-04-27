@@ -23,4 +23,29 @@ struct AgentTeamsSettingsPaneTests {
         #expect(defaults.object(forKey: "channelsEnabled") == nil
                 || defaults.bool(forKey: "channelsEnabled") == false)
     }
+
+    /// teamLeadPrompt and teamCoworkerPrompt persist independently (TEAM-1.6).
+    @Test func leadAndCoworkerPromptsAreIndependent() {
+        let defaults = UserDefaults(suiteName: "AgentTeamsSettingsPaneTests-2")!
+        defaults.removePersistentDomain(forName: "AgentTeamsSettingsPaneTests-2")
+
+        defaults.set("lead policy text", forKey: SettingsKeys.teamLeadPrompt)
+        defaults.set("coworker policy text", forKey: SettingsKeys.teamCoworkerPrompt)
+
+        #expect(defaults.string(forKey: SettingsKeys.teamLeadPrompt) == "lead policy text")
+        #expect(defaults.string(forKey: SettingsKeys.teamCoworkerPrompt) == "coworker policy text")
+
+        // Mutating one must not affect the other.
+        defaults.set("updated lead", forKey: SettingsKeys.teamLeadPrompt)
+        #expect(defaults.string(forKey: SettingsKeys.teamCoworkerPrompt) == "coworker policy text")
+    }
+
+    /// teamLeadPrompt and teamCoworkerPrompt default to empty strings (TEAM-1.6).
+    @Test func promptsDefaultToEmptyStrings() {
+        let defaults = UserDefaults(suiteName: "AgentTeamsSettingsPaneTests-3")!
+        defaults.removePersistentDomain(forName: "AgentTeamsSettingsPaneTests-3")
+
+        #expect((defaults.string(forKey: SettingsKeys.teamLeadPrompt) ?? "") == "")
+        #expect((defaults.string(forKey: SettingsKeys.teamCoworkerPrompt) ?? "") == "")
+    }
 }

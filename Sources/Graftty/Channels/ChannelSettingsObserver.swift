@@ -2,7 +2,8 @@ import Foundation
 import Combine
 import GrafttyKit
 
-/// Observes `channelPrompt` and `agentTeamsEnabled` UserDefaults keys and reacts:
+/// Observes `teamLeadPrompt`, `teamCoworkerPrompt`, and `agentTeamsEnabled` UserDefaults
+/// keys and reacts:
 /// - Prompt edits → 500ms debounce → `router.broadcastInstructions()`.
 ///   Debouncing coalesces rapid typing into one fanout per settled edit,
 ///   so subscribers don't get a flood of instructions events while the
@@ -32,8 +33,13 @@ final class ChannelSettingsObserver {
         // and the user has already changed the toggle once.
         router.isEnabled = UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled)
 
-        UserDefaults.standard.publisher(for: \.channelPrompt)
+        UserDefaults.standard.publisher(for: \.teamLeadPrompt)
             .dropFirst()  // skip the initial synchronous emit
+            .sink { [weak self] _ in self?.schedulePromptBroadcast() }
+            .store(in: &cancellables)
+
+        UserDefaults.standard.publisher(for: \.teamCoworkerPrompt)
+            .dropFirst()
             .sink { [weak self] _ in self?.schedulePromptBroadcast() }
             .store(in: &cancellables)
 
@@ -67,9 +73,9 @@ final class ChannelSettingsObserver {
         }
     }
 
-    /// Composes user prompt + team context for a specific worktree (TEAM-3.3).
+    /// Composes team MCP instructions + role-specific user prompt for a specific
+    /// worktree (TEAM-3.3). Returns an empty string for non-team contexts.
     func composedPrompt(forWorktree worktreePath: String) -> String {
-        let userPrompt = UserDefaults.standard.string(forKey: SettingsKeys.channelPrompt) ?? ""
         let teamsEnabled = UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled)
 
         guard teamsEnabled,
@@ -78,10 +84,15 @@ final class ChannelSettingsObserver {
               let team = TeamView.team(for: worktree, in: appState.repos, teamsEnabled: true),
               let me = team.members.first(where: { $0.worktreePath == worktreePath })
         else {
-            return userPrompt
+            return ""
         }
 
         let teamInstructions = TeamInstructionsRenderer.render(team: team, viewer: me)
+        let userPromptKey = me.role == .lead
+            ? SettingsKeys.teamLeadPrompt
+            : SettingsKeys.teamCoworkerPrompt
+        let userPrompt = UserDefaults.standard.string(forKey: userPromptKey) ?? ""
+
         if userPrompt.isEmpty {
             return teamInstructions
         }
@@ -93,11 +104,15 @@ final class ChannelSettingsObserver {
 ///
 /// The Swift property names match the UserDefaults keys exactly, so KVO
 /// (driven by the Objective-C property name) fires whenever anything —
-/// including `@AppStorage("channelPrompt")` / `@AppStorage("agentTeamsEnabled")`
-/// — writes to those keys via `UserDefaults.standard.set(_:forKey:)`.
+/// including `@AppStorage("teamLeadPrompt")` / `@AppStorage("teamCoworkerPrompt")`
+/// / `@AppStorage("agentTeamsEnabled")` — writes to those keys via
+/// `UserDefaults.standard.set(_:forKey:)`.
 extension UserDefaults {
-    @objc dynamic var channelPrompt: String {
-        string(forKey: "channelPrompt") ?? ""
+    @objc dynamic var teamLeadPrompt: String {
+        string(forKey: "teamLeadPrompt") ?? ""
+    }
+    @objc dynamic var teamCoworkerPrompt: String {
+        string(forKey: "teamCoworkerPrompt") ?? ""
     }
     @objc dynamic var agentTeamsEnabled: Bool {
         bool(forKey: "agentTeamsEnabled")

@@ -9,7 +9,8 @@ import SwiftUI
 struct AgentTeamsSettingsPane: View {
     @AppStorage("agentTeamsEnabled") private var agentTeamsEnabled: Bool = false
     @AppStorage("teamPRNotificationsEnabled") private var prNotificationsEnabled: Bool = true
-    @AppStorage("channelPrompt") private var channelPrompt: String = AgentTeamsSettingsPane.defaultPrompt
+    @AppStorage("teamLeadPrompt") private var teamLeadPrompt: String = ""
+    @AppStorage("teamCoworkerPrompt") private var teamCoworkerPrompt: String = ""
 
     var body: some View {
         Form {
@@ -87,27 +88,32 @@ struct AgentTeamsSettingsPane: View {
                     )
                 }
 
-                Section("Prompt") {
-                    Text("Applied to every Claude session with channels enabled. " +
-                         "Edits propagate immediately to running sessions.")
+                Section("Lead prompt") {
+                    Text("Custom prompt for the lead (root) session. Appended to its MCP instructions.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    TextEditor(text: $channelPrompt)
+                    TextEditor(text: $teamLeadPrompt)
                         .font(.system(.caption, design: .monospaced))
-                        .frame(minHeight: 200)
+                        .frame(minHeight: 120)
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
                                 .stroke(Color.secondary.opacity(0.3))
                         )
+                }
 
-                    HStack {
-                        Spacer()
-                        Button("Restore default") {
-                            channelPrompt = Self.defaultPrompt
-                        }
+                Section("Coworker prompt") {
+                    Text("Custom prompt for coworker sessions. Appended to their MCP instructions.")
                         .font(.caption)
-                    }
+                        .foregroundStyle(.secondary)
+
+                    TextEditor(text: $teamCoworkerPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 120)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.3))
+                        )
                 }
             }
         }
@@ -118,15 +124,4 @@ struct AgentTeamsSettingsPane: View {
     /// The exact flag users need to append when launching Claude for a
     /// channel-subscribing session.
     static let launchFlag = "--dangerously-load-development-channels server:graftty-channel"
-
-    static let defaultPrompt: String = """
-    You receive events from Graftty when state changes on the PR associated with your current worktree. Each event arrives as a <channel source="graftty-channel" type="..."> tag with attributes (pr_number, provider, repo, worktree, pr_url) and a short body.
-
-    When you see:
-    - type=pr_state_changed, to=merged: The PR merged. Briefly acknowledge. Don't take destructive actions (e.g. delete the worktree) without explicit confirmation.
-    - type=ci_conclusion_changed, to=failure: Read the failing check log via the pr_url if accessible, summarize what failed, and propose a fix. Don't commit without confirmation.
-    - type=ci_conclusion_changed, to=success: Brief acknowledgement. If the PR is now mergeable, mention it.
-
-    Keep replies short. The user is working in the same terminal; noisy output is disruptive.
-    """
 }

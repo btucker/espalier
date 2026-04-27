@@ -1293,6 +1293,8 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 
 **TEAM-1.4** While `agentTeamsEnabled` is true, the application shall override the user's stored `defaultCommand` value at pane-launch time with the canonical team-mode launch line `claude --dangerously-load-development-channels server:graftty-channel`. The override applies only inside the `defaultCommandDecision` call path used by Graftty to auto-type into newly opened panes; commands the user types into a shell prompt themselves are unaffected.
 
+**TEAM-1.6** The Agent Teams Settings tab shall expose two separate user-editable text areas: one for the *lead prompt* (`@AppStorage("teamLeadPrompt")`, persisted under key `teamLeadPrompt`, default empty string) and one for the *coworker prompt* (`@AppStorage("teamCoworkerPrompt")`, persisted under key `teamCoworkerPrompt`, default empty string). Each is appended exclusively to the MCP instructions for its respective role (per TEAM-3.3). Changes to either field propagate immediately to running sessions via the existing `broadcastInstructions` pipeline.
+
 ### 20.2 Team Identity & Membership
 
 **TEAM-2.1** A *team* is implicit in any `RepoEntry` with two or more `WorktreeEntry` children, while `agentTeamsEnabled` is true. A repo with one worktree (or with team mode off) has no team and no team-aware behavior.
@@ -1309,7 +1311,7 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 
 **TEAM-3.2** The application shall render the *lead variant* of the team-aware instructions when the subscriber's worktree is the team's lead (per TEAM-2.3), and the *coworker variant* otherwise. Both variants name the team (by repo display name), the agent (by member name), and list the team's other members by name and worktree.
 
-**TEAM-3.3** When the user's `channelPrompt` setting (per `CHAN-*`) is non-empty AND a team variant is rendered, the application shall concatenate the team variant followed by a newline followed by the user's `channelPrompt` and emit the combined string as the `instructions` event body. The team variant precedes the user's prompt so role context is established before any user policy guidance.
+**TEAM-3.3** When the user's `teamLeadPrompt` setting is non-empty AND the rendered MCP-instructions variant is the lead variant, the application shall concatenate the lead variant followed by a blank line followed by the user's `teamLeadPrompt` and emit the combined string as the `instructions` event body. Similarly, when the user's `teamCoworkerPrompt` setting is non-empty AND the rendered variant is the coworker variant, the coworker variant is concatenated with the user's `teamCoworkerPrompt` after a blank line. The team variant precedes the user's prompt in both cases so role context is established before any user policy guidance. For non-team contexts (single-worktree repos), neither prompt is appended and the `instructions` event body is the empty string.
 
 **TEAM-3.4** When the team membership of a worktree's repo changes (a worktree is added or removed, or `agentTeamsEnabled` toggles), the application shall re-render and re-broadcast the `instructions` event to every active subscriber whose worktree's team is affected. (This reuses the existing `broadcastInstructions` pipeline.)
 
