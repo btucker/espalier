@@ -150,7 +150,8 @@ struct GrafttyApp: App {
                 terminalManager: terminalManager,
                 statsStore: services.statsStore,
                 prStatusStore: services.prStatusStore,
-                worktreeMonitor: services.worktreeMonitor
+                worktreeMonitor: services.worktreeMonitor,
+                channelRouter: services.channelRouter
             )
                 .environmentObject(webController)
                 .environmentObject(updaterController)
@@ -589,6 +590,7 @@ struct GrafttyApp: App {
         // isolation as the native sidebar's "+" button.
         let worktreeMonitor = services.worktreeMonitor
         let statsStore = services.statsStore
+        let channelRouterForWeb = services.channelRouter
         webController.setWorktreeCreator { req in
             let result = await AddWorktreeFlow.add(
                 repoPath: req.repoPath,
@@ -597,7 +599,10 @@ struct GrafttyApp: App {
                 appState: appStateBinding,
                 worktreeMonitor: worktreeMonitor,
                 statsStore: statsStore,
-                terminalManager: tm
+                terminalManager: tm,
+                channelDispatch: { path, msg in
+                    channelRouterForWeb.dispatch(worktreePath: path, message: msg)
+                }
             )
             switch result {
             case .success(let outcome):
