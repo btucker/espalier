@@ -6,7 +6,7 @@ A new Graftty feature that turns every Claude session in a repo into a member of
 
 After this ships, this user story works:
 
-> I open **Settings → Agent Teams** and turn on **Enable agent teams** (Graftty also turns on Channels; my Default Command field becomes read-only). My main checkout's pane is now the **lead**. I click **+** to add a worktree on `feature/login`; the new pane's claude connects to its own `graftty-channel` MCP subprocess, which on init reports: *"you're 'feature-login' (a coworker) on team 'acme-web'; your lead is 'main'; report status to the lead via `graftty team msg main`."* My lead's pane simultaneously gets a `team_member_joined` channel event for `feature-login`. From the lead I say *"@feature-login please build the form"*; the lead's claude runs `graftty team msg feature-login "please build the form"`, delivered as a `team_message` event to the coworker. When alice's PR merges, **only the lead** gets a `team_pr_merged` event — its instructions teach it to `git pull` and (if it judges the team should know) re-broadcast via `team msg` to the relevant coworkers.
+> I open **Settings → Agent Teams** and turn on **Enable agent teams** (Graftty also turns on Channels; my Default Command field becomes read-only). My main checkout's pane is now the **lead**. I click **+** to add a worktree on `feature/login`; the new pane's claude connects to its own `graftty-channel` MCP subprocess, which on init reports: *"you're 'feature-login' (a coworker) on team 'acme-web'; your lead is 'main'; here's how to send a message to a teammate."* My lead's pane simultaneously gets a `team_member_joined` channel event for `feature-login`. I tell my lead's claude my coordination policy in plain conversation — e.g., *"please ask each coworker for a status update every 15 minutes"* or *"keep coworkers in sync on PR merges"* — and from there the agents decide when to message each other. When alice's PR merges, **only the lead** gets a `team_pr_merged` event; what the lead does with it (pull, broadcast, ignore, prompt for input) is governed by my conversation with it, not by Graftty.
 
 ## Scope
 
@@ -14,8 +14,8 @@ After this ships, this user story works:
 
 - A new Graftty Settings pane, **Agent Teams**, with one global toggle: *Enable agent teams*. Off by default. Every team behavior below is gated on this toggle.
 - While enabled, Graftty **manages the default command** for every auto-launched pane: `claude --dangerously-load-development-channels server:graftty-channel`. (Identical to the channels-only line — no `--append-system-prompt` ever; team awareness is delivered through the MCP server's `instructions` field instead.) The Default Command field in Settings becomes read-only.
-- A team-aware **MCP-instructions template** with two variants — *lead* and *coworker* — that the `graftty mcp-channel` subprocess renders dynamically at MCP `initialize` time. The lead variant names the lead's coworkers and teaches it that status events route through it, with discretion to redistribute. The coworker variant names the coworker's lead (and other peers) and teaches it to address status updates to the lead. The subprocess fetches the data over the existing app socket so it sees the live worktree list.
-- New channel events delivered via the existing `graftty-channel` MCP server: `team_message` (point-to-point, sender → recipient), `team_member_joined` / `team_member_left` / `team_pr_merged` (status events, routed **to the lead only**).
+- A **purely-mechanistic** MCP-instructions template with two variants — *lead* and *coworker* — that the `graftty mcp-channel` subprocess renders dynamically at MCP `initialize` time. The instructions describe *what* the agent has access to (peers, the `graftty team msg` command, the channel events it will receive) and *nothing about when or whether to use them*. Coordination policy — when to message the lead, what to do on a PR merge, whether to pull, whether to broadcast — is the user's to define, through normal interaction with the agent or through project files like `CLAUDE.md` / `AGENTS.md`. The subprocess fetches its data over the existing app socket so it sees the live worktree list.
+- New channel events delivered via the existing `graftty-channel` MCP server: `team_message` (point-to-point, sender → recipient), `team_member_joined` / `team_member_left` / `team_pr_merged` (status events, routed **to the lead only** — the lead can redistribute via direct messages if its user-defined policy says so).
 - A `graftty team` CLI subcommand group with two members: `msg <member> "<text>"` (the agent-to-agent messaging primitive used from inside a session via Bash) and `list` (read-only diagnostic).
 - A sidebar grouping treatment that visually clusters the worktrees of a team-enabled repo with an accent stripe and a small "team" header.
 - Persistence: nothing new beyond the global toggle in `state.json`. Membership is derived from the live worktree list at all times.
@@ -71,7 +71,7 @@ A team is implicit in a repo's worktree list. Coordination happens via two exist
 
 - **No new data structure.** The team is a view over the existing `WorktreeEntry` list filtered by repo. Adding/removing a worktree (via the existing sheet, unchanged) implicitly adds/removes a member.
 - **No team-naming UI; no lead-picking UI.** Identity = repo identity. Member name = sanitized branch name. Lead = root worktree (LAYOUT-2.3). The user never names or designates anything.
-- **Lead mediates status, peers exchange messages directly.** Status events (joined / left / pr_merged) route only to the lead, which can choose to redistribute to coworkers via direct `team msg` commands. Direct `team msg` between any two members stays point-to-point. This avoids spamming every coworker with every status change while preserving low-friction cross-pane messaging.
+- **Lead is the single point of status routing.** Status events (joined / left / pr_merged) route only to the lead. Direct `team msg` between any two members stays point-to-point. The user defines team-wide coordination policy in one place (the lead's session) instead of every pane separately.
 - **Team awareness is delivered through MCP server instructions, not a system-prompt flag.** The `graftty mcp-channel` subprocess sees its host worktree (existing `WorktreeResolver`) and asks the app for the team context, returning the rendered `instructions` in the MCP `initialize` response. The launch line is plain `claude --dangerously-load-development-channels server:graftty-channel` — identical inside and outside team mode.
 - **No reliance on Claude's experimental agent-teams.** No `--team-name` flag, no `~/.claude/teams/`, no `SendMessage` tool. We use only the stable channels capability.
 - **Vendor-agnostic at the team layer.** Replacing `claude` with another MCP-channel-aware agent requires no changes to the launch line and only the rendered MCP instructions.
@@ -118,46 +118,40 @@ struct TeamMember {
 
 Rendered fresh by the `graftty mcp-channel` subprocess at MCP `initialize` time, returned in the `initialize` response's `instructions` field. The subprocess fetches its team context from the app over the existing socket. Two variants — chosen by the subprocess based on `member.isLead`:
 
+#**Mechanism only.** Both variants describe the available communication primitives and the events the agent will receive. They contain no behavioral prescription — no "you must…", no suggested response policy. The user defines coordination behavior separately, through normal conversation with the agent or through project files like `CLAUDE.md` / `AGENTS.md`.
+
 #### Lead variant
 
 ```
-You are "<your-name>" — the LEAD of Graftty agent team for repo "<repo-display-name>",
-running in worktree <worktree-path> on branch <branch>.
+You are "<your-name>" — the LEAD worktree of Graftty agent team for repo
+"<repo-display-name>", running in worktree <worktree-path> on branch <branch>.
 
-Your role: coordinate the team. You receive every status event the team produces
-(see below). It is your job to decide which of your coworkers needs to know
-about a given event and to forward it via direct messages.
-
-Your coworkers:
+Your coworkers (other worktrees of this repo with a Claude session):
   - "<peer-name>" — branch <peer-branch>, worktree <peer-path>
   - …
 
 To send a message to any teammate, run this shell command:
   graftty team msg <teammate-name> "<your message>"
 
-You will receive these channel events that coworkers do NOT receive directly:
-  - team_member_joined  — a new coworker joined; their name/branch is in attrs.
-  - team_member_left    — a coworker left; their name and reason (removed/exited) is in attrs.
-  - team_pr_merged      — a coworker's PR merged; their name, branch, and merge SHA is in attrs.
-                          You should git pull on relevant branches and decide whether
-                          to broadcast the merge to other coworkers.
+You will receive these channel events that coworkers do NOT receive directly
+(routed to the lead so the user has a single point to define team-wide
+coordination policy):
+  - team_member_joined — a new coworker joined; attrs: team, member, branch, worktree.
+  - team_member_left   — a coworker left;   attrs: team, member, reason (removed | exited).
+  - team_pr_merged     — a coworker's PR merged; attrs: team, member, pr_number, branch, merge_sha.
 
-You will receive direct messages from coworkers as:
+You will also receive direct messages from coworkers (or from the user) as:
   <channel source="graftty-channel" type="team_message" from="<sender>">…text…</channel>
 
-Coworkers will message you proactively when they commit or face a decision that
-needs your guidance. Treat those as routine touchpoints — coworkers want
-acknowledgment or course-correction, not constant approval. If a commit looks
-fine, a brief "ack" is enough.
+To see the current roster at any time:
+  graftty team list
 ```
 
 #### Coworker variant
 
 ```
-You are "<your-name>" — a COWORKER on Graftty agent team for repo "<repo-display-name>",
-running in worktree <worktree-path> on branch <branch>.
-
-Your role: do the work assigned to you and keep the lead informed.
+You are "<your-name>" — a coworker on Graftty agent team for repo
+"<repo-display-name>", running in worktree <worktree-path> on branch <branch>.
 
 Your lead: "<lead-name>" — worktree <lead-path>, branch <lead-branch>.
 Your peer coworkers (you may message these directly too):
@@ -167,27 +161,13 @@ Your peer coworkers (you may message these directly too):
 To send a message to the lead or any peer, run this shell command:
   graftty team msg <recipient-name> "<your message>"
 
-You MUST proactively message the lead in two situations:
-
-  1. When you make a commit:
-       graftty team msg <lead-name> "committed <short-sha>: <subject>"
-     Send this immediately after `git commit` returns. The lead may ack or
-     send course-correction; it is fine to keep working in the meantime.
-
-  2. When you face a decision that affects scope, architecture, dependencies,
-     or anything outside your assigned task's scope:
-       graftty team msg <lead-name> "decision: <briefly describe the decision and your proposed direction>"
-     Send this BEFORE proceeding. Wait for a reply. The lead may answer
-     within a turn or two; do not block indefinitely if there is unrelated
-     work you can move forward on, but do not commit code that depends on
-     the decision until the lead has responded.
-
 You will receive incoming messages as:
   <channel source="graftty-channel" type="team_message" from="<sender>">…text…</channel>
 
-You do NOT receive status events about other coworkers — the lead receives those
-and will forward anything you need to know via direct messages. If you need
-information about another coworker's progress, ask the lead.
+You do NOT receive status events about other coworkers — those route to the lead.
+
+To see the current roster at any time:
+  graftty team list
 ```
 
 Re-rendered on each pane spawn so a teammate's roster reflects current membership. Membership changes that happen later are delivered via channel events to the lead.
@@ -289,7 +269,7 @@ Fired when a team-enabled worktree is removed from the repo (sidebar Remove Work
 
 ### `team_pr_merged`
 
-Fired when `PRStatusStore` observes a transition to `.merged` for a worktree in a team-enabled repo. Delivered to **the lead only**. The lead's MCP instructions teach it to `git pull` on the relevant branch and decide whether to broadcast the news to coworkers via `team msg`.
+Fired when `PRStatusStore` observes a transition to `.merged` for a worktree in a team-enabled repo. Delivered to **the lead only**. The lead's response is user-defined.
 
 | Attribute   | Example                                   |
 | ----------- | ----------------------------------------- |
@@ -299,7 +279,7 @@ Fired when `PRStatusStore` observes a transition to `.merged` for a worktree in 
 | `branch`    | `feature/login`                           |
 | `merge_sha` | `abc1234…`                                |
 
-Body: `Coworker "feature-login"'s PR #42 (feature/login) merged. You may want to git pull in your worktree and decide whether to broadcast.`
+Body: `Coworker "feature-login"'s PR #42 (feature/login) merged.`
 
 ## Data flows
 
@@ -318,25 +298,13 @@ Body: `Coworker "feature-login"'s PR #42 (feature/login) merged. You may want to
 3. The app pushes a `team_message` channel event addressed to `feature-login`'s worktree only.
 4. The recipient's claude sees `<channel source="graftty-channel" type="team_message" from="<self>">build the login form</channel>` on its next turn and acts on it.
 
-### A coworker commits
-
-1. Following its coworker MCP instructions, the agent runs `git commit -m "<msg>"` in its worktree.
-2. Immediately after the commit returns successfully, the agent runs `graftty team msg <lead-name> "committed <short-sha>: <subject>"` (a normal team-message flow).
-3. The lead's claude sees the commit notification on its next turn. Per the lead MCP instructions it acks (or course-corrects) and continues.
-
-### A coworker hits a decision point
-
-1. The agent recognizes a decision that affects scope/architecture/dependencies — e.g., a missing util it could either add or pull from npm.
-2. Per coworker MCP instructions, before proceeding, it runs `graftty team msg <lead-name> "decision: util for X is missing — propose adding util/x.ts vs npm install lodash. Leaning add."`.
-3. The agent waits for a reply from the lead (or moves on to unrelated work). When the lead replies via `team msg`, the agent receives a `team_message` channel event and resumes the deferred path.
-
 ### A coworker's PR merges
 
 1. Existing `PRStatusStore` polling observes the transition to `.merged` for `feature/login`.
 2. The new `onTransition` callback fires with `pr_state_changed`. The existing logic handles the worktree-cleanup dialog.
 3. **New code**: if the worktree is part of a team-enabled repo, also enqueue a `team_pr_merged` event addressed to **the lead's worktree only**.
 4. `ChannelRouter` delivers to the lead's subscriber.
-5. The lead's claude sees the channel tag on its next turn and behaves per its lead MCP instructions — typically `git pull`, then deciding whether to broadcast (e.g., `team msg <coworker> "alice's PR merged on main; pull when convenient"`).
+5. The lead's claude sees the channel tag on its next turn. What it does in response — pull, broadcast, ignore, ask the user — is governed by user-defined policy, not by Graftty.
 
 ### Toggling team mode on while panes are already running
 
