@@ -6,18 +6,7 @@ import Foundation
 struct TeamViewTests {
 
     private func makeRepo(path: String, displayName: String, branches: [String]) -> RepoEntry {
-        var repo = RepoEntry(
-            path: path,
-            displayName: displayName
-        )
-        for branch in branches {
-            let worktreePath = branch == branches[0] ? path : "\(path)/.worktrees/\(branch.replacingOccurrences(of: "/", with: "-"))"
-            repo.worktrees.append(WorktreeEntry(
-                path: worktreePath,
-                branch: branch
-            ))
-        }
-        return repo
+        TeamTestFixtures.makeRepo(path: path, displayName: displayName, branches: branches)
     }
 
     @Test func singleWorktreeRepoHasNoTeam() {

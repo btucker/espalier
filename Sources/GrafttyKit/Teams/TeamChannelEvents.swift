@@ -6,6 +6,14 @@ import Foundation
 /// duplicate the `type` string and attribute-key conventions.
 public enum TeamChannelEvents {
 
+    /// Wire-format type names for the four `team_*` channel events (TEAM-5.*).
+    public enum EventType {
+        public static let message       = "team_message"
+        public static let memberJoined  = "team_member_joined"
+        public static let memberLeft    = "team_member_left"
+        public static let prMerged      = "team_pr_merged"
+    }
+
     // MARK: - team_message (TEAM-5.1)
 
     public static func teamMessage(
@@ -14,7 +22,7 @@ public enum TeamChannelEvents {
         text: String
     ) -> ChannelServerMessage {
         .event(
-            type: "team_message",
+            type: EventType.message,
             attrs: ["team": team, "from": sender],
             body: text
         )
@@ -29,7 +37,7 @@ public enum TeamChannelEvents {
         worktree: String
     ) -> ChannelServerMessage {
         .event(
-            type: "team_member_joined",
+            type: EventType.memberJoined,
             attrs: [
                 "team": team,
                 "member": member,
@@ -53,7 +61,7 @@ public enum TeamChannelEvents {
         reason: LeaveReason
     ) -> ChannelServerMessage {
         .event(
-            type: "team_member_left",
+            type: EventType.memberLeft,
             attrs: [
                 "team": team,
                 "member": member,
@@ -82,7 +90,7 @@ public enum TeamChannelEvents {
             attrs["merge_sha"] = mergeSha
         }
         return .event(
-            type: "team_pr_merged",
+            type: EventType.prMerged,
             attrs: attrs,
             body: "Coworker \"\(member)\"'s PR #\(prNumber) (\(branch)) merged."
         )

@@ -33,7 +33,7 @@ final class ChannelSettingsObserver {
         // Initial isEnabled from current defaults — covers the case where
         // the observer is constructed AFTER the app's launch-time start()
         // and the user has already changed the toggle once.
-        router.isEnabled = UserDefaults.standard.bool(forKey: "channelsEnabled")
+        router.isEnabled = UserDefaults.standard.bool(forKey: SettingsKeys.channelsEnabled)
 
         UserDefaults.standard.publisher(for: \.channelPrompt)
             .dropFirst()  // skip the initial synchronous emit
@@ -79,8 +79,8 @@ final class ChannelSettingsObserver {
 
     /// Composes user prompt + team context for a specific worktree (TEAM-3.3).
     func composedPrompt(forWorktree worktreePath: String) -> String {
-        let userPrompt = UserDefaults.standard.string(forKey: "channelPrompt") ?? ""
-        let teamsEnabled = UserDefaults.standard.bool(forKey: "agentTeamsEnabled")
+        let userPrompt = UserDefaults.standard.string(forKey: SettingsKeys.channelPrompt) ?? ""
+        let teamsEnabled = UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled)
 
         guard teamsEnabled,
               let appState = appStateProvider?(),

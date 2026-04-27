@@ -46,8 +46,8 @@ struct AgentTeamsSettingsPane: View {
         newValue: Bool,
         defaults: UserDefaults
     ) {
-        if newValue && !defaults.bool(forKey: "channelsEnabled") {
-            defaults.set(true, forKey: "channelsEnabled")
+        if newValue && !defaults.bool(forKey: SettingsKeys.channelsEnabled) {
+            defaults.set(true, forKey: SettingsKeys.channelsEnabled)
         }
     }
 
@@ -57,8 +57,8 @@ struct AgentTeamsSettingsPane: View {
         newValue: Bool,
         defaults: UserDefaults
     ) {
-        if !newValue && defaults.bool(forKey: "agentTeamsEnabled") {
-            defaults.set(false, forKey: "agentTeamsEnabled")
+        if !newValue && defaults.bool(forKey: SettingsKeys.agentTeamsEnabled) {
+            defaults.set(false, forKey: SettingsKeys.agentTeamsEnabled)
         }
     }
 }

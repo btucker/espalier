@@ -15,7 +15,7 @@ struct TeamChannelEventsTests {
             Issue.record("expected .event variant")
             return
         }
-        #expect(type == "team_message")
+        #expect(type == TeamChannelEvents.EventType.message)
         #expect(attrs["team"] == "acme-web")
         #expect(attrs["from"] == "main")
         #expect(body == "hello")
@@ -32,7 +32,7 @@ struct TeamChannelEventsTests {
             Issue.record("expected .event variant")
             return
         }
-        #expect(type == "team_member_joined")
+        #expect(type == TeamChannelEvents.EventType.memberJoined)
         #expect(attrs["team"] == "acme-web")
         #expect(attrs["member"] == "feature-login")
         #expect(attrs["branch"] == "feature/login")
@@ -64,7 +64,7 @@ struct TeamChannelEventsTests {
             Issue.record("expected .event variant")
             return
         }
-        #expect(type == "team_pr_merged")
+        #expect(type == TeamChannelEvents.EventType.prMerged)
         #expect(attrs["pr_number"] == "42")
         #expect(attrs["merge_sha"] == "abcd1234")
     }

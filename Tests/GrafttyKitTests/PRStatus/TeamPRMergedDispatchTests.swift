@@ -6,10 +6,7 @@ import Foundation
 struct TeamPRMergedDispatchTests {
 
     private func makeRepo() -> RepoEntry {
-        var repo = RepoEntry(path: "/r/multi", displayName: "multi-repo")
-        repo.worktrees.append(WorktreeEntry(path: "/r/multi", branch: "main"))
-        repo.worktrees.append(WorktreeEntry(path: "/r/multi/.worktrees/feature-login", branch: "feature/login"))
-        return repo
+        TeamTestFixtures.makeRepo(branches: ["main", "feature/login"])
     }
 
     @Test func mergeFiresEventToLead() {
@@ -25,7 +22,7 @@ struct TeamPRMergedDispatchTests {
         #expect(dispatched.count == 1)
         #expect(dispatched.first?.0 == "/r/multi")  // routed to lead
         if case let .event(type, attrs, _) = dispatched.first?.1 {
-            #expect(type == "team_pr_merged")
+            #expect(type == TeamChannelEvents.EventType.prMerged)
             #expect(attrs["pr_number"] == "42")
             #expect(attrs["merge_sha"] == "abcd1234")
             #expect(attrs["branch"] == "feature/login")

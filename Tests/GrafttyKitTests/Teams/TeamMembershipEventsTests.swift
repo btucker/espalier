@@ -6,12 +6,7 @@ import Foundation
 struct TeamMembershipEventsTests {
 
     private func makeRepo(branches: [String]) -> RepoEntry {
-        var repo = RepoEntry(path: "/r/multi", displayName: "multi-repo")
-        for (i, b) in branches.enumerated() {
-            let path = i == 0 ? "/r/multi" : "/r/multi/.worktrees/\(b.replacingOccurrences(of: "/", with: "-"))"
-            repo.worktrees.append(WorktreeEntry(path: path, branch: b))
-        }
-        return repo
+        TeamTestFixtures.makeRepo(branches: branches)
     }
 
     @Test func joiningAddsRoutedEventForLead() {
@@ -26,7 +21,7 @@ struct TeamMembershipEventsTests {
         #expect(dispatched.count == 1)
         #expect(dispatched.first?.0 == "/r/multi")  // lead's worktree path
         if case let .event(type, _, _) = dispatched.first?.1 {
-            #expect(type == "team_member_joined")
+            #expect(type == TeamChannelEvents.EventType.memberJoined)
         } else {
             Issue.record("expected event")
         }
@@ -71,7 +66,7 @@ struct TeamMembershipEventsTests {
         #expect(dispatched.count == 1)
         #expect(dispatched.first?.0 == "/r/multi")
         if case let .event(type, attrs, _) = dispatched.first?.1 {
-            #expect(type == "team_member_left")
+            #expect(type == TeamChannelEvents.EventType.memberLeft)
             #expect(attrs["reason"] == "removed")
         } else {
             Issue.record("expected event")

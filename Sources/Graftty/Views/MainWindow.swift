@@ -577,7 +577,7 @@ struct MainWindow: View {
                     leaverBranch: leaverBranch,
                     leaverPath: worktreePath,
                     reason: .removed,
-                    teamsEnabled: UserDefaults.standard.bool(forKey: "agentTeamsEnabled"),
+                    teamsEnabled: UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
                     dispatch: { path, msg in
                         channelRouter.dispatch(worktreePath: path, message: msg)
                     }

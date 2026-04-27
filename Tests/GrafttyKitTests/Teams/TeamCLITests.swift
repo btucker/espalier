@@ -138,14 +138,7 @@ struct TeamCLITests {
     // MARK: - Handler logic via TeamView (TEAM-4.2 / TEAM-4.3 guard conditions)
 
     private func makeRepo(path: String, displayName: String, branches: [String]) -> RepoEntry {
-        var repo = RepoEntry(path: path, displayName: displayName)
-        for branch in branches {
-            let wtPath = branch == branches[0]
-                ? path
-                : "\(path)/.worktrees/\(branch.replacingOccurrences(of: "/", with: "-"))"
-            repo.worktrees.append(WorktreeEntry(path: wtPath, branch: branch))
-        }
-        return repo
+        TeamTestFixtures.makeRepo(path: path, displayName: displayName, branches: branches)
     }
 
     @Test func teamListMembersFromTeamViewMatchExpected() {

@@ -38,7 +38,7 @@ final class AppServices {
                     return observer.composedPrompt(forWorktree: worktreePath)
                 }
                 // Fallback before observer is wired (should not normally happen).
-                return UserDefaults.standard.string(forKey: "channelPrompt")
+                return UserDefaults.standard.string(forKey: SettingsKeys.channelPrompt)
                     ?? ChannelsSettingsPane.defaultPrompt
             }
         )
@@ -65,16 +65,14 @@ final class AppServices {
         self.prStatusStore.onTransition = { [weak router, weak self] worktreePath, message in
             router?.dispatch(worktreePath: worktreePath, message: message)
 
-            if UserDefaults.standard.bool(forKey: "agentTeamsEnabled"),
+            if UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
                case let .event(type, attrs, _) = message,
                type == ChannelEventType.prStateChanged,
                attrs["to"] == PRInfo.State.merged.rawValue,
                let prNumberStr = attrs["pr_number"],
                let prNumber = Int(prNumberStr),
                let appState = self?.appStateProvider?(),
-               let repo = appState.repos.first(where: {
-                   $0.worktrees.contains(where: { $0.path == worktreePath })
-               })
+               let repo = appState.repo(forWorktreePath: worktreePath)
             {
                 TeamMembershipEvents.firePRMerged(
                     repo: repo,
@@ -469,7 +467,7 @@ struct GrafttyApp: App {
         // only covered sessions started from `defaultCommand`. MCP
         // registration is fire-and-forget: it does subprocess I/O and the
         // router does not depend on it completing before start().
-        if UserDefaults.standard.bool(forKey: "channelsEnabled") {
+        if UserDefaults.standard.bool(forKey: SettingsKeys.channelsEnabled) {
             Task { await Self.installChannelMCPServer() }
             do {
                 try services.channelRouter.start()
@@ -1150,7 +1148,7 @@ struct GrafttyApp: App {
                                     appState: appState, terminalManager: terminalManager)
         case .teamMessage(let callerPath, let recipient, let text):
             // TEAM-4.2: resolve caller's team, find recipient member, dispatch team_message
-            guard UserDefaults.standard.bool(forKey: "agentTeamsEnabled") else {
+            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) else {
                 return .error("team mode is disabled")
             }
             guard let callerWt = appState.wrappedValue.worktree(forPath: callerPath) else {
@@ -1177,7 +1175,7 @@ struct GrafttyApp: App {
             return .ok
         case .teamList(let callerPath):
             // TEAM-4.3: list members of caller's team
-            guard UserDefaults.standard.bool(forKey: "agentTeamsEnabled") else {
+            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) else {
                 return .error("team mode is disabled")
             }
             guard let callerWt = appState.wrappedValue.worktree(forPath: callerPath),
@@ -1751,7 +1749,7 @@ struct GrafttyApp: App {
         terminalID: TerminalID
     ) {
         let defaults = UserDefaults.standard
-        let command = defaults.string(forKey: "defaultCommand") ?? ""
+        let command = defaults.string(forKey: SettingsKeys.defaultCommand) ?? ""
         // `@AppStorage` defaults apply only in the SwiftUI view; when
         // read directly from UserDefaults the key returns nil on
         // first run. Treat nil as `true` to match the SettingsView default.
@@ -1762,7 +1760,7 @@ struct GrafttyApp: App {
             firstPaneOnly: firstPaneOnly,
             isFirstPane: terminalManager.isFirstPane(terminalID),
             wasRehydrated: terminalManager.wasRehydrated(terminalID),
-            agentTeamsEnabled: defaults.bool(forKey: "agentTeamsEnabled")
+            agentTeamsEnabled: defaults.bool(forKey: SettingsKeys.agentTeamsEnabled)
         )
 
         switch decision {
