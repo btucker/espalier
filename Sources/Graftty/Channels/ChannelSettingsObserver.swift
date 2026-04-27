@@ -2,8 +2,8 @@ import Foundation
 import Combine
 import GrafttyKit
 
-/// Observes `channelPrompt` and `channelsEnabled` UserDefaults keys and
-/// reacts:
+/// Observes `channelPrompt`, `channelsEnabled`, and `agentTeamsEnabled`
+/// UserDefaults keys and reacts:
 /// - Prompt edits → 500ms debounce → `router.broadcastInstructions()`.
 ///   Debouncing coalesces rapid typing into one fanout per settled edit,
 ///   so subscribers don't get a flood of instructions events while the
@@ -12,12 +12,20 @@ import GrafttyKit
 ///   Disabled → router stops routing but keeps subscribers connected,
 ///   so re-enabling is instant. Running sessions' launch flags were
 ///   baked at spawn and don't change mid-session.
+/// - Agent-teams toggle flips → re-broadcast instructions so subscribers
+///   receive updated (team-aware or plain) prompts immediately.
 @MainActor
 final class ChannelSettingsObserver {
     private let router: ChannelRouter
     private let onEnable: @MainActor () -> Void
     private var promptTimer: Timer?
     private var cancellables: Set<AnyCancellable> = []
+
+    /// Provides the current `AppState` for composing per-worktree team
+    /// instructions (TEAM-3.3). Set by the app after construction so
+    /// that the `@State`-backed value is accessible. `nil` in tests that
+    /// don't exercise team logic.
+    var appStateProvider: (() -> AppState)?
 
     init(router: ChannelRouter, onEnable: @escaping @MainActor () -> Void = {}) {
         self.router = router
@@ -36,6 +44,13 @@ final class ChannelSettingsObserver {
             .dropFirst()
             .sink { [weak self] enabled in
                 Task { @MainActor [weak self] in self?.apply(enabled: enabled) }
+            }
+            .store(in: &cancellables)
+
+        UserDefaults.standard.publisher(for: \.agentTeamsEnabled)
+            .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.router.broadcastInstructions() }
             }
             .store(in: &cancellables)
     }
@@ -61,6 +76,27 @@ final class ChannelSettingsObserver {
             }
         }
     }
+
+    /// Composes user prompt + team context for a specific worktree (TEAM-3.3).
+    func composedPrompt(forWorktree worktreePath: String) -> String {
+        let userPrompt = UserDefaults.standard.string(forKey: "channelPrompt") ?? ""
+        let teamsEnabled = UserDefaults.standard.bool(forKey: "agentTeamsEnabled")
+
+        guard teamsEnabled,
+              let appState = appStateProvider?(),
+              let worktree = appState.worktree(forPath: worktreePath),
+              let team = TeamView.team(for: worktree, in: appState.repos, teamsEnabled: true),
+              let me = team.members.first(where: { $0.worktreePath == worktreePath })
+        else {
+            return userPrompt
+        }
+
+        let teamInstructions = TeamInstructionsRenderer.render(team: team, viewer: me)
+        if userPrompt.isEmpty {
+            return teamInstructions
+        }
+        return teamInstructions + "\n\n" + userPrompt
+    }
 }
 
 /// KVO-observable accessors on UserDefaults for the channel keys.
@@ -75,5 +111,8 @@ extension UserDefaults {
     }
     @objc dynamic var channelsEnabled: Bool {
         bool(forKey: "channelsEnabled")
+    }
+    @objc dynamic var agentTeamsEnabled: Bool {
+        bool(forKey: "agentTeamsEnabled")
     }
 }

@@ -19,18 +19,34 @@ final class AppServices {
         self.socketServer = SocketServer(socketPath: socketPath)
 
         let channelSocketPath = SocketPathResolver.resolveChannels()
+
+        // Two-phase wiring: construct the observer first so the router's
+        // promptProvider closure can delegate to it for per-worktree
+        // team-aware composition (TEAM-3.3). A Box bridges the forward
+        // reference from the router closure back to the observer that
+        // doesn't exist yet at closure-capture time.
+        final class Box<T: AnyObject> { weak var value: T? }
+        let observerBox = Box<ChannelSettingsObserver>()
+
         let router = ChannelRouter(
             socketPath: channelSocketPath,
-            promptProvider: {
-                UserDefaults.standard.string(forKey: "channelPrompt")
+            promptProvider: { [observerBox] worktreePath in
+                if let observer = observerBox.value {
+                    return observer.composedPrompt(forWorktree: worktreePath)
+                }
+                // Fallback before observer is wired (should not normally happen).
+                return UserDefaults.standard.string(forKey: "channelPrompt")
                     ?? ChannelsSettingsPane.defaultPrompt
             }
         )
-        self.channelRouter = router
-        self.channelSettingsObserver = ChannelSettingsObserver(
+        let observer = ChannelSettingsObserver(
             router: router,
             onEnable: { Task { await GrafttyApp.installChannelMCPServer() } }
         )
+        observerBox.value = observer
+
+        self.channelRouter = router
+        self.channelSettingsObserver = observer
 
         self.worktreeMonitor = WorktreeMonitor()
         self.statsStore = WorktreeStatsStore()
@@ -431,6 +447,14 @@ struct GrafttyApp: App {
                 NSLog("[Graftty] Channels startup failed: %@", String(describing: error))
             }
         }
+
+        // Wire the AppState provider so ChannelSettingsObserver can compose
+        // per-worktree team instructions (TEAM-3.3). This must happen in
+        // startup() rather than AppServices.init() because @State is only
+        // accessible once SwiftUI's body has run. Capturing $appState here
+        // gives a stable Binding whose wrappedValue is always current.
+        let channelAppStateBinding = $appState
+        services.channelSettingsObserver.appStateProvider = { channelAppStateBinding.wrappedValue }
 
         // SocketServer already dispatches onMessage to the main queue.
         let binding = $appState
