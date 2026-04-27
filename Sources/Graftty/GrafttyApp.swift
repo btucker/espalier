@@ -57,37 +57,16 @@ final class AppServices {
         // Route PRStatusStore transitions into ChannelRouter. Captured weakly
         // so AppServices can own both without a retain cycle.
         //
-        // Team extension (TEAM-5.4): when a team-enabled repo's PR merges,
-        // additionally dispatch `team_pr_merged` to the lead's worktree.
         // `appStateProvider` is set later in startup() once @State is live;
         // before that point the guard below is a no-op.
-        self.prStatusStore.onTransition = { [weak router, weak self] worktreePath, message in
-            // PR channel events (pr_state_changed and team_pr_merged) are gated
-            // on agentTeamsEnabled (precondition for any channel delivery) AND
-            // teamPRNotificationsEnabled (TEAM-1.5).
+        self.prStatusStore.onTransition = { [weak router] worktreePath, message in
+            // PR channel events (pr_state_changed) are gated on agentTeamsEnabled
+            // (precondition for any channel delivery).
             guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
                   true // TEMP: matrix replaces this gate in Task 13
             else { return }
 
             router?.dispatch(worktreePath: worktreePath, message: message)
-
-            if case let .event(type, attrs, _) = message,
-               type == ChannelEventType.prStateChanged,
-               attrs["to"] == PRInfo.State.merged.rawValue,
-               let prNumberStr = attrs["pr_number"],
-               let prNumber = Int(prNumberStr),
-               let appState = self?.appStateProvider?(),
-               let repo = appState.repo(forWorktreePath: worktreePath)
-            {
-                TeamMembershipEvents.firePRMerged(
-                    repo: repo,
-                    mergerWorktreePath: worktreePath,
-                    prNumber: prNumber,
-                    mergeSha: attrs["merge_sha"] ?? "",
-                    teamsEnabled: true,
-                    dispatch: { path, msg in router?.dispatch(worktreePath: path, message: msg) }
-                )
-            }
         }
     }
 }
