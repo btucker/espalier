@@ -1278,3 +1278,59 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 **IOS-9.4** When `GET /repos` returns an empty list, the sheet shall render an empty-state "No repositories tracked — open a repository in Graftty on the Mac first." and shall not show the input fields. The iOS app shall not implement repository-adding (the Mac-side file-picker + security-scoped bookmark mint has no iOS equivalent, same stance as `WEB-7.7`).
 
 **IOS-9.5** While a `POST /worktrees` call is in flight, the Create button shall be replaced by an in-flight indicator, the Cancel button and both input fields shall be disabled, and the repository picker shall be disabled. Once the call resolves (success or failure) all controls shall re-enable.
+
+## 20. Agent Teams
+
+### 20.1 Settings & Enablement
+
+**TEAM-1.1** The application shall provide a Settings tab named "Agent Teams" containing one boolean toggle, *Enable agent teams*, persisted via `@AppStorage("agentTeamsEnabled")` (Bool, default false).
+
+**TEAM-1.2** When the user toggles `agentTeamsEnabled` from false to true, the application shall set `channelsEnabled` to true if it was false. When the user toggles `channelsEnabled` from true to false while `agentTeamsEnabled` is true, the application shall first set `agentTeamsEnabled` to false (the dependency is one-directional: teams require channels).
+
+**TEAM-1.3** While `agentTeamsEnabled` is true, the Default Command field on the Settings General pane shall be rendered read-only with a footnote indicating that team mode manages it. The previously-stored value is preserved in `@AppStorage("defaultCommand")` and restored to the editable field when team mode is turned off.
+
+**TEAM-1.4** While `agentTeamsEnabled` is true, the application shall override the user's stored `defaultCommand` value at pane-launch time with the canonical team-mode launch line `claude --dangerously-load-development-channels server:graftty-channel`. The override applies only inside the `defaultCommandDecision` call path used by Graftty to auto-type into newly opened panes; commands the user types into a shell prompt themselves are unaffected.
+
+### 20.2 Team Identity & Membership
+
+**TEAM-2.1** A *team* is implicit in any `RepoEntry` with two or more `WorktreeEntry` children, while `agentTeamsEnabled` is true. A repo with one worktree (or with team mode off) has no team and no team-aware behavior.
+
+**TEAM-2.2** A team's *member name* for a given worktree shall be `WorktreeNameSanitizer(worktree.branch)`, the same sanitization rule used for new worktree names per `GIT-5.1`.
+
+**TEAM-2.3** A team's *lead* shall be the worktree where `worktree.path == repo.path` (the repository's main checkout per `LAYOUT-2.3`). All other worktrees of the team are *coworkers*.
+
+**TEAM-2.4** Team identity, membership, and lead designation are derived live from `AppState`. The application shall not persist any team-specific data beyond `agentTeamsEnabled` itself.
+
+### 20.3 Team-Aware MCP Instructions
+
+**TEAM-3.1** When a `graftty mcp-channel` subscriber connects on behalf of a worktree whose repo has team status (per TEAM-2.1), the application shall include the rendered team-aware instructions text in the initial `instructions` channel event sent to that subscriber. The instructions text describes only mechanism — peers, the `graftty team msg` command, the `team_*` channel event types — and contains no behavioral prescription.
+
+**TEAM-3.2** The application shall render the *lead variant* of the team-aware instructions when the subscriber's worktree is the team's lead (per TEAM-2.3), and the *coworker variant* otherwise. Both variants name the team (by repo display name), the agent (by member name), and list the team's other members by name and worktree.
+
+**TEAM-3.3** When the user's `channelPrompt` setting (per `CHAN-*`) is non-empty AND a team variant is rendered, the application shall concatenate the team variant followed by a newline followed by the user's `channelPrompt` and emit the combined string as the `instructions` event body. The team variant precedes the user's prompt so role context is established before any user policy guidance.
+
+**TEAM-3.4** When the team membership of a worktree's repo changes (a worktree is added or removed, or `agentTeamsEnabled` toggles), the application shall re-render and re-broadcast the `instructions` event to every active subscriber whose worktree's team is affected. (This reuses the existing `broadcastInstructions` pipeline.)
+
+### 20.4 `graftty team` CLI
+
+**TEAM-4.1** The application shall provide a CLI subcommand group `graftty team` with two subcommands: `msg <member-name> "<text>"` and `list`.
+
+**TEAM-4.2** `graftty team msg <member-name> "<text>"` shall resolve the calling process's worktree via `WorktreeResolver.resolve()`, look up the team for that worktree, find a teammate matching `<member-name>`, and send a `team_message` channel event addressed to that teammate's worktree with `attrs.from = <calling-worktree's member name>` and body `<text>`. The CLI shall exit non-zero with a stderr message if (a) team mode is disabled, (b) the calling worktree has no team, or (c) `<member-name>` is not a teammate of the caller. In case (c) the error shall list the current teammates' member names.
+
+**TEAM-4.3** `graftty team list` shall print one line per team member of the caller's team to stdout: `<member-name>  branch=<branch>  worktree=<path>  role=<lead|coworker>  running=<true|false>`. The first printed line shall be a header `team=<repo-display-name>  members=<count>`. The CLI shall exit non-zero with a stderr message if team mode is disabled or the calling worktree has no team.
+
+### 20.5 `team_*` Channel Events
+
+**TEAM-5.1** The application shall emit a `team_message` channel event when `graftty team msg` is invoked successfully. Routing: addressed to the recipient's worktree only. Attributes: `team` (repo display name), `from` (sender's member name). Body: the message text.
+
+**TEAM-5.2** The application shall emit a `team_member_joined` channel event when a worktree is added to a team (a new worktree appears in a team-enabled repo, or a single-worktree repo gains a second worktree). Routing: addressed to the team's lead's worktree only. Attributes: `team`, `member` (joiner's member name), `branch`, `worktree` (joiner's path).
+
+**TEAM-5.3** The application shall emit a `team_member_left` channel event when a worktree is removed from a team (the worktree is deleted, or the team-enabled repo collapses to one worktree). Routing: addressed to the team's lead's worktree only. Attributes: `team`, `member` (departing member's name), `reason` (`removed` or `exited`).
+
+**TEAM-5.4** The application shall emit a `team_pr_merged` channel event when `PRStatusStore` observes a transition to `.merged` for a worktree whose repo currently has team status. Routing: addressed to the team's lead's worktree only. Attributes: `team`, `member`, `pr_number`, `branch`, `merge_sha`.
+
+### 20.6 Sidebar Visualization
+
+**TEAM-6.1** While `agentTeamsEnabled` is true and a `RepoEntry` has two or more worktrees, the sidebar shall render that repo with a small "team" icon (e.g., SF Symbol `person.2.fill`) adjacent to its disclosure header, and apply a subtle accent stripe along the leading edge of every worktree row that belongs to the repo (and that worktree's pane sub-rows per `LAYOUT-2.8`). The accent color is deterministic from the repo's path (hash → palette index) and stable across launches.
+
+**TEAM-6.2** Right-clicking the team icon, the team accent stripe, or any team-enabled worktree's row shall include a *Show Team Members…* context-menu item. Selecting it shall display a popover listing each team member by name, branch, and role (lead / coworker), populated from the same source as `graftty team list`.
