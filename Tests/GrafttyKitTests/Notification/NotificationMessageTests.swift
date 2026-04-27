@@ -92,4 +92,29 @@ struct NotificationMessageTests {
         let members = json["members"] as! [[String: Any]]
         #expect(members.count == 2)
     }
+
+    @Test func decodeTeamListResponse() throws {
+        let json = #"""
+        {
+          "type": "team_list",
+          "team_name": "acme-web",
+          "members": [
+            {"name":"main","branch":"main","worktree_path":"/r/a","role":"lead","is_running":true},
+            {"name":"alice","branch":"alice","worktree_path":"/r/a/.worktrees/alice","role":"coworker","is_running":false}
+          ]
+        }
+        """#
+        let resp = try JSONDecoder().decode(ResponseMessage.self, from: Data(json.utf8))
+        guard case let .teamList(teamName, members) = resp else {
+            Issue.record("expected .teamList")
+            return
+        }
+        #expect(teamName == "acme-web")
+        #expect(members.count == 2)
+        #expect(members[0].name == "main")
+        #expect(members[0].role == "lead")
+        #expect(members[0].isRunning == true)
+        #expect(members[1].worktreePath == "/r/a/.worktrees/alice")
+        #expect(members[1].isRunning == false)
+    }
 }
