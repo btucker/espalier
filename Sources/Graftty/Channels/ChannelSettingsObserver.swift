@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import os
-import Stencil
 import GrafttyKit
 
 /// Observes `teamSessionPrompt` and `agentTeamsEnabled` UserDefaults
@@ -78,27 +77,16 @@ final class ChannelSettingsObserver {
         let teamInstructions = TeamInstructionsRenderer.render(team: team, viewer: me)
 
         let template = UserDefaults.standard.string(forKey: SettingsKeys.teamSessionPrompt) ?? ""
-        guard !template.isEmpty else { return teamInstructions }
-
-        let context: [String: Any] = [
-            "agent": [
-                "branch": me.branch,
-                "lead": me.role == .lead,
-                "this_worktree": false,
-                "other_worktree": false,
-            ]
+        let agentDict: [String: Any] = [
+            "branch": me.branch,
+            "lead": me.role == .lead,
+            "this_worktree": false,
+            "other_worktree": false,
         ]
-
-        let rendered: String
-        do {
-            rendered = try Stencil.Environment().renderTemplate(string: template, context: context)
-        } catch {
-            Self.logger.error("teamSessionPrompt render failed: \(error.localizedDescription, privacy: .public)")
+        guard let rendered = EventBodyRenderer.renderAgentTemplate(template, agent: agentDict) else {
             return teamInstructions
         }
-
-        let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? teamInstructions : "\(teamInstructions)\n\n\(trimmed)"
+        return "\(teamInstructions)\n\n\(rendered)"
     }
 }
 

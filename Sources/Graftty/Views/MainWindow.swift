@@ -578,21 +578,10 @@ struct MainWindow: View {
                     leaverPath: worktreePath,
                     reason: .removed,
                     teamsEnabled: UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
-                    dispatch: { path, msg in
-                        let template = UserDefaults.standard.string(forKey: SettingsKeys.teamPrompt) ?? ""
-                        let subjectPath: String? = {
-                            if case let .event(_, attrs, _) = msg { return attrs["worktree"] }
-                            return nil
-                        }()
-                        let rendered = EventBodyRenderer.body(
-                            for: msg,
-                            recipientWorktreePath: path,
-                            subjectWorktreePath: subjectPath,
-                            repos: appState.repos,
-                            templateString: template
-                        )
-                        channelRouter.dispatch(worktreePath: path, message: rendered)
-                    }
+                    dispatch: EventBodyRenderer.dispatchClosure(
+                        repos: appState.repos,
+                        inner: { path, msg in channelRouter.dispatch(worktreePath: path, message: msg) }
+                    )
                 )
                 channelRouter.broadcastInstructions()
             }

@@ -37,29 +37,64 @@ public enum EventBodyRenderer {
             return subject != recipientWorktreePath
         }()
 
-        let context: [String: Any] = [
-            "agent": [
-                "branch": recipient?.branch ?? "",
-                "lead": isLead,
-                "this_worktree": isThisWorktree,
-                "other_worktree": isOtherWorktree,
-            ]
+        let agentDict: [String: Any] = [
+            "branch": recipient?.branch ?? "",
+            "lead": isLead,
+            "this_worktree": isThisWorktree,
+            "other_worktree": isOtherWorktree,
         ]
-
-        // Render. Stencil throws on parse / runtime errors; on failure, return
-        // the original event so the agent still receives it (just without the
-        // user-contributed prefix).
-        let rendered: String
-        do {
-            rendered = try Environment().renderTemplate(string: templateString, context: context)
-        } catch {
-            logger.error("teamPrompt render failed: \(error.localizedDescription, privacy: .public)")
+        guard let rendered = renderAgentTemplate(templateString, agent: agentDict) else {
             return event
         }
 
-        let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return event }
+        return .event(type: type, attrs: attrs, body: "\(rendered)\n\n\(originalBody)")
+    }
+}
 
-        return .event(type: type, attrs: attrs, body: "\(trimmed)\n\n\(originalBody)")
+extension EventBodyRenderer {
+    /// Renders a Stencil template against an agent-context dict. Returns the
+    /// trimmed rendered string, or nil on render failure / empty result.
+    /// Centralizes the render + trim + error-log logic shared by per-event
+    /// rendering and session-start MCP-instructions rendering.
+    public static func renderAgentTemplate(
+        _ template: String,
+        agent: [String: Any]
+    ) -> String? {
+        guard !template.isEmpty else { return nil }
+        let context: [String: Any] = ["agent": agent]
+        let rendered: String
+        do {
+            rendered = try Environment().renderTemplate(string: template, context: context)
+        } catch {
+            logger.error("agent template render failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Convenience: returns a `@MainActor (path, message) -> Void` closure that renders
+    /// the user's `teamPrompt` template against each delivery before passing
+    /// the rendered message to `inner`. Use at every dispatch call site so the
+    /// matrix-routed events and team-internal events share rendering behavior.
+    public static func dispatchClosure(
+        repos: [RepoEntry],
+        inner: @escaping @MainActor (String, ChannelServerMessage) -> Void
+    ) -> @MainActor (String, ChannelServerMessage) -> Void {
+        return { path, msg in
+            let template = UserDefaults.standard.string(forKey: "teamPrompt") ?? ""
+            let subjectPath: String? = {
+                if case let .event(_, attrs, _) = msg { return attrs["worktree"] }
+                return nil
+            }()
+            let rendered = EventBodyRenderer.body(
+                for: msg,
+                recipientWorktreePath: path,
+                subjectWorktreePath: subjectPath,
+                repos: repos,
+                templateString: template
+            )
+            inner(path, rendered)
+        }
     }
 }

@@ -13,15 +13,15 @@ public enum RoutableEvent: Sendable, Equatable {
     /// `pr_state_changed` with `attrs.to == "merged"` as the merged row.
     public init?(channelEventType type: String, attrs: [String: String]) {
         switch type {
-        case "pr_state_changed":
+        case ChannelEventType.prStateChanged:
             if attrs["to"] == "merged" {
                 self = .prMerged
             } else {
                 self = .prStateChanged
             }
-        case "ci_conclusion_changed":
+        case ChannelEventType.ciConclusionChanged:
             self = .ciConclusionChanged
-        case "merge_state_changed":
+        case ChannelEventType.mergeStateChanged:
             self = .mergabilityChanged
         default:
             return nil
