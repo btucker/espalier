@@ -39,7 +39,7 @@ final class AppServices {
                 }
                 // Fallback before observer is wired (should not normally happen).
                 return UserDefaults.standard.string(forKey: SettingsKeys.channelPrompt)
-                    ?? ChannelsSettingsPane.defaultPrompt
+                    ?? AgentTeamsSettingsPane.defaultPrompt
             }
         )
         let observer = ChannelSettingsObserver(
@@ -63,10 +63,16 @@ final class AppServices {
         // `appStateProvider` is set later in startup() once @State is live;
         // before that point the guard below is a no-op.
         self.prStatusStore.onTransition = { [weak router, weak self] worktreePath, message in
+            // PR channel events (pr_state_changed and team_pr_merged) are gated
+            // on agentTeamsEnabled (precondition for any channel delivery) AND
+            // teamPRNotificationsEnabled (TEAM-1.5).
+            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
+                  UserDefaults.standard.bool(forKey: SettingsKeys.teamPRNotificationsEnabled)
+            else { return }
+
             router?.dispatch(worktreePath: worktreePath, message: message)
 
-            if UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
-               case let .event(type, attrs, _) = message,
+            if case let .event(type, attrs, _) = message,
                type == ChannelEventType.prStateChanged,
                attrs["to"] == PRInfo.State.merged.rawValue,
                let prNumberStr = attrs["pr_number"],
@@ -272,11 +278,11 @@ struct GrafttyApp: App {
             }
         }
 
-        // Settings scene — existing General pane, the Phase 2 Web Access
-        // pane, and the Channels pane (Claude Code Channels research preview).
-        // WebServerController is injected so WebSettingsPane can read
-        // `.status` / `.currentURL`, and so toggling `WebAccessSettings.isEnabled`
-        // triggers the controller's `reconcile()` via its Combine subscription.
+        // Settings scene — General pane, Web Access pane, and the unified
+        // Agent Teams pane (absorbs Channels). WebServerController is injected
+        // so WebSettingsPane can read `.status` / `.currentURL`, and so
+        // toggling `WebAccessSettings.isEnabled` triggers the controller's
+        // `reconcile()` via its Combine subscription.
         Settings {
             TabView {
                 SettingsView(onRestartZMX: { restartZMXWithConfirmation() })
@@ -284,8 +290,6 @@ struct GrafttyApp: App {
                 WebSettingsPane()
                     .environmentObject(webController)
                     .tabItem { Label("Web Access", systemImage: "network") }
-                ChannelsSettingsPane()
-                    .tabItem { Label("Channels", systemImage: "antenna.radiowaves.left.and.right") }
                 AgentTeamsSettingsPane()
                     .tabItem { Label("Agent Teams", systemImage: "person.2.fill") }
             }
@@ -457,17 +461,17 @@ struct GrafttyApp: App {
             NSLog("[Graftty] SocketServer.start() failed: %@", String(describing: error))
         }
 
-        // Claude Code Channels — only active when the user has enabled the
-        // feature. On enable, register the graftty-channel user-scope MCP
-        // server via `claude mcp` (idempotent) and start the router so new
-        // Claude sessions launched by the user with
+        // Claude Code Channels — only active when agent teams are enabled.
+        // On enable, register the graftty-channel user-scope MCP server via
+        // `claude mcp` (idempotent) and start the router so new Claude sessions
+        // launched by the user with
         // `--dangerously-load-development-channels server:graftty-channel`
         // connect successfully. The user is responsible for the launch
         // flag — Graftty no longer auto-injects it, since the injection
         // only covered sessions started from `defaultCommand`. MCP
         // registration is fire-and-forget: it does subprocess I/O and the
         // router does not depend on it completing before start().
-        if UserDefaults.standard.bool(forKey: SettingsKeys.channelsEnabled) {
+        if UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) {
             Task { await Self.installChannelMCPServer() }
             do {
                 try services.channelRouter.start()

@@ -1,28 +1,22 @@
+import AppKit
 import GrafttyKit
 import SwiftUI
 
-/// Settings pane that exposes the `agentTeamsEnabled` toggle.
+/// Settings pane that exposes the `agentTeamsEnabled` toggle and the
+/// channel prompt editor that was previously in ChannelsSettingsPane.
 ///
-/// Implements TEAM-1.1, TEAM-1.2, TEAM-1.3 from SPECS.md.
+/// Implements TEAM-1.1, TEAM-1.3 from SPECS.md.
 struct AgentTeamsSettingsPane: View {
     @AppStorage("agentTeamsEnabled") private var agentTeamsEnabled: Bool = false
-    @AppStorage("channelsEnabled") private var channelsEnabled: Bool = false
+    @AppStorage("teamPRNotificationsEnabled") private var prNotificationsEnabled: Bool = true
+    @AppStorage("channelPrompt") private var channelPrompt: String = AgentTeamsSettingsPane.defaultPrompt
 
     var body: some View {
         Form {
             Section {
-                Toggle("Enable agent teams", isOn: Binding(
-                    get: { agentTeamsEnabled },
-                    set: { newValue in
-                        agentTeamsEnabled = newValue
-                        Self.applyTeamModeToggleSideEffects(
-                            newValue: newValue,
-                            defaults: .standard
-                        )
-                    }
-                ))
+                Toggle("Enable agent teams", isOn: $agentTeamsEnabled)
             } footer: {
-                Text("Turning this on auto-enables Channels and locks the Default Command field. Each Claude pane Graftty launches in a multi-worktree repo will receive team-aware instructions on connect.")
+                Text("Locks the Default Command field and gives each Claude pane in a multi-worktree repo team-aware instructions on connect.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -34,31 +28,105 @@ struct AgentTeamsSettingsPane: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+
+                Section {
+                    Toggle("Notify team about GitHub/GitLab PR activity", isOn: $prNotificationsEnabled)
+                } footer: {
+                    Text("When on, Graftty fires pr_state_changed and team_pr_merged channel events as PR state, CI conclusions, and merges are detected. Turn off to suppress all PR channel events without disabling team mode.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "Launch Claude with this flag",
+                            systemImage: "terminal"
+                        )
+                        .font(.subheadline.bold())
+
+                        Text(verbatim:
+                            "Graftty registers a user-scope MCP server with Claude Code. " +
+                            "To receive channel events, launch Claude with:"
+                        )
+                        .font(.caption)
+
+                        HStack(spacing: 6) {
+                            Text(verbatim: Self.launchFlag)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(6)
+                                .background(Color.secondary.opacity(0.12))
+                                .cornerRadius(4)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(Self.launchFlag, forType: .string)
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                        }
+
+                        Text(verbatim:
+                            "Research preview — the --dangerously-load-development-channels " +
+                            "flag bypasses Claude Code's channel allowlist for this server only. " +
+                            "Events originate from Graftty's local polling; no external senders."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        if let url = URL(string: "https://docs.claude.com/en/channels") {
+                            Link("Learn more →", destination: url)
+                                .font(.caption)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.orange.opacity(0.4))
+                    )
+                }
+
+                Section("Prompt") {
+                    Text("Applied to every Claude session with channels enabled. " +
+                         "Edits propagate immediately to running sessions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextEditor(text: $channelPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 200)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.3))
+                        )
+
+                    HStack {
+                        Spacer()
+                        Button("Restore default") {
+                            channelPrompt = Self.defaultPrompt
+                        }
+                        .font(.caption)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, minHeight: 240)
+        .frame(minWidth: 480, minHeight: 240)
     }
 
-    /// Applies the team-mode → channels-mode dependency (TEAM-1.2).
-    /// Static so tests can drive it without a SwiftUI environment.
-    static func applyTeamModeToggleSideEffects(
-        newValue: Bool,
-        defaults: UserDefaults
-    ) {
-        if newValue && !defaults.bool(forKey: SettingsKeys.channelsEnabled) {
-            defaults.set(true, forKey: SettingsKeys.channelsEnabled)
-        }
-    }
+    /// The exact flag users need to append when launching Claude for a
+    /// channel-subscribing session.
+    static let launchFlag = "--dangerously-load-development-channels server:graftty-channel"
 
-    /// Applies the channels-mode → team-mode dependency (TEAM-1.2):
-    /// turning off channels also turns off team mode, since team mode requires channels.
-    static func applyChannelsToggleSideEffects(
-        newValue: Bool,
-        defaults: UserDefaults
-    ) {
-        if !newValue && defaults.bool(forKey: SettingsKeys.agentTeamsEnabled) {
-            defaults.set(false, forKey: SettingsKeys.agentTeamsEnabled)
-        }
-    }
+    static let defaultPrompt: String = """
+    You receive events from Graftty when state changes on the PR associated with your current worktree. Each event arrives as a <channel source="graftty-channel" type="..."> tag with attributes (pr_number, provider, repo, worktree, pr_url) and a short body.
+
+    When you see:
+    - type=pr_state_changed, to=merged: The PR merged. Briefly acknowledge. Don't take destructive actions (e.g. delete the worktree) without explicit confirmation.
+    - type=ci_conclusion_changed, to=failure: Read the failing check log via the pr_url if accessible, summarize what failed, and propose a fix. Don't commit without confirmation.
+    - type=ci_conclusion_changed, to=success: Brief acknowledgement. If the PR is now mergeable, mention it.
+
+    Keep replies short. The user is working in the same terminal; noisy output is disruptive.
+    """
 }

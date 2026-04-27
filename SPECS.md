@@ -1088,17 +1088,17 @@ shall surface an actionable alert rather than silently continue.
 
 **CHAN-1.8** While `ChannelRouter.isEnabled` is `false`, both `dispatch` and `broadcastInstructions` shall become no-ops, but existing subscriber connections shall remain connected — mirroring the Settings enable toggle without forcing every subscriber to reconnect on re-enable.
 
-### 18.2 Channels Settings Pane
+### 18.2 Channel Settings (Agent Teams pane)
 
-**CHAN-2.1** The application shall expose a "Channels" tab in the Settings window alongside "General" and "Web Access", using the `antenna.radiowaves.left.and.right` SF Symbol.
+**CHAN-2.1** The channel settings are part of the **Agent Teams** Settings tab; there is no separate "Channels" tab. `channelsEnabled` is no longer used; the channel infrastructure is gated entirely by `agentTeamsEnabled` (see TEAM-1.2).
 
-**CHAN-2.2** The Channels pane shall present an "Enable GitHub/GitLab channel" toggle bound to `@AppStorage("channelsEnabled")`, defaulting to `false` on first launch so the research-preview feature is opt-in.
+**CHAN-2.2** ~~Removed — superseded by TEAM-1.2.~~
 
-**CHAN-2.3** While `channelsEnabled` is `false`, the Channels pane shall hide the research-preview disclosure banner and the prompt editor, showing only the toggle and its caption.
+**CHAN-2.3** While `agentTeamsEnabled` is `false`, the Agent Teams pane shall hide the research-preview disclosure banner, the PR-notifications sub-checkbox, and the prompt editor, showing only the main toggle and its footer.
 
-**CHAN-2.4** When `channelsEnabled` is `true`, the Channels pane shall display a highlighted instructional panel containing the verbatim launch flag string `--dangerously-load-development-channels server:graftty-channel`, a one-click "Copy" button that writes that string to the system pasteboard, a note that the `--dangerously-load-development-channels` flag bypasses Claude Code's channel allowlist only for this server, and a note that events originate from Graftty's local polling. The application shall not auto-inject the flag into `defaultCommand` or any other launched command — the user is responsible for adding it to their own `claude` launch.
+**CHAN-2.4** When `agentTeamsEnabled` is `true`, the Agent Teams pane shall display a highlighted instructional panel containing the verbatim launch flag string `--dangerously-load-development-channels server:graftty-channel`, a one-click "Copy" button that writes that string to the system pasteboard, a note that the `--dangerously-load-development-channels` flag bypasses Claude Code's channel allowlist only for this server, and a note that events originate from Graftty's local polling. The application shall not auto-inject the flag into `defaultCommand` or any other launched command — the user is responsible for adding it to their own `claude` launch.
 
-**CHAN-2.5** When `channelsEnabled` is `true`, the Channels pane shall render an editable prompt textarea bound to `@AppStorage("channelPrompt")`, seeded on first read with the default prompt template that documents the event tag format and how Claude should respond to `pr_state_changed` and `ci_conclusion_changed` events.
+**CHAN-2.5** When `agentTeamsEnabled` is `true`, the Agent Teams pane shall render an editable prompt textarea bound to `@AppStorage("channelPrompt")`, seeded on first read with the default prompt template that documents the event tag format and how Claude should respond to `pr_state_changed` and `ci_conclusion_changed` events.
 
 **CHAN-2.6** When the user clicks "Restore default" in the prompt section, the application shall overwrite `channelPrompt` with the built-in default prompt template.
 
@@ -1108,11 +1108,11 @@ shall surface an actionable alert rather than silently continue.
 
 **CHAN-3.2** The application shall never modify the user's `defaultCommand` string, nor inject channel flags into any command it types into a terminal. The user is the sole author of the Claude launch line.
 
-**CHAN-3.3** Existing `claude` sessions shall continue with their original launch flags when `channelsEnabled` is toggled mid-session; only sessions started by the user after toggling shall see the change. Retroactively attaching channels to a running `claude` requires the user to restart it with the launch flag appended.
+**CHAN-3.3** Existing `claude` sessions shall continue with their original launch flags when `agentTeamsEnabled` is toggled mid-session; only sessions started by the user after toggling shall see the change. Retroactively attaching channels to a running `claude` requires the user to restart it with the launch flag appended.
 
 ### 18.4 MCP Server Installation
 
-**CHAN-4.1** While `channelsEnabled` is `true`, on app launch the application shall register an MCP server named `graftty-channel` at user scope via the `claude` CLI, with its command set to the bundled Graftty CLI path and its args set to `["mcp-channel"]`.
+**CHAN-4.1** While `agentTeamsEnabled` is `true`, on app launch the application shall register an MCP server named `graftty-channel` at user scope via the `claude` CLI, with its command set to the bundled Graftty CLI path and its args set to `["mcp-channel"]`.
 
 **CHAN-4.2** The registration shall be idempotent: when an entry already exists at user scope with the expected command and args, the application shall not re-invoke `claude mcp add`. When the existing entry differs (path change, wrong args, or wrong scope), the application shall remove the old entry and register the new one.
 
@@ -1285,7 +1285,9 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 
 **TEAM-1.1** The application shall provide a Settings tab named "Agent Teams" containing one boolean toggle, *Enable agent teams*, persisted via `@AppStorage("agentTeamsEnabled")` (Bool, default false).
 
-**TEAM-1.2** When the user toggles `agentTeamsEnabled` from false to true, the application shall set `channelsEnabled` to true if it was false. When the user toggles `channelsEnabled` from true to false while `agentTeamsEnabled` is true, the application shall first set `agentTeamsEnabled` to false (the dependency is one-directional: teams require channels).
+**TEAM-1.2** `agentTeamsEnabled` is the single feature toggle governing both team mode and channel-event delivery. There is no separate `channelsEnabled` flag; the channel infrastructure is gated entirely by `agentTeamsEnabled`. When `agentTeamsEnabled` is false, no channel router, no MCP server registration, and no PR channel events fire.
+
+**TEAM-1.5** While `agentTeamsEnabled` is true and `teamPRNotificationsEnabled` is true, the application shall fire `pr_state_changed` channel events on PR-state transitions per the existing CHAN-* mechanism, and additionally fire `team_pr_merged` events for `.merged` transitions per TEAM-5.4. While `teamPRNotificationsEnabled` is false, neither event fires. `teamPRNotificationsEnabled` defaults to true.
 
 **TEAM-1.3** While `agentTeamsEnabled` is true, the Default Command field on the Settings General pane shall be rendered read-only with a footnote indicating that team mode manages it. The previously-stored value is preserved in `@AppStorage("defaultCommand")` and restored to the editable field when team mode is turned off.
 
@@ -1331,6 +1333,6 @@ While the "keyboard allowed" flag is false, any stray keyboard-will-show event (
 
 ### 20.6 Sidebar Visualization
 
-**TEAM-6.1** While `agentTeamsEnabled` is true and a `RepoEntry` has two or more worktrees, the sidebar shall render that repo with a small "team" icon (e.g., SF Symbol `person.2.fill`) adjacent to its disclosure header, and apply a subtle accent stripe along the leading edge of every worktree row that belongs to the repo (and that worktree's pane sub-rows per `LAYOUT-2.8`). The accent color is deterministic from the repo's path (hash → palette index) and stable across launches.
+**TEAM-6.1** While `agentTeamsEnabled` is true and a `RepoEntry` has two or more worktrees, the sidebar shall render that repo with a small "team" icon (SF Symbol `person.2.fill`) adjacent to its disclosure header. No per-worktree accent stripe is applied; the header icon is sufficient to indicate team membership.
 
-**TEAM-6.2** Right-clicking the team icon, the team accent stripe, or any team-enabled worktree's row shall include a *Show Team Members…* context-menu item. Selecting it shall display a popover listing each team member by name, branch, and role (lead / coworker), populated from the same source as `graftty team list`.
+**TEAM-6.2** Right-clicking any team-enabled worktree's row shall include a *Show Team Members…* context-menu item. Selecting it shall display a popover listing each team member by name, branch, and role (lead / coworker), populated from the same source as `graftty team list`.

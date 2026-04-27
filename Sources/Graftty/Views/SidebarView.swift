@@ -204,15 +204,6 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isActive ? theme.foreground.opacity(0.16) : .clear)
         )
-        // TEAM-6.2: accent stripe on left edge for team-enabled worktree rows
-        .overlay(alignment: .leading) {
-            if agentTeamsEnabled && repo.worktrees.count >= 2 {
-                TeamRepoBadge(repoPath: repo.path).accentColor
-                    .frame(width: 3)
-                    .clipShape(Capsule())
-                    .padding(.vertical, 2)
-            }
-        }
         // TEAM-6.2: "Show Team Members…" popover
         .popover(isPresented: Binding(
             get: { teamPopoverWorktreePath == worktree.path },
