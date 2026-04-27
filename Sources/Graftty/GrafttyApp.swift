@@ -59,14 +59,44 @@ final class AppServices {
         //
         // `appStateProvider` is set later in startup() once @State is live;
         // before that point the guard below is a no-op.
-        self.prStatusStore.onTransition = { [weak router] worktreePath, message in
-            // PR channel events (pr_state_changed) are gated on agentTeamsEnabled
-            // (precondition for any channel delivery).
-            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
-                  true // TEMP: matrix replaces this gate in Task 13
-            else { return }
+        self.prStatusStore.onTransition = { [weak router, weak self] subjectWorktreePath, message in
+            guard let router, let self else { return }
+            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) else { return }
+            guard case let .event(eventType, attrs, _) = message else {
+                // Non-event messages (shouldn't happen for PRStatusStore transitions, but defensive).
+                router.dispatch(worktreePath: subjectWorktreePath, message: message)
+                return
+            }
 
-            router?.dispatch(worktreePath: worktreePath, message: message)
+            guard let routableEvent = RoutableEvent(channelEventType: eventType, attrs: attrs) else {
+                // Non-routable channel events still get dispatched to the originating worktree.
+                router.dispatch(worktreePath: subjectWorktreePath, message: message)
+                return
+            }
+
+            let prefsRaw = UserDefaults.standard.string(forKey: SettingsKeys.channelRoutingPreferences) ?? ""
+            let prefs = ChannelRoutingPreferences(rawValue: prefsRaw) ?? ChannelRoutingPreferences()
+
+            let appState = self.appStateProvider?() ?? AppState()
+            let recipients = ChannelEventRouter.recipients(
+                event: routableEvent,
+                subjectWorktreePath: subjectWorktreePath,
+                repos: appState.repos,
+                preferences: prefs
+            )
+
+            let template = UserDefaults.standard.string(forKey: SettingsKeys.teamPrompt) ?? ""
+
+            for recipient in recipients {
+                let renderedMessage = EventBodyRenderer.body(
+                    for: message,
+                    recipientWorktreePath: recipient,
+                    subjectWorktreePath: subjectWorktreePath,
+                    repos: appState.repos,
+                    templateString: template
+                )
+                router.dispatch(worktreePath: recipient, message: renderedMessage)
+            }
         }
     }
 }
