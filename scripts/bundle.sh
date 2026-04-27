@@ -150,8 +150,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>14.0</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
-$SPARKLE_FEED_URL_PLIST
-$SPARKLE_PUBLIC_ED_KEY_PLIST
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/btucker/graftty/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>CE9gods92d0ACzxxj85iTEaMxeF/kdJNjKRBdoLaOFY=</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
