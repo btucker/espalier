@@ -88,10 +88,7 @@ final class ChannelSettingsObserver {
         }
 
         let teamInstructions = TeamInstructionsRenderer.render(team: team, viewer: me)
-        let userPromptKey = me.role == .lead
-            ? SettingsKeys.teamLeadPrompt
-            : SettingsKeys.teamCoworkerPrompt
-        let userPrompt = UserDefaults.standard.string(forKey: userPromptKey) ?? ""
+        let userPrompt = "" // TEMP: Stencil teamSessionPrompt rendering replaces this in Task 12
 
         if userPrompt.isEmpty {
             return teamInstructions

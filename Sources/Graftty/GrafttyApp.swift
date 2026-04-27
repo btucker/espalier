@@ -66,7 +66,7 @@ final class AppServices {
             // on agentTeamsEnabled (precondition for any channel delivery) AND
             // teamPRNotificationsEnabled (TEAM-1.5).
             guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled),
-                  UserDefaults.standard.bool(forKey: SettingsKeys.teamPRNotificationsEnabled)
+                  true // TEMP: matrix replaces this gate in Task 13
             else { return }
 
             router?.dispatch(worktreePath: worktreePath, message: message)
