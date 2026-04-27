@@ -17,7 +17,17 @@ public struct RecipientSet: OptionSet, Codable, Equatable, Sendable {
 /// User-configurable routing matrix for the four routable channel events
 /// (TEAM-1.8). Each field is a `RecipientSet` controlling which recipient
 /// classes the corresponding event type fans out to.
-public struct ChannelRoutingPreferences: Codable, Equatable, Sendable {
+///
+/// **Codable / RawRepresentable interaction:** this type adopts both protocols
+/// (Codable for JSON, RawRepresentable<String> for `@AppStorage`). When the
+/// same type adopts both, Swift's *synthesized* Codable encodes via
+/// `rawValue` — and `rawValue` itself calls `JSONEncoder().encode(self)`, so
+/// the synthesized form recurses infinitely until the stack overflows
+/// (manifests as SIGBUS in `swift test`'s helper). To break the cycle, this
+/// type provides **explicit** field-by-field Codable conformance via
+/// `CodingKeys` + `init(from:)` + `encode(to:)`. JSON encoding never
+/// round-trips through `rawValue`.
+public struct ChannelRoutingPreferences: Sendable {
     public var prStateChanged: RecipientSet
     public var prMerged: RecipientSet
     public var ciConclusionChanged: RecipientSet
@@ -33,6 +43,44 @@ public struct ChannelRoutingPreferences: Codable, Equatable, Sendable {
         self.prMerged = prMerged
         self.ciConclusionChanged = ciConclusionChanged
         self.mergabilityChanged = mergabilityChanged
+    }
+}
+
+extension ChannelRoutingPreferences: Equatable {
+    public static func == (lhs: ChannelRoutingPreferences, rhs: ChannelRoutingPreferences) -> Bool {
+        lhs.prStateChanged == rhs.prStateChanged
+            && lhs.prMerged == rhs.prMerged
+            && lhs.ciConclusionChanged == rhs.ciConclusionChanged
+            && lhs.mergabilityChanged == rhs.mergabilityChanged
+    }
+}
+
+// MARK: - Codable (explicit, to avoid RawRepresentable recursion — see type doc)
+
+extension ChannelRoutingPreferences: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case prStateChanged
+        case prMerged
+        case ciConclusionChanged
+        case mergabilityChanged
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            prStateChanged:      try c.decodeIfPresent(RecipientSet.self, forKey: .prStateChanged)      ?? .worktree,
+            prMerged:            try c.decodeIfPresent(RecipientSet.self, forKey: .prMerged)            ?? .root,
+            ciConclusionChanged: try c.decodeIfPresent(RecipientSet.self, forKey: .ciConclusionChanged) ?? .worktree,
+            mergabilityChanged:  try c.decodeIfPresent(RecipientSet.self, forKey: .mergabilityChanged)  ?? .worktree
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(prStateChanged,      forKey: .prStateChanged)
+        try c.encode(prMerged,            forKey: .prMerged)
+        try c.encode(ciConclusionChanged, forKey: .ciConclusionChanged)
+        try c.encode(mergabilityChanged,  forKey: .mergabilityChanged)
     }
 }
 
