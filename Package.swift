@@ -19,7 +19,11 @@ let package = Package(
         // Product name "graftty-cli" (not "graftty") to avoid case-insensitive
         // filesystem collision with the "Graftty" app binary. When the app is
         // bundled for distribution, this binary is installed as "graftty"
-        // at Graftty.app/Contents/MacOS/graftty per ATTN-1.1.
+        // at Graftty.app/Contents/Helpers/graftty (`scripts/bundle.sh`) — not
+        // `Contents/MacOS/`, since the GUI binary `Graftty` lives there and a
+        // sibling lowercase `graftty` would resolve to the GUI on case-
+        // insensitive volumes. See `BundlePathSanitizer` for the runtime
+        // PATH override that protects spawned panes from the same trap.
         .executable(name: "graftty-cli", targets: ["GrafttyCLI"]),
         .executable(name: "appcast-updater", targets: ["appcast-updater"]),
         .library(name: "GrafttyKit", targets: ["GrafttyKit"]),
