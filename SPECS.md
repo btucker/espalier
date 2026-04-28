@@ -423,6 +423,8 @@ Requirements for a macOS worktree-aware terminal multiplexer built on libghostty
 
 **ATTN-4.1** The application shall provide a menu item (Graftty -> Install CLI Tool...) to create or update a symlink at `/usr/local/bin/graftty` pointing to the CLI binary in the app bundle. CLI installation is opt-in via this menu item; the application shall not auto-prompt for installation on launch.
 
+**ATTN-4.2** When the application creates a terminal pane surface, the application shall override the spawned shell's `PATH` to a sanitized form that removes any entry equal to the bundle's `Contents/MacOS` directory and prepends the bundle's `Contents/Helpers` directory. Without this, the embedded libghostty's bundle-self-locating logic puts `Graftty.app/Contents/MacOS` on PATH, and on macOS's case-insensitive APFS volume `which graftty` resolves the lowercase lookup to the GUI binary `Graftty` (which silently exits `0` on unknown args, so `graftty --help` prints nothing). The override is exact-path equality — unrelated `Contents/MacOS` directories from other apps in the user's PATH are left alone.
+
 ## 6. Persistence
 
 ### 6.1 Storage
