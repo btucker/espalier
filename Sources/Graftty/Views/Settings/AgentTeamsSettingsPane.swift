@@ -7,8 +7,8 @@ import GrafttyKit
 /// two user-editable prompts (TEAM-1.6).
 struct AgentTeamsSettingsPane: View {
     @AppStorage("agentTeamsEnabled") private var agentTeamsEnabled: Bool = false
-    @AppStorage("teamSessionPrompt") private var teamSessionPrompt: String = ""
-    @AppStorage("teamPrompt") private var teamPrompt: String = ""
+    @AppStorage("teamSessionPrompt") private var teamSessionPrompt: String = DefaultPrompts.sessionPrompt
+    @AppStorage("teamPrompt") private var teamPrompt: String = DefaultPrompts.eventPrompt
     @AppStorage("channelRoutingPreferences") private var channelRoutingPreferences = ChannelRoutingPreferences()
 
     static let launchFlag = "--dangerously-load-development-channels server:graftty-channel"
@@ -62,16 +62,7 @@ struct AgentTeamsSettingsPane: View {
                     TextEditor(text: $teamSessionPrompt)
                         .frame(minHeight: 100)
                         .font(.system(.body, design: .monospaced))
-                    DisclosureGroup("Available variables in your template") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("agent.branch (String) — agent's branch.")
-                            Text("agent.lead (Bool) — true iff this agent is the team's lead.")
-                            Text("agent.this_worktree (Bool) — always false (no event yet).")
-                            Text("agent.other_worktree (Bool) — always false (no event yet).")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
+                    AgentVariablesDocs(includesEventScope: false)
                 } header: {
                     Text("Session prompt")
                 } footer: {
@@ -84,16 +75,7 @@ struct AgentTeamsSettingsPane: View {
                     TextEditor(text: $teamPrompt)
                         .frame(minHeight: 100)
                         .font(.system(.body, design: .monospaced))
-                    DisclosureGroup("Available variables in your template") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("agent.branch (String) — agent's branch.")
-                            Text("agent.lead (Bool) — true iff this agent is the team's lead.")
-                            Text("agent.this_worktree (Bool) — true iff event is about agent's own worktree.")
-                            Text("agent.other_worktree (Bool) — true iff event is about a different worktree.")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
+                    AgentVariablesDocs(includesEventScope: true)
                 } header: {
                     Text("Per-event prompt")
                 } footer: {
@@ -104,6 +86,30 @@ struct AgentTeamsSettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 540, minHeight: 360)
+        // Tall enough to fit the pane without scrolling on a typical laptop;
+        // macOS clamps to the screen, so smaller displays still scroll.
+        .frame(minWidth: 540, minHeight: 720)
+    }
+}
+
+/// Disclosure list of `agent.*` Stencil variables shown beneath each prompt
+/// editor. The session prompt suppresses the event-scoped variables, since
+/// they're always `false` at session start.
+private struct AgentVariablesDocs: View {
+    let includesEventScope: Bool
+
+    var body: some View {
+        DisclosureGroup("Available variables in your template") {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("agent.branch (String) — agent's branch.")
+                Text("agent.lead (Bool) — true iff this agent is the team's lead.")
+                if includesEventScope {
+                    Text("agent.this_worktree (Bool) — true iff event is about agent's own worktree.")
+                    Text("agent.other_worktree (Bool) — true iff event is about a different worktree.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 }

@@ -10,6 +10,30 @@ public enum EventBodyRenderer {
 
     private static let logger = Logger(subsystem: "com.btucker.graftty", category: "EventBodyRenderer")
 
+    /// Shared Stencil environment. Hot-path: rendered per-event-per-recipient
+    /// and again per-session-start, so reuse the cached filter/extension
+    /// registry instead of allocating a fresh `Environment` per call.
+    private static let sharedEnvironment = Environment()
+
+    /// Builds the `[String: Any]` agent dict consumed by every Stencil render
+    /// in `Graftty`. Centralizes the four key strings so the wire shape can't
+    /// drift between call sites (`body(...)`, `ChannelSettingsObserver`,
+    /// tests). Worktree-scoped flags default to `false` for the session-start
+    /// path where no event exists yet.
+    public static func makeAgentContext(
+        branch: String,
+        lead: Bool,
+        thisWorktree: Bool = false,
+        otherWorktree: Bool = false
+    ) -> [String: Any] {
+        [
+            "branch": branch,
+            "lead": lead,
+            "this_worktree": thisWorktree,
+            "other_worktree": otherWorktree,
+        ]
+    }
+
     public static func body(
         for event: ChannelServerMessage,
         recipientWorktreePath: String,
@@ -37,12 +61,12 @@ public enum EventBodyRenderer {
             return subject != recipientWorktreePath
         }()
 
-        let agentDict: [String: Any] = [
-            "branch": recipient?.branch ?? "",
-            "lead": isLead,
-            "this_worktree": isThisWorktree,
-            "other_worktree": isOtherWorktree,
-        ]
+        let agentDict = makeAgentContext(
+            branch: recipient?.branch ?? "",
+            lead: isLead,
+            thisWorktree: isThisWorktree,
+            otherWorktree: isOtherWorktree
+        )
         guard let rendered = renderAgentTemplate(templateString, agent: agentDict) else {
             return event
         }
@@ -64,7 +88,7 @@ extension EventBodyRenderer {
         let context: [String: Any] = ["agent": agent]
         let rendered: String
         do {
-            rendered = try Environment().renderTemplate(string: template, context: context)
+            rendered = try sharedEnvironment.renderTemplate(string: template, context: context)
         } catch {
             logger.error("agent template render failed: \(error.localizedDescription, privacy: .public)")
             return nil
