@@ -60,9 +60,7 @@ jobs:
 
       - name: Test
         timeout-minutes: 5
-        # `script` gives swift test a PTY-like stdout so output streams
-        # in real time instead of being block-buffered by the CI log pipe.
-        run: /usr/bin/script -q /dev/null swift test --skip-build
+        run: swift test --skip-build
 
   ios-build-and-test:
     runs-on: macos-26
