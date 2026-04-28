@@ -139,6 +139,10 @@ struct GrafttyApp: App {
         // before any surface spawns.
         ZmxLauncher.sanitizeProcessEnvironment()
 
+        // Must run before any UserDefaults read so non-binding readers see
+        // the same defaults as @AppStorage. TEAM-1.6.
+        UserDefaults.standard.register(defaults: DefaultPrompts.registrations)
+
         let loaded = AppState.loadOrFreshBackingUpCorruption(from: AppState.defaultDirectory)
         _appState = State(initialValue: loaded)
 

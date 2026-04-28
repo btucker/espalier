@@ -77,12 +77,10 @@ final class ChannelSettingsObserver {
         let teamInstructions = TeamInstructionsRenderer.render(team: team, viewer: me)
 
         let template = UserDefaults.standard.string(forKey: SettingsKeys.teamSessionPrompt) ?? ""
-        let agentDict: [String: Any] = [
-            "branch": me.branch,
-            "lead": me.role == .lead,
-            "this_worktree": false,
-            "other_worktree": false,
-        ]
+        let agentDict = EventBodyRenderer.makeAgentContext(
+            branch: me.branch,
+            lead: me.role == .lead
+        )
         guard let rendered = EventBodyRenderer.renderAgentTemplate(template, agent: agentDict) else {
             return teamInstructions
         }
