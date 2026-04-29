@@ -166,4 +166,47 @@ public enum EditorOpenRouter {
         command += "\n"
         return command
     }
+
+    public enum EditorAction: Equatable {
+        /// Spawn a new pane (split-right of source) with this string as the
+        /// initial PTY input. Includes trailing `\n`.
+        case openInPane(initialInput: String)
+
+        /// Hand `file` to the GUI app at `app` via NSWorkspace.
+        case openWithApp(file: URL, app: URL)
+
+        /// Hand `url` to NSWorkspace.shared.open (default URL handler).
+        case openInBrowser(URL)
+
+        /// Nothing to do (invalid target, etc). Caller should beep.
+        case noOp
+    }
+
+    /// Combine a classified target with the resolved editor preference
+    /// to produce a concrete action for the caller to execute.
+    public static func resolve(
+        target: ClassifiedTarget,
+        editor: ResolvedEditor
+    ) -> EditorAction {
+        switch target {
+        case .browser(let url):
+            return .openInBrowser(url)
+
+        case .invalid:
+            return .noOp
+
+        case .editorOpen(let absolutePath, let line, _):
+            switch editor.kind {
+            case .app(let bundleURL):
+                return .openWithApp(file: absolutePath, app: bundleURL)
+            case .cli(let command):
+                let initialInput = buildCliCommand(
+                    editor: command,
+                    path: absolutePath.path,
+                    line: line
+                )
+                return .openInPane(initialInput: initialInput)
+            }
+        }
+    }
 }

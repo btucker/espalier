@@ -230,3 +230,53 @@ final class EditorOpenRouterCliCommandTests: XCTestCase {
         XCTAssertFalse(cmd.contains(":"), "Column should not appear in CLI command")
     }
 }
+
+final class EditorOpenRouterResolveTests: XCTestCase {
+
+    private let dummyURL = URL(fileURLWithPath: "/tmp/foo.swift")
+    private let dummyApp = URL(fileURLWithPath: "/Applications/Cursor.app")
+
+    func test_browserTarget_passesThroughToBrowser() {
+        let url = URL(string: "https://x.com")!
+        let action = EditorOpenRouter.resolve(
+            target: .browser(url),
+            editor: ResolvedEditor(kind: .cli(command: "nvim"), source: .shellEnv)
+        )
+        guard case .openInBrowser(let outURL) = action else {
+            return XCTFail("expected .openInBrowser, got \(action)")
+        }
+        XCTAssertEqual(outURL, url)
+    }
+
+    func test_invalid_isNoOp() {
+        let action = EditorOpenRouter.resolve(
+            target: .invalid,
+            editor: ResolvedEditor(kind: .cli(command: "nvim"), source: .shellEnv)
+        )
+        if case .noOp = action { return }
+        XCTFail("expected .noOp, got \(action)")
+    }
+
+    func test_editorOpen_withCliEditor_buildsPaneCommand() {
+        let action = EditorOpenRouter.resolve(
+            target: .editorOpen(absolutePath: dummyURL, line: 42, column: nil),
+            editor: ResolvedEditor(kind: .cli(command: "nvim"), source: .shellEnv)
+        )
+        guard case .openInPane(let initialInput) = action else {
+            return XCTFail("expected .openInPane, got \(action)")
+        }
+        XCTAssertEqual(initialInput, "nvim '/tmp/foo.swift' +42\n")
+    }
+
+    func test_editorOpen_withGuiApp_emitsOpenWithApp() {
+        let action = EditorOpenRouter.resolve(
+            target: .editorOpen(absolutePath: dummyURL, line: nil, column: nil),
+            editor: ResolvedEditor(kind: .app(bundleURL: dummyApp), source: .userPreference)
+        )
+        guard case .openWithApp(let file, let app) = action else {
+            return XCTFail("expected .openWithApp, got \(action)")
+        }
+        XCTAssertEqual(file, dummyURL)
+        XCTAssertEqual(app, dummyApp)
+    }
+}
