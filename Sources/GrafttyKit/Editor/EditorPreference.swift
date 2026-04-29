@@ -1,4 +1,5 @@
 // Sources/GrafttyKit/Editor/EditorPreference.swift
+import AppKit
 import Foundation
 
 /// What the layered lookup returned. The `kind` says what to do; the
@@ -23,5 +24,85 @@ public struct ResolvedEditor: Equatable {
     public init(kind: Kind, source: Source) {
         self.kind = kind
         self.source = source
+    }
+}
+
+/// Layered lookup of the user's editor preference. Resolution order:
+///   1. `UserDefaults` (set by the Settings pane).
+///   2. `$EDITOR` from the user's login shell, captured once via the
+///      injected `ShellEnvProbe`.
+///   3. Hardcoded `vi` fallback.
+///
+/// Empty/missing fields at layer 1 (e.g., user picked "App" but never
+/// chose one) fall through to layer 2 — the Settings UI is responsible
+/// for not letting the user save a half-configured choice in the common
+/// case, but the resolve logic is defensive against it.
+///
+/// The shell-env probe is cached on first `resolve()` call and re-used
+/// for subsequent calls within the lifetime of this `EditorPreference`
+/// instance.
+public final class EditorPreference {
+
+    public enum Keys {
+        public static let kind         = "editorKind"          // "" | "app" | "cli"
+        public static let appBundleID  = "editorAppBundleID"
+        public static let cliCommand   = "editorCliCommand"
+    }
+
+    private let defaults: UserDefaults
+    private let shellEnvProbe: ShellEnvProbe
+    private let bundleIDResolver: (String) -> URL?
+    private var cachedShellEditor: String??
+
+    public init(
+        defaults: UserDefaults = .standard,
+        shellEnvProbe: ShellEnvProbe,
+        bundleIDResolver: @escaping (String) -> URL? = { id in
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+        }
+    ) {
+        self.defaults = defaults
+        self.shellEnvProbe = shellEnvProbe
+        self.bundleIDResolver = bundleIDResolver
+    }
+
+    public func resolve() -> ResolvedEditor {
+        // Layer 1: UserDefaults.
+        let kind = defaults.string(forKey: Keys.kind) ?? ""
+        switch kind {
+        case "cli":
+            if let cmd = defaults.string(forKey: Keys.cliCommand),
+               !cmd.trimmingCharacters(in: .whitespaces).isEmpty {
+                return ResolvedEditor(kind: .cli(command: cmd), source: .userPreference)
+            }
+            // empty cli command → fall through
+
+        case "app":
+            if let bundleID = defaults.string(forKey: Keys.appBundleID),
+               !bundleID.isEmpty,
+               let url = bundleIDResolver(bundleID) {
+                return ResolvedEditor(kind: .app(bundleURL: url), source: .userPreference)
+            }
+            // missing/stale bundle → fall through
+
+        default:
+            break  // empty kind → fall through
+        }
+
+        // Layer 2: shell env.
+        let shellEditor: String?
+        if let cached = cachedShellEditor {
+            shellEditor = cached
+        } else {
+            let probed = shellEnvProbe.value(forName: "EDITOR")
+            cachedShellEditor = probed
+            shellEditor = probed
+        }
+        if let env = shellEditor, !env.isEmpty {
+            return ResolvedEditor(kind: .cli(command: env), source: .shellEnv)
+        }
+
+        // Layer 3: hardcoded fallback.
+        return ResolvedEditor(kind: .cli(command: "vi"), source: .defaultFallback)
     }
 }
