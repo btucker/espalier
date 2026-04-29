@@ -16,22 +16,104 @@ public struct AppState: Codable, Sendable, Equatable {
     public var selectedWorktreePath: String?
     public var windowFrame: WindowFrame
     public var sidebarWidth: Double
+    public var hosts: [MacHost]
+    public var repoHostAssignments: [String: UUID]
+    public var remoteRepoCache: [UUID: [RepoEntry]]
 
     public init(
         repos: [RepoEntry] = [],
         selectedWorktreePath: String? = nil,
         windowFrame: WindowFrame = WindowFrame(),
-        sidebarWidth: Double = 240
+        sidebarWidth: Double = 240,
+        hosts: [MacHost] = [],
+        repoHostAssignments: [String: UUID] = [:],
+        remoteRepoCache: [UUID: [RepoEntry]] = [:]
     ) {
         self.repos = repos
         self.selectedWorktreePath = selectedWorktreePath
         self.windowFrame = windowFrame
         self.sidebarWidth = sidebarWidth
+        self.hosts = hosts.filter { $0.id != MacHost.localID }
+        self.repoHostAssignments = repoHostAssignments
+        self.remoteRepoCache = remoteRepoCache
     }
 
-    public mutating func addRepo(_ repo: RepoEntry) {
+    private enum CodingKeys: String, CodingKey {
+        case repos
+        case selectedWorktreePath
+        case windowFrame
+        case sidebarWidth
+        case hosts
+        case repoHostAssignments
+        case remoteRepoCache
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        repos = try container.decodeIfPresent([RepoEntry].self, forKey: .repos) ?? []
+        selectedWorktreePath = try container.decodeIfPresent(String.self, forKey: .selectedWorktreePath)
+        windowFrame = try container.decodeIfPresent(WindowFrame.self, forKey: .windowFrame) ?? WindowFrame()
+        sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 240
+        hosts = try container.decodeIfPresent([MacHost].self, forKey: .hosts) ?? []
+        hosts.removeAll { $0.id == MacHost.localID }
+        repoHostAssignments = try container.decodeIfPresent(
+            [String: UUID].self,
+            forKey: .repoHostAssignments
+        ) ?? [:]
+        remoteRepoCache = try container.decodeIfPresent(
+            [UUID: [RepoEntry]].self,
+            forKey: .remoteRepoCache
+        ) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(repos, forKey: .repos)
+        try container.encode(selectedWorktreePath, forKey: .selectedWorktreePath)
+        try container.encode(windowFrame, forKey: .windowFrame)
+        try container.encode(sidebarWidth, forKey: .sidebarWidth)
+        try container.encode(hosts, forKey: .hosts)
+        try container.encode(repoHostAssignments, forKey: .repoHostAssignments)
+        try container.encode(remoteRepoCache, forKey: .remoteRepoCache)
+    }
+
+    public var visibleHosts: [MacHost] {
+        let remoteHosts = hosts
+            .filter { $0.id != MacHost.localID }
+            .sorted { lhs, rhs in
+                lhs.label.localizedStandardCompare(rhs.label) == .orderedAscending
+            }
+        return [MacHost.local] + remoteHosts
+    }
+
+    public func hostID(forRepoPath path: String) -> UUID {
+        repoHostAssignments[path] ?? MacHost.localID
+    }
+
+    public mutating func addHost(_ host: MacHost) {
+        guard host.id != MacHost.localID else { return }
+        if let idx = hosts.firstIndex(where: { $0.id == host.id }) {
+            hosts[idx] = host
+        } else {
+            hosts.append(host)
+        }
+    }
+
+    public mutating func removeHost(_ hostID: UUID) {
+        guard hostID != MacHost.localID else { return }
+        let removedRepoPaths = Set(repoHostAssignments.compactMap { path, assignedHostID in
+            assignedHostID == hostID ? path : nil
+        })
+        hosts.removeAll { $0.id == hostID }
+        repos.removeAll { removedRepoPaths.contains($0.path) }
+        repoHostAssignments = repoHostAssignments.filter { $0.value != hostID }
+        remoteRepoCache[hostID] = nil
+    }
+
+    public mutating func addRepo(_ repo: RepoEntry, hostID: UUID = MacHost.localID) {
         guard !repos.contains(where: { $0.path == repo.path }) else { return }
         repos.append(repo)
+        repoHostAssignments[repo.path] = hostID
     }
 
     /// Repository-lifecycle primitive that removes the repo at `path` and
@@ -47,6 +129,7 @@ public struct AppState: Codable, Sendable, Equatable {
         guard let repo = repos.first(where: { $0.path == path }) else { return }
         let victimPaths = Set(repo.worktrees.map(\.path))
         repos.removeAll { $0.path == path }
+        repoHostAssignments[path] = nil
         if let selected = selectedWorktreePath, victimPaths.contains(selected) {
             selectedWorktreePath = nil
         }

@@ -25,6 +25,8 @@ struct MainWindow: View {
     /// SwiftUI scene commands block, which can't reach view-local state)
     /// can present the Add Worktree sheet pre-scoped to the current repo.
     @State private var pendingAddWorktree: AddWorktreeRequest?
+    @State private var showingAddHost = false
+    @State private var activeRemoteTunnels: [UUID: any SSHLocalForwardProcess] = [:]
 
     var body: some View {
         NavigationSplitView(
@@ -36,11 +38,16 @@ struct MainWindow: View {
                 theme: terminalManager.theme,
                 statsStore: statsStore,
                 prStatusStore: prStatusStore,
-                onSelect: selectWorktree,
+                onSelect: selectWorktreeFromSidebar,
                 onSelectPane: selectPane,
                 onAddRepo: addRepository,
+                onAddHost: addHost,
                 onAddPath: addPath,
                 onRemoveRepo: removeRepoWithConfirmation,
+                onTestHost: testHost,
+                onDisconnectHost: disconnectHost,
+                onRemoveHost: removeHostWithConfirmation,
+                onCopySSHCommand: copySSHCommand,
                 onStopWorktree: stopWorktreeWithConfirmation,
                 onDeleteWorktree: deleteWorktreeWithConfirmation,
                 onMovePane: movePane,
@@ -137,6 +144,22 @@ struct MainWindow: View {
             prStatusStore.onPRMerged = { worktreePath, prNumber in
                 offerDeleteForMergedPR(worktreePath: worktreePath, prNumber: prNumber)
             }
+        }
+        .onDisappear {
+            stopAllRemoteTunnels()
+        }
+        .sheet(isPresented: $showingAddHost) {
+            AddHostSheet(
+                tester: AddHostConnectionTester(),
+                onSave: { host in
+                    appState.addHost(host)
+                    showingAddHost = false
+                    refreshHost(host)
+                },
+                onCancel: {
+                    showingAddHost = false
+                }
+            )
         }
         .focusedSceneValue(\.addWorktreeAction, addWorktreeAction)
         .onPreferenceChange(SidebarWidthKey.self) { [$appState, $pendingSidebarWidthTask] width in
@@ -242,6 +265,14 @@ struct MainWindow: View {
     private func refreshPR() {
         guard let wt = selectedWorktree, let repo = selectedRepo else { return }
         prStatusStore.refresh(worktreePath: wt.path, repoPath: repo.path, branch: wt.branch)
+    }
+
+    private func selectWorktreeFromSidebar(hostID: UUID, path: String) {
+        if hostID == MacHost.localID {
+            selectWorktree(path)
+        } else {
+            selectRemoteWorktree(hostID: hostID, path: path)
+        }
     }
 
     /// Selects a worktree *and* focuses a specific pane within it. Used by
@@ -471,6 +502,112 @@ struct MainWindow: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         addPath(url.path)
+    }
+
+    private func addHost() {
+        showingAddHost = true
+    }
+
+    private func testHost(_ host: MacHost) {
+        guard let config = host.sshConfig else { return }
+        Task { @MainActor in
+            let result = await AddHostConnectionTester().test(config: config)
+            switch result {
+            case .success:
+                showInformationalAlert(title: "Connection Successful", message: "SSH connected and Graftty responded.")
+                refreshHost(host)
+            case .sshFailed(let message), .grafttyUnavailable(let message):
+                showWarningAlert(title: "Connection Failed", message: message)
+            }
+        }
+    }
+
+    private func disconnectHost(_ host: MacHost) {
+        activeRemoteTunnels[host.id]?.stop()
+        activeRemoteTunnels[host.id] = nil
+    }
+
+    private func removeHostWithConfirmation(_ host: MacHost) {
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(host.label)\"?"
+        alert.informativeText = "This removes the host from Graftty on this Mac. It does not change the remote Mac."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        disconnectHost(host)
+        appState.removeHost(host.id)
+    }
+
+    private func copySSHCommand(_ host: MacHost) {
+        guard let config = host.sshConfig else { return }
+        Pasteboard.copy(SSHLocalForwardCommand.shellCommand(
+            config: config,
+            localPort: config.remoteGrafttyPort
+        ))
+    }
+
+    private func refreshHost(_ host: MacHost) {
+        Task { @MainActor in
+            do {
+                let baseURL = try await ensureTunnel(for: host)
+                appState.remoteRepoCache[host.id] = try await RemoteGrafttyClient()
+                    .fetchRepositorySnapshot(baseURL: baseURL)
+            } catch {
+                showWarningAlert(
+                    title: "Could Not Refresh Host",
+                    message: "Graftty could not fetch repositories from \(host.label). Check SSH access and confirm Graftty is running in SSH Tunnel mode on the remote Mac."
+                )
+            }
+        }
+    }
+
+    private func selectRemoteWorktree(hostID: UUID, path: String) {
+        guard let host = appState.visibleHosts.first(where: { $0.id == hostID }) else { return }
+        Task { @MainActor in
+            do {
+                let baseURL = try await ensureTunnel(for: host)
+                NSWorkspace.shared.open(baseURL)
+            } catch {
+                showWarningAlert(
+                    title: "Could Not Open Remote Host",
+                    message: "Graftty could not connect to \(host.label). Check SSH access and confirm Graftty is running in SSH Tunnel mode on the remote Mac."
+                )
+            }
+        }
+    }
+
+    private func ensureTunnel(for host: MacHost) async throws -> URL {
+        if let tunnel = activeRemoteTunnels[host.id] {
+            return URL(string: "http://127.0.0.1:\(tunnel.localPort)/")!
+        }
+        guard let config = host.sshConfig else { throw RemoteHostUIError.missingSSHConfig }
+        let tunnel = try await SystemSSHLocalForwarder().start(config: config)
+        activeRemoteTunnels[host.id] = tunnel
+        return URL(string: "http://127.0.0.1:\(tunnel.localPort)/")!
+    }
+
+    private func stopAllRemoteTunnels() {
+        for tunnel in activeRemoteTunnels.values {
+            tunnel.stop()
+        }
+        activeRemoteTunnels.removeAll()
+    }
+
+    private func showInformationalAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.runModal()
+    }
+
+    private func showWarningAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     func addPath(_ path: String) {
@@ -755,4 +892,8 @@ struct MainWindow: View {
             }
         }
     }
+}
+
+private enum RemoteHostUIError: Error {
+    case missingSSHConfig
 }
