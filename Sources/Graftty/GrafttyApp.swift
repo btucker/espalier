@@ -329,6 +329,15 @@ struct GrafttyApp: App {
 
         terminalManager.initialize()
 
+        // EDITOR-1.7 / EDITOR-1.8: capture shell $EDITOR once at startup so
+        // cmd-click can fall back to it when the user hasn't picked a Settings
+        // override. The probe runs $SHELL -ilc 'echo "$EDITOR"' on a background
+        // thread; the cache is populated lazily on first cmd-click.
+        terminalManager.editorPreference = EditorPreference(
+            defaults: .standard,
+            shellEnvProbe: LoginShellEnvProbe()
+        )
+
         // Route context-menu split requests through the same insertion code
         // path that Cmd+D uses, but targeting the *menu's* surface rather
         // than the currently-focused one — the two can differ if the user
@@ -340,6 +349,18 @@ struct GrafttyApp: App {
                     terminalManager: tm,
                     targetID: terminalID,
                     split: direction
+                )
+            }
+        }
+
+        terminalManager.onOpenInEditorPane = { [appState = $appState, tm = terminalManager] terminalID, initialInput in
+            Task { @MainActor in
+                _ = Self.splitPane(
+                    appState: appState,
+                    terminalManager: tm,
+                    targetID: terminalID,
+                    split: .right,
+                    extraInitialInput: initialInput
                 )
             }
         }
@@ -1373,7 +1394,8 @@ struct GrafttyApp: App {
         appState: Binding<AppState>,
         terminalManager: TerminalManager,
         targetID: TerminalID,
-        split: PaneSplit
+        split: PaneSplit,
+        extraInitialInput: String? = nil
     ) -> TerminalID? {
         for repoIdx in appState.wrappedValue.repos.indices {
             for wtIdx in appState.wrappedValue.repos[repoIdx].worktrees.indices {
@@ -1396,7 +1418,11 @@ struct GrafttyApp: App {
                 // forever as `Color.black + ProgressView`. Returning nil
                 // propagates to callers like `addPane` which emit a
                 // readable socket `.error`.
-                guard terminalManager.createSurface(terminalID: newID, worktreePath: wt.path) != nil else {
+                guard terminalManager.createSurface(
+                    terminalID: newID,
+                    worktreePath: wt.path,
+                    extraInitialInput: extraInitialInput
+                ) != nil else {
                     appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].splitTree = wt.splitTree
                     return nil
                 }
