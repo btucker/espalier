@@ -36,6 +36,7 @@ struct RepoTeardownTests {
             if await condition() { return }
             try await Task.sleep(for: .milliseconds(25))
         }
-        await #expect(condition(), "waitUntil timed out")
+        let succeeded = await condition()
+        #expect(succeeded, "waitUntil timed out")
     }
 }

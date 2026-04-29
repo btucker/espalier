@@ -323,7 +323,8 @@ struct RemoteBranchStoreTests {
             if await condition() { return }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
-        await #expect(condition(), "waitUntil timed out")
+        let succeeded = await condition()
+        #expect(succeeded, "waitUntil timed out")
     }
 }
 

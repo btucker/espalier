@@ -95,7 +95,8 @@ struct WorktreeMonitorBridgeTests {
             if await condition() { return }
             try await Task.sleep(for: .milliseconds(25))
         }
-        #expect(await condition(), "waitUntil timed out")
+        let succeeded = await condition()
+        #expect(succeeded, "waitUntil timed out")
     }
 }
 
