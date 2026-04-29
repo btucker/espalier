@@ -8,6 +8,7 @@ struct MainWindow: View {
     @ObservedObject var terminalManager: TerminalManager
     let statsStore: WorktreeStatsStore
     let prStatusStore: PRStatusStore
+    let remoteBranchStore: RemoteBranchStore
     let worktreeMonitor: WorktreeMonitor
     let channelRouter: ChannelRouter
 
@@ -529,7 +530,8 @@ struct MainWindow: View {
             repo: repo,
             worktreeMonitor: worktreeMonitor,
             statsStore: statsStore,
-            prStatusStore: prStatusStore
+            prStatusStore: prStatusStore,
+            remoteBranchStore: remoteBranchStore
         )
         // (d) + (e) `AppState.removeRepo` clears selection when victim.
         appState.removeRepo(atPath: repo.path)
@@ -724,6 +726,7 @@ struct MainWindow: View {
                 bookmark: bookmark
             )
             appState.addRepo(repo)
+            remoteBranchStore.refresh(repoPath: repoPath)
 
             if let wt = selectWorktree {
                 self.selectWorktree(wt)

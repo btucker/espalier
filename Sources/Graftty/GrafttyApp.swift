@@ -198,6 +198,7 @@ struct GrafttyApp: App {
                 terminalManager: terminalManager,
                 statsStore: services.statsStore,
                 prStatusStore: services.prStatusStore,
+                remoteBranchStore: services.remoteBranchStore,
                 worktreeMonitor: services.worktreeMonitor,
                 channelRouter: services.channelRouter
             )
@@ -783,7 +784,8 @@ struct GrafttyApp: App {
         appState: Binding<AppState>,
         worktreeMonitor: WorktreeMonitor,
         statsStore: WorktreeStatsStore,
-        prStatusStore: PRStatusStore
+        prStatusStore: PRStatusStore,
+        remoteBranchStore: RemoteBranchStore
     ) async {
         for repoIdx in appState.wrappedValue.repos.indices {
             let repo = appState.wrappedValue.repos[repoIdx]
@@ -796,6 +798,7 @@ struct GrafttyApp: App {
                             worktreeMonitor: worktreeMonitor,
                             statsStore: statsStore,
                             prStatusStore: prStatusStore,
+                            remoteBranchStore: remoteBranchStore,
                             repoIdx: repoIdx,
                             newURL: resolved.url,
                             isStale: resolved.isStale
@@ -845,6 +848,7 @@ struct GrafttyApp: App {
         worktreeMonitor: WorktreeMonitor,
         statsStore: WorktreeStatsStore,
         prStatusStore: PRStatusStore,
+        remoteBranchStore: RemoteBranchStore,
         repoIdx: Int,
         newURL: URL,
         isStale: Bool
@@ -894,7 +898,8 @@ struct GrafttyApp: App {
             repo: appState.wrappedValue.repos[repoIdx],
             worktreeMonitor: worktreeMonitor,
             statsStore: statsStore,
-            prStatusStore: prStatusStore
+            prStatusStore: prStatusStore,
+            remoteBranchStore: remoteBranchStore
         )
 
         // (e) Snapshot the pre-relocate repo for the pure decision
@@ -996,6 +1001,7 @@ struct GrafttyApp: App {
         // post-relocate watcher graph is indistinguishable from a
         // from-scratch launch at the new location.
         worktreeMonitor.installRepoWatchers(repo: appState.wrappedValue.repos[repoIdx])
+        remoteBranchStore.refresh(repoPath: newRepoPath)
 
         NSLog("[Graftty] relocateRepo: %@ → %@", oldRepoPath, newRepoPath)
     }
@@ -1004,6 +1010,7 @@ struct GrafttyApp: App {
         let binding = $appState
         let statsStore = services.statsStore
         let prStatusStore = services.prStatusStore
+        let remoteBranchStore = services.remoteBranchStore
         let worktreeMonitor = services.worktreeMonitor
         Task { @MainActor in
             // LAYOUT-4.6 / LAYOUT-4.9: resolve bookmarks and run any
@@ -1016,7 +1023,8 @@ struct GrafttyApp: App {
                 appState: binding,
                 worktreeMonitor: worktreeMonitor,
                 statsStore: statsStore,
-                prStatusStore: prStatusStore
+                prStatusStore: prStatusStore,
+                remoteBranchStore: remoteBranchStore
             )
 
             for repoIdx in binding.wrappedValue.repos.indices {
@@ -2205,6 +2213,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
         let binding = appState
         let store = statsStore
         let prStore = prStatusStore
+        let remoteBranchStore = remoteBranchStore
         Task { @MainActor in
             // LAYOUT-4.7: before marking the worktree stale, see if the
             // owning repo has a bookmark and whether it now resolves to
@@ -2224,6 +2233,7 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
                             worktreeMonitor: monitor,
                             statsStore: store,
                             prStatusStore: prStore,
+                            remoteBranchStore: remoteBranchStore,
                             repoIdx: repoIdx,
                             newURL: resolved.url,
                             isStale: resolved.isStale
