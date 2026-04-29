@@ -4,9 +4,11 @@ import SwiftUI
 public struct HostPickerView: View {
     @Bindable var store: HostStore
     @State private var showingAdd = false
+    public let onSelect: (Host) -> Void
 
-    public init(store: HostStore) {
+    public init(store: HostStore, onSelect: @escaping (Host) -> Void = { _ in }) {
         self.store = store
+        self.onSelect = onSelect
     }
 
     public var body: some View {
@@ -16,17 +18,10 @@ public struct HostPickerView: View {
                     Text("No saved hosts yet.").foregroundStyle(.secondary)
                 }
                 ForEach(store.hosts) { host in
-                    switch host.transport {
-                    case .directHTTP:
-                        // NavigationLink(value:) pushes the host onto the
-                        // NavigationSplitView detail stack; a plain Button
-                        // only mutates state and doesn't navigate on the
-                        // iPhone compact layout where the split collapses.
-                        NavigationLink(value: host) {
-                            hostRow(host)
-                        }
-                    case .sshTunnel:
-                        hostRow(host, detail: "SSH setup saved; tunnel connection is not enabled yet.")
+                    Button {
+                        onSelect(host)
+                    } label: {
+                        hostRow(host)
                     }
                 }
                 .onDelete { offsets in

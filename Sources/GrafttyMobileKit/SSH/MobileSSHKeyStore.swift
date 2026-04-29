@@ -78,7 +78,11 @@ public final class MobileSSHKeyStore {
         return Self.openSSHPublicKey(for: privateKey.publicKey, comment: comment)
     }
 
-    private func loadOrGeneratePrivateKey() throws -> P256.Signing.PrivateKey {
+    public func privateKeyRawRepresentation() throws -> Data {
+        try loadOrGeneratePrivateKey().rawRepresentation
+    }
+
+    func loadOrGeneratePrivateKey() throws -> P256.Signing.PrivateKey {
         if let existing = try storage.loadPrivateKey() {
             return try P256.Signing.PrivateKey(rawRepresentation: existing)
         }

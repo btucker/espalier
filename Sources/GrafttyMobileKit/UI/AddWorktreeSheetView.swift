@@ -5,6 +5,7 @@ import SwiftUI
 public struct AddWorktreeSheetView: View {
 
     public let host: Host
+    public let baseURL: URL
     public let onCreated: (CreateWorktreeClient.Response) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -20,9 +21,11 @@ public struct AddWorktreeSheetView: View {
 
     public init(
         host: Host,
+        baseURL: URL? = nil,
         onCreated: @escaping (CreateWorktreeClient.Response) -> Void
     ) {
         self.host = host
+        self.baseURL = baseURL ?? host.baseURL
         self.onCreated = onCreated
     }
 
@@ -140,7 +143,7 @@ public struct AddWorktreeSheetView: View {
     private func loadRepos() async {
         reposState = .loading
         do {
-            let repos = try await ReposFetcher.fetch(baseURL: host.baseURL)
+            let repos = try await ReposFetcher.fetch(baseURL: baseURL)
             reposState = .loaded(repos)
             if !repos.contains(where: { $0.path == selectedRepoPath }) {
                 selectedRepoPath = repos.first?.path
@@ -164,7 +167,7 @@ public struct AddWorktreeSheetView: View {
             branchName: WorktreeNameSanitizer.trimForSubmit(branchName)
         )
         do {
-            let response = try await CreateWorktreeClient.create(baseURL: host.baseURL, body: body)
+            let response = try await CreateWorktreeClient.create(baseURL: baseURL, body: body)
             onCreated(response)
             dismiss()
         } catch let err as CreateWorktreeClient.CreateError {
