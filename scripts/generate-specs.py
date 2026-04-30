@@ -10,8 +10,7 @@ ID: text` marker (whether on a Swift Testing `@Test` / `@Suite`, on a
 `@Test(.disabled(...))` inventory entry), validates uniqueness, and
 writes SPECS.md grouped by ID prefix and prefix-major.
 
-Section / subsection titles come from `scripts/spec-sections.json` (one-
-time output of scripts/_migrate_specs.py).
+Section / subsection titles come from `scripts/spec-sections.json`.
 
 CI invokes this script with --check to verify the file is current.
 """
@@ -293,13 +292,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not SECTIONS_JSON.exists():
-        print(
-            f"error: {SECTIONS_JSON.relative_to(REPO_ROOT)} not found; "
-            "run scripts/_migrate_specs.py to bootstrap the section map.",
-            file=sys.stderr,
-        )
-        return 2
     config = json.loads(SECTIONS_JSON.read_text())
 
     markers = collect_markers([REPO_ROOT / "Sources", REPO_ROOT / "Tests"])
