@@ -19,9 +19,23 @@ public struct AgentHookInstaller: Sendable {
         self.grafttyCLIPath = grafttyCLIPath
     }
 
+    public static func rootDirectory(defaultDirectory: URL = AppState.defaultDirectory) -> URL {
+        defaultDirectory.appendingPathComponent("agent-hooks", isDirectory: true)
+    }
+
+    public static func binDirectory(rootDirectory: URL) -> URL {
+        rootDirectory.appendingPathComponent("bin", isDirectory: true)
+    }
+
+    public var binDirectory: URL {
+        Self.binDirectory(rootDirectory: rootDirectory)
+    }
+
+    public var claudeSettingsURL: URL {
+        rootDirectory.appendingPathComponent("claude-settings.json")
+    }
+
     public func install() throws -> AgentHookInstallResult {
-        let binDirectory = rootDirectory.appendingPathComponent("bin", isDirectory: true)
-        let claudeSettings = rootDirectory.appendingPathComponent("claude-settings.json")
         try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
 
         var written: [URL] = []
@@ -34,7 +48,7 @@ public struct AgentHookInstaller: Sendable {
                 wrapperDirectory: binDirectory.path,
                 realCommandName: "claude",
                 grafttyCLIPath: grafttyCLIPath,
-                claudeSettingsPath: claudeSettings.path
+                claudeSettingsPath: claudeSettingsURL.path
             ),
             to: claudeWrapper,
             executable: true,
@@ -54,7 +68,7 @@ public struct AgentHookInstaller: Sendable {
         )
         try writeIfChanged(
             AgentHookInstaller.claudeSettingsData(grafttyCLIPath: grafttyCLIPath),
-            to: claudeSettings,
+            to: claudeSettingsURL,
             executable: false,
             written: &written
         )
@@ -73,7 +87,7 @@ public struct AgentHookInstaller: Sendable {
         if let claudeSettingsPath {
             settingsExec = """
             if [ "${GRAFTTY_DISABLE_AGENT_HOOKS:-}" != "1" ]; then
-              exec "$real_binary" --settings "\(shellString(claudeSettingsPath))" "$@"
+              exec "$real_binary" --settings \(shellLiteral(claudeSettingsPath)) "$@"
             fi
             """
         } else {
@@ -89,7 +103,7 @@ public struct AgentHookInstaller: Sendable {
         old_ifs="$IFS"
         IFS=":"
         for dir in $PATH; do
-          if [ "$dir" = "\(shellString(wrapperDirectory))" ]; then
+          if [ "$dir" = \(shellLiteral(wrapperDirectory)) ]; then
             continue
           fi
           if [ -x "$dir/\(realCommandName)" ]; then
@@ -175,10 +189,6 @@ public struct AgentHookInstaller: Sendable {
         )
     }
 
-    private static func shellString(_ value: String) -> String {
-        value.replacingOccurrences(of: "\"", with: "\\\"")
-    }
-
     private static func shellCommandToken(_ value: String) -> String {
         guard value.rangeOfCharacter(from: .whitespacesAndNewlines) != nil ||
               value.contains("'") ||
@@ -186,6 +196,10 @@ public struct AgentHookInstaller: Sendable {
         else {
             return value
         }
-        return "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        return shellLiteral(value)
+    }
+
+    private static func shellLiteral(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }

@@ -193,9 +193,8 @@ final class SurfaceHandle {
         else {
             return nil
         }
-        return AppState.defaultDirectory
-            .appendingPathComponent("agent-hooks", isDirectory: true)
-            .appendingPathComponent("bin", isDirectory: true)
+        return AgentHookInstaller
+            .binDirectory(rootDirectory: AgentHookInstaller.rootDirectory())
             .path
     }
 

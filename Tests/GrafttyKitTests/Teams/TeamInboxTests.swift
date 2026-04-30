@@ -81,6 +81,28 @@ struct TeamInboxTests {
         #expect(unread == [urgent])
     }
 
+    @Test func unreadCursorFollowsAppendOrderForArbitraryIDs() throws {
+        let ids = FixedIDGenerator(["z-later-sort", "a-earlier-sort"])
+        let inbox = TeamInbox(
+            rootDirectory: try temporaryDirectory(),
+            idGenerator: ids.next,
+            now: { Date(timeIntervalSince1970: 3_100) }
+        )
+        let sender = TeamInboxEndpoint(member: "main", worktree: "/repo/acme", runtime: "claude")
+        let feature = TeamInboxEndpoint(member: "feature-auth", worktree: "/repo/acme/.worktrees/feature-auth", runtime: nil)
+
+        let first = try inbox.appendMessage(teamID: "acme", teamName: "acme-web", repoPath: "/repo/acme", from: sender, to: feature, priority: .normal, body: "first")
+        let second = try inbox.appendMessage(teamID: "acme", teamName: "acme-web", repoPath: "/repo/acme", from: sender, to: feature, priority: .normal, body: "second")
+
+        let unread = try inbox.unreadMessages(
+            teamID: "acme",
+            recipientWorktree: feature.worktree,
+            after: first.id
+        )
+
+        #expect(unread == [second])
+    }
+
     @Test func cursorAndWorktreeWatermarkRoundTrip() throws {
         let inbox = TeamInbox(rootDirectory: try temporaryDirectory())
         let cursor = TeamInboxCursor(
@@ -130,3 +152,15 @@ private final class IncrementingIDGenerator {
     }
 }
 
+private final class FixedIDGenerator {
+    private var values: [String]
+
+    init(_ values: [String]) {
+        self.values = values
+    }
+
+    func next() -> String {
+        guard !values.isEmpty else { return "overflow" }
+        return values.removeFirst()
+    }
+}

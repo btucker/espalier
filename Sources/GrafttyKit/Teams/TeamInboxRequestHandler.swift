@@ -164,33 +164,24 @@ public final class TeamInboxRequestHandler {
         switch event {
         case .sessionStart:
             let text = TeamInstructionsRenderer.render(team: context.team, viewer: context.sender)
-            switch runtime {
-            case .codex:
-                return try TeamHookRenderer.codexSessionStart(teamContext: text)
-            case .claude:
-                return try TeamHookRenderer.claudeSessionStart(teamContext: text)
-            }
+            return try TeamHookRenderer.sessionStart(runtime: runtime, teamContext: text)
         case .postToolUse:
-            let messages = try inbox.unreadMessages(
+            let allUnread = try inbox.unreadMessages(
                 teamID: teamID,
                 recipientWorktree: context.sender.worktreePath,
-                after: cursor.lastSeenID,
-                priorities: [.urgent]
+                after: cursor.lastSeenID
             )
+            let messages = allUnread.filter { $0.priority == .urgent }
             try advanceCursorAcrossDeliveredPrefix(
                 delivered: messages,
+                allUnread: allUnread,
                 teamID: teamID,
                 sessionID: sessionID,
                 worktree: context.sender.worktreePath,
                 runtime: runtime,
                 after: cursor.lastSeenID
             )
-            switch runtime {
-            case .codex:
-                return try TeamHookRenderer.codexPostToolUse(messages: messages)
-            case .claude:
-                return try TeamHookRenderer.claudePostToolUse(messages: messages)
-            }
+            return try TeamHookRenderer.postToolUse(runtime: runtime, messages: messages)
         case .stop:
             let messages = try inbox.unreadMessages(
                 teamID: teamID,
@@ -199,18 +190,14 @@ public final class TeamInboxRequestHandler {
             )
             try advanceCursorAcrossDeliveredPrefix(
                 delivered: messages,
+                allUnread: messages,
                 teamID: teamID,
                 sessionID: sessionID,
                 worktree: context.sender.worktreePath,
                 runtime: runtime,
                 after: cursor.lastSeenID
             )
-            switch runtime {
-            case .codex:
-                return try TeamHookRenderer.codexStop(messages: messages)
-            case .claude:
-                return try TeamHookRenderer.claudeStop(messages: messages)
-            }
+            return try TeamHookRenderer.stop(runtime: runtime, messages: messages)
         }
     }
 
@@ -320,6 +307,7 @@ public final class TeamInboxRequestHandler {
 
     private func advanceCursorAcrossDeliveredPrefix(
         delivered: [TeamInboxMessage],
+        allUnread: [TeamInboxMessage],
         teamID: String,
         sessionID: String,
         worktree: String,
@@ -328,11 +316,6 @@ public final class TeamInboxRequestHandler {
     ) throws {
         guard !delivered.isEmpty else { return }
         let deliveredIDs = Set(delivered.map(\.id))
-        let allUnread = try inbox.unreadMessages(
-            teamID: teamID,
-            recipientWorktree: worktree,
-            after: lastSeenID
-        )
         var advanceTo = lastSeenID
         for message in allUnread {
             guard deliveredIDs.contains(message.id) else { break }

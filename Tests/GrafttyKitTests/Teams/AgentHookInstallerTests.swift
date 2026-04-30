@@ -42,9 +42,22 @@ struct AgentHookInstallerTests {
             claudeSettingsPath: nil
         )
 
-        #expect(script.contains(#"if [ "$dir" = "/app/hooks/bin" ]; then"#))
+        #expect(script.contains(#"if [ "$dir" = '/app/hooks/bin' ]; then"#))
         #expect(script.contains("continue"))
         #expect(script.contains(#"exec "$real_binary" "$@""#))
+    }
+
+    @Test func wrapperQuotesShellPathsWithoutExpansion() {
+        let script = AgentHookInstaller.wrapperScript(
+            runtime: .claude,
+            wrapperDirectory: "/tmp/has $dollar/it's/bin",
+            realCommandName: "claude",
+            grafttyCLIPath: "/app/graftty",
+            claudeSettingsPath: "/tmp/has $dollar/it's/settings.json"
+        )
+
+        #expect(script.contains(#"if [ "$dir" = '/tmp/has $dollar/it'"'"'s/bin' ]; then"#))
+        #expect(script.contains(#"exec "$real_binary" --settings '/tmp/has $dollar/it'"'"'s/settings.json' "$@""#))
     }
 
     @Test func claudeSettingsContainGrafttyHooks() throws {

@@ -1384,21 +1384,12 @@ struct GrafttyApp: App {
                 appState: appState
             )
         case .teamList(let callerPath):
-            // TEAM-4.3: list members of caller's team
-            guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) else {
-                return .error("team mode is disabled")
-            }
-            guard let callerWt = appState.wrappedValue.worktree(forPath: callerPath),
-                  let team = TeamView.team(for: callerWt, in: appState.wrappedValue.repos, teamsEnabled: true) else {
-                return .error("not in a team")
-            }
-            let members = team.members.map { m in
-                TeamListMember(
-                    name: m.name, branch: m.branch, worktreePath: m.worktreePath,
-                    role: m.role.rawValue, isRunning: m.isRunning
-                )
-            }
-            return .teamList(teamName: team.repoDisplayName, members: members)
+            return handleTeamMembers(
+                callerPath: callerPath,
+                worktree: nil,
+                repo: nil,
+                appState: appState
+            )
         case .notify, .clear:
             // Fire-and-forget cases — no response. `onMessage` already handled them.
             return nil
@@ -1469,14 +1460,6 @@ struct GrafttyApp: App {
         sessionID: String?,
         appState: Binding<AppState>
     ) -> ResponseMessage {
-        if event == .stop {
-            recordAgentStop(
-                callerPath: callerPath,
-                runtime: runtime,
-                sessionID: sessionID,
-                appState: appState
-            )
-        }
         do {
             let output = try teamInboxRequestHandler().hook(
                 callerWorktree: callerPath,
@@ -1486,6 +1469,14 @@ struct GrafttyApp: App {
                 repos: appState.wrappedValue.repos,
                 teamsEnabled: UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled)
             )
+            if event == .stop {
+                recordAgentStop(
+                    callerPath: callerPath,
+                    runtime: runtime,
+                    sessionID: sessionID,
+                    appState: appState
+                )
+            }
             return .teamHookOutput(output)
         } catch let error as TeamInboxRequestError {
             return .error(error.description)
@@ -2385,11 +2376,9 @@ struct GrafttyApp: App {
     }
 
     static func installAgentHookAssets() {
-        let root = AppState.defaultDirectory
-            .appendingPathComponent("agent-hooks", isDirectory: true)
         do {
             _ = try AgentHookInstaller(
-                rootDirectory: root,
+                rootDirectory: AgentHookInstaller.rootDirectory(),
                 grafttyCLIPath: agentHookCLIPath()
             ).install()
         } catch {

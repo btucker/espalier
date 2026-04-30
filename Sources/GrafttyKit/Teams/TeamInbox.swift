@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 public enum TeamInboxPriority: String, Codable, Sendable, Equatable {
     case normal
@@ -177,8 +182,8 @@ public final class TeamInbox {
 
     public func messages(teamID: String) throws -> [TeamInboxMessage] {
         let url = messagesURL(teamID: teamID)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let text = try String(contentsOf: url, encoding: .utf8)
+        guard let data = try dataIfFileExists(at: url) else { return [] }
+        let text = String(decoding: data, as: UTF8.self)
         return text.split(separator: "\n").compactMap { line in
             guard let data = String(line).data(using: .utf8) else { return nil }
             return try? decoder.decode(TeamInboxMessage.self, from: data)
@@ -191,9 +196,15 @@ public final class TeamInbox {
         after lastSeenID: String?,
         priorities: Set<TeamInboxPriority>? = nil
     ) throws -> [TeamInboxMessage] {
-        try messages(teamID: teamID).filter { message in
+        let allMessages = try messages(teamID: teamID)
+        let candidates: ArraySlice<TeamInboxMessage>
+        if let lastSeenID, let index = allMessages.lastIndex(where: { $0.id == lastSeenID }) {
+            candidates = allMessages[allMessages.index(after: index)...]
+        } else {
+            candidates = allMessages[...]
+        }
+        return candidates.filter { message in
             guard message.to.worktree == recipientWorktree else { return false }
-            if let lastSeenID, message.id <= lastSeenID { return false }
             if let priorities, !priorities.contains(message.priority) { return false }
             return true
         }
@@ -208,8 +219,7 @@ public final class TeamInbox {
 
     public func cursor(teamID: String, sessionID: String) throws -> TeamInboxCursor? {
         let url = cursorURL(teamID: teamID, sessionID: sessionID)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
+        guard let data = try dataIfFileExists(at: url) else { return nil }
         return try decoder.decode(TeamInboxCursor.self, from: data)
     }
 
@@ -228,8 +238,7 @@ public final class TeamInbox {
         worktree: String
     ) throws -> TeamInboxWorktreeWatermark? {
         let url = watermarkURL(teamID: teamID, worktree: worktree)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
+        guard let data = try dataIfFileExists(at: url) else { return nil }
         return try decoder.decode(TeamInboxWorktreeWatermark.self, from: data)
     }
 
@@ -237,14 +246,56 @@ public final class TeamInbox {
         let url = messagesURL(teamID: teamID)
         try ensureParentDirectory(for: url)
         let data = try encoder.encode(message)
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
+        let fd = try openForAppend(at: url.path)
+        defer { _ = close(fd) }
+        try writeAll(data, to: fd)
+        try writeAll(Data([0x0A]), to: fd)
+    }
+
+    private func dataIfFileExists(at url: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain &&
+                  error.code == NSFileReadNoSuchFileError {
+            return nil
         }
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
-        try handle.write(contentsOf: Data([0x0A]))
+    }
+
+    private func openForAppend(at path: String) throws -> Int32 {
+        let permissions = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH
+        #if canImport(Darwin)
+        let fd = Darwin.open(path, O_WRONLY | O_CREAT | O_APPEND, permissions)
+        #elseif canImport(Glibc)
+        let fd = Glibc.open(path, O_WRONLY | O_CREAT | O_APPEND, mode_t(permissions))
+        #else
+        #error("Unsupported platform")
+        #endif
+        guard fd >= 0 else { throw currentPOSIXError() }
+        return fd
+    }
+
+    private func writeAll(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                #if canImport(Darwin)
+                let written = Darwin.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+                #elseif canImport(Glibc)
+                let written = Glibc.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+                #endif
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw currentPOSIXError()
+                }
+                offset += written
+            }
+        }
+    }
+
+    private func currentPOSIXError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     private func messagesURL(teamID: String) -> URL {

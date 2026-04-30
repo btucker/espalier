@@ -1,6 +1,33 @@
 import Foundation
 
 public enum TeamHookRenderer {
+    public static func sessionStart(runtime: TeamHookRuntime, teamContext: String) throws -> String {
+        switch runtime {
+        case .codex:
+            return try codexSessionStart(teamContext: teamContext)
+        case .claude:
+            return try claudeSessionStart(teamContext: teamContext)
+        }
+    }
+
+    public static func postToolUse(runtime: TeamHookRuntime, messages: [TeamInboxMessage]) throws -> String {
+        switch runtime {
+        case .codex:
+            return try codexPostToolUse(messages: messages)
+        case .claude:
+            return try claudePostToolUse(messages: messages)
+        }
+    }
+
+    public static func stop(runtime: TeamHookRuntime, messages: [TeamInboxMessage]) throws -> String {
+        switch runtime {
+        case .codex:
+            return try codexStop(messages: messages)
+        case .claude:
+            return try claudeStop(messages: messages)
+        }
+    }
+
     public static func codexSessionStart(teamContext: String) throws -> String {
         let context = """
         Graftty Agent Team session context.
