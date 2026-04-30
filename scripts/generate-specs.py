@@ -25,6 +25,10 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+SpecKind = Literal["test", "type", "todo"]
+CarrierKind = Literal["triple", "single", "doc"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SPECS_MD = REPO_ROOT / "SPECS.md"
@@ -48,7 +52,7 @@ class SpecMarker:
     text: str
     file: Path
     line: int
-    kind: str  # "test" | "type" | "todo"
+    kind: SpecKind
 
     @property
     def prefix(self) -> str:
@@ -74,14 +78,13 @@ def line_of_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def extract_carrier(text: str, marker_start: int) -> tuple[str, str]:
+def extract_carrier(text: str, marker_start: int) -> tuple[CarrierKind, str]:
     # Given the start of a `@spec` token, return (kind, raw_carrier_text).
-    # kind ∈ {"triple", "single", "doc"}:
-    #   - triple: marker is inside a triple-quoted Swift literal.
-    #   - single: marker is inside a normal "…" Swift string literal.
-    #   - doc:    marker is on a `///` doc-comment line.
     line_start = text.rfind("\n", 0, marker_start) + 1
-    line_text = text[line_start : text.find("\n", marker_start)]
+    line_end = text.find("\n", marker_start)
+    if line_end == -1:
+        line_end = len(text)
+    line_text = text[line_start:line_end]
 
     if line_text.lstrip().startswith("///"):
         # doc-comment carrier
@@ -124,7 +127,7 @@ def _extract_doc_block(text: str, marker_start: int) -> str:
     return "\n".join(lines)
 
 
-def parse_carrier_text(kind: str, carrier: str, spec_id: str) -> str:
+def parse_carrier_text(kind: CarrierKind, carrier: str, spec_id: str) -> str:
     """Strip the leading `@spec <ID>:` prefix and any surrounding noise."""
     # The marker may appear after some preamble in the carrier (common
     # for doc comments where the first line could be something like
@@ -137,14 +140,13 @@ def parse_carrier_text(kind: str, carrier: str, spec_id: str) -> str:
     )
     body = re.sub(r"\s*\n\s*", " ", body.strip())
     if kind in ("triple", "single"):
-        # Reverse the only Swift escape the inventory writer emits:
-        # `\\` (two on-disk backslashes) → `\` (one). Doc comments are
-        # not Swift string literals, so leave their backslashes alone.
+        # Swift string literals encode `\` as `\\`. Doc comments are
+        # not string literals, so leave their backslashes alone.
         body = body.replace("\\\\", "\\")
     return body
 
 
-def kind_of(file: Path) -> str:
+def kind_of(file: Path) -> SpecKind:
     # `*Todo.swift` files under Tests/ are inventory; everything else
     # under Tests/ is a real test; everything under Sources/ is a type
     # annotation.
@@ -155,38 +157,39 @@ def kind_of(file: Path) -> str:
     return "type"
 
 
-def scan_swift_file(file: Path) -> list[SpecMarker]:
+def scan_swift_file(file: Path) -> tuple[list[SpecMarker], list[str]]:
     source = file.read_text()
     markers: list[SpecMarker] = []
+    errors: list[str] = []
     for m in SPEC_TOKEN.finditer(source):
         spec_id = m.group(1)
+        line = line_of_offset(source, m.start())
         try:
             carrier_kind, carrier = extract_carrier(source, m.start())
         except ValueError as exc:
-            print(
-                f"warning: {file.relative_to(REPO_ROOT)}:{line_of_offset(source, m.start())}: {exc}",
-                file=sys.stderr,
-            )
+            errors.append(f"{file.relative_to(REPO_ROOT)}:{line}: {exc}")
             continue
-        body = parse_carrier_text(carrier_kind, carrier, spec_id)
         markers.append(
             SpecMarker(
                 spec_id=spec_id,
-                text=body,
+                text=parse_carrier_text(carrier_kind, carrier, spec_id),
                 file=file,
-                line=line_of_offset(source, m.start()),
+                line=line,
                 kind=kind_of(file),
             )
         )
-    return markers
+    return markers, errors
 
 
-def collect_markers(roots: list[Path]) -> list[SpecMarker]:
-    out: list[SpecMarker] = []
+def collect_markers(roots: list[Path]) -> tuple[list[SpecMarker], list[str]]:
+    markers: list[SpecMarker] = []
+    errors: list[str] = []
     for root in roots:
         for path in root.rglob("*.swift"):
-            out.extend(scan_swift_file(path))
-    return out
+            file_markers, file_errors = scan_swift_file(path)
+            markers.extend(file_markers)
+            errors.extend(file_errors)
+    return markers, errors
 
 
 def validate(markers: list[SpecMarker]) -> list[str]:
@@ -232,10 +235,9 @@ def render_specs_md(markers: list[SpecMarker], config: dict) -> str:
     subsection_titles: dict[str, str] = config.get("subsections", {})
     section_order: list[str] = config.get("section_order", [])
 
-    # For each spec ID, prefer the type marker's text if both a test and
-    # a type carry the same ID (they should match, but in practice the
-    # test title wins for behavior; the type doc is the structural
-    # mirror). When only one exists, that one wins.
+    # When a spec has both a behavioral marker (test/todo) and a type
+    # marker, the behavioral text wins — the test title is the authored
+    # requirement; the type doc comment is a structural mirror.
     by_id: dict[str, SpecMarker] = {}
     for m in markers:
         existing = by_id.get(m.spec_id)
@@ -294,8 +296,10 @@ def main() -> int:
 
     config = json.loads(SECTIONS_JSON.read_text())
 
-    markers = collect_markers([REPO_ROOT / "Sources", REPO_ROOT / "Tests"])
-    errors = validate(markers)
+    markers, scan_errors = collect_markers(
+        [REPO_ROOT / "Sources", REPO_ROOT / "Tests"]
+    )
+    errors = scan_errors + validate(markers)
     if errors:
         for err in errors:
             print(f"error: {err}", file=sys.stderr)
