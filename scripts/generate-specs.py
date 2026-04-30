@@ -127,34 +127,22 @@ def _extract_doc_block(text: str, marker_start: int) -> str:
 
 def parse_carrier_text(kind: str, carrier: str, spec_id: str) -> str:
     """Strip the leading `@spec <ID>:` prefix and any surrounding noise."""
-    body = carrier
-    # The marker may appear after some preamble in the carrier (rare for
-    # strings, common for doc comments where the first line could be
-    # something like "Implementation note. @spec FOO-1 ..."). Slice from
-    # the start of the marker.
-    idx = body.find(f"@spec {spec_id}")
+    # The marker may appear after some preamble in the carrier (common
+    # for doc comments where the first line could be something like
+    # "Implementation note. @spec FOO-1 ..."). Slice from the marker.
+    idx = carrier.find(f"@spec {spec_id}")
     if idx == -1:
-        idx = body.find("@spec")
-    body = body[idx:]
-    body = re.sub(r"^@spec\s+[A-Z]+-[0-9]+(?:\.[0-9]+)?\s*:?\s*", "", body)
-
+        raise ValueError(f"@spec {spec_id} not found in carrier")
+    body = re.sub(
+        r"^@spec\s+[A-Z]+-[0-9]+(?:\.[0-9]+)?\s*:?\s*", "", carrier[idx:]
+    )
+    body = re.sub(r"\s*\n\s*", " ", body.strip())
     if kind in ("triple", "single"):
-        # Multi-line literals from Swift collapse to a single logical
-        # paragraph here — preserve internal newlines as spaces so the
-        # markdown render is one tidy paragraph per spec.
-        body = re.sub(r"\s*\n\s*", " ", body.strip())
-        # Reverse the only Swift escape the migration / inventory
-        # actually emit: `\\` (two on-disk backslashes) → `\` (one). EARS
-        # text mentioning `\e`, `\u{202E}`, etc. round-trips identity to
-        # SPECS.md only if we undo the escaping the inventory writer put
-        # in.
+        # Reverse the only Swift escape the inventory writer emits:
+        # `\\` (two on-disk backslashes) → `\` (one). Doc comments are
+        # not Swift string literals, so leave their backslashes alone.
         body = body.replace("\\\\", "\\")
-    elif kind == "doc":
-        body = re.sub(r"\s*\n\s*", " ", body.strip())
-    else:
-        body = body.strip()
-
-    return body.strip()
+    return body
 
 
 def kind_of(file: Path) -> str:
@@ -210,7 +198,7 @@ def validate(markers: list[SpecMarker]) -> list[str]:
     for m in markers:
         # Treat "test" and "todo" as the same kind for uniqueness
         # purposes — the rule is "one behavioral location per spec".
-        bucket = "behavior" if m.kind in ("test", "todo") else "type"
+        bucket = "behavioral" if m.kind in ("test", "todo") else "type"
         by_id_kind[(m.spec_id, bucket)].append(m)
     for (spec_id, bucket), entries in by_id_kind.items():
         if len(entries) > 1:
@@ -218,7 +206,7 @@ def validate(markers: list[SpecMarker]) -> list[str]:
                 f"{m.file.relative_to(REPO_ROOT)}:{m.line}" for m in entries
             )
             errors.append(
-                f"spec {spec_id} appears in multiple {bucket} locations: {locs}"
+                f"spec {spec_id} has multiple {bucket} locations (only one allowed): {locs}"
             )
 
     by_id: dict[str, list[SpecMarker]] = defaultdict(list)

@@ -113,12 +113,8 @@ def derive_section_titles(specs: list[Spec]) -> dict:
     prefix_section_counts: dict[str, dict[str, int]] = defaultdict(
         lambda: defaultdict(int)
     )
-    prefix_section_order: dict[str, list[str]] = defaultdict(list)
     for s in specs:
-        title = s.section_title
-        if title and prefix_section_counts[s.prefix][title] == 0:
-            prefix_section_order[s.prefix].append(title)
-        prefix_section_counts[s.prefix][title] += 1
+        prefix_section_counts[s.prefix][s.section_title] += 1
 
     sections: dict[str, str] = {}
     for prefix, counts in prefix_section_counts.items():
@@ -167,7 +163,8 @@ def swift_string_literal(text: str) -> str:
     # backslashes, and very long lines don't have to be escaped. Swift
     # interprets backslash escapes inside multi-line literals; pre-
     # escape any backslash so they round-trip literally.
-    body = text.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    assert '"""' not in text, f"spec text contains triple-quote: {text!r}"
+    body = text.replace("\\", "\\\\")
     return f'"""\n{body}\n"""'
 
 
