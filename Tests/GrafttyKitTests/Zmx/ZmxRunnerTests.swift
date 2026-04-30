@@ -51,7 +51,9 @@ struct ZmxRunnerTests {
         #expect(result.exitCode == 2)
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test("""
+@spec ZMX-4.5: When the application invokes synchronous zmx maintenance commands such as `zmx list --short` or `zmx kill --force <session>`, the subprocess wrapper shall apply a bounded timeout and terminate the command if it does not exit promptly. Cleanup paths, including test teardown, shall not block indefinitely on a degraded zmx daemon, because a wedged cleanup can leave `zmx attach` clients and their PTYs orphaned.
+""", .timeLimit(.minutes(1)))
     func captureThrowsOnTimeout() throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("graftty-zmx-runner-timeout-\(UUID().uuidString).pid")

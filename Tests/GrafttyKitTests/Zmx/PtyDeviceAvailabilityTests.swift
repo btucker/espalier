@@ -1,7 +1,10 @@
 import Testing
 @testable import GrafttyKit
 
-@Suite("PTY device availability")
+@Suite("""
+PTY device availability
+@spec ZMX-5.3: Before creating a new terminal surface, the application shall probe whether the OS can allocate, grant, and unlock a PTY. If that probe fails, the application shall skip surface creation for that pane and log the failure rather than calling into libghostty and relying on a lower-level resource-exhaustion failure. This guard is best-effort and race-prone by nature, but it gives Graftty a controlled failure path when the system PTY pool is exhausted.
+""")
 struct PtyDeviceAvailabilityTests {
 
     @Test func availableWhenProbeOpensAndClosesPTY() {
