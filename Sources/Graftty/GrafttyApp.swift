@@ -1,7 +1,63 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 import GrafttyKit
 import GrafttyProtocol
+
+final class AgentNotificationRouter: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = AgentNotificationRouter()
+
+    @MainActor var onActivate: ((AgentStopNotificationPayload) -> Void)?
+
+    func install() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    func post(_ notification: AgentStopNotificationContent) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            let post = {
+                let content = UNMutableNotificationContent()
+                content.title = notification.title
+                content.body = notification.body
+                content.sound = .default
+                content.userInfo = notification.userInfo
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                )
+                center.add(request)
+            }
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                post()
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { post() }
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let raw = response.notification.request.content.userInfo
+        var userInfo: [String: Any] = [:]
+        for (key, value) in raw {
+            guard let key = key as? String else { continue }
+            userInfo[key] = value
+        }
+        guard let payload = try? AgentStopNotification.payload(from: userInfo) else { return }
+        await MainActor.run {
+            self.onActivate?(payload)
+        }
+    }
+}
 
 /// Holds long-lived non-SwiftUI services for the app. Retained for the lifetime of
 /// `GrafttyApp` so weak delegates (e.g. `WorktreeMonitor.delegate`) stay alive.
@@ -331,6 +387,14 @@ struct GrafttyApp: App {
         }
 
         terminalManager.initialize()
+        AgentNotificationRouter.shared.install()
+        AgentNotificationRouter.shared.onActivate = { [appState = $appState, tm = terminalManager] payload in
+            Self.activateAgentStopNotification(
+                payload,
+                appState: appState,
+                terminalManager: tm
+            )
+        }
 
         // Route context-menu split requests through the same insertion code
         // path that Cmd+D uses, but targeting the *menu's* surface rather
@@ -1333,6 +1397,14 @@ struct GrafttyApp: App {
         sessionID: String?,
         appState: Binding<AppState>
     ) -> ResponseMessage {
+        if event == .stop {
+            recordAgentStop(
+                callerPath: callerPath,
+                runtime: runtime,
+                sessionID: sessionID,
+                appState: appState
+            )
+        }
         do {
             let output = try teamInboxRequestHandler().hook(
                 callerWorktree: callerPath,
@@ -1347,6 +1419,56 @@ struct GrafttyApp: App {
             return .error(error.description)
         } catch {
             return .error("failed to render team hook context: \(error)")
+        }
+    }
+
+    @MainActor
+    private static func recordAgentStop(
+        callerPath: String,
+        runtime: TeamHookRuntime,
+        sessionID: String?,
+        appState: Binding<AppState>
+    ) {
+        let timestamp = Date()
+        for repoIndex in appState.wrappedValue.repos.indices {
+            for worktreeIndex in appState.wrappedValue.repos[repoIndex].worktrees.indices
+                where appState.wrappedValue.repos[repoIndex].worktrees[worktreeIndex].path == callerPath {
+                let worktree = appState.wrappedValue.repos[repoIndex].worktrees[worktreeIndex]
+                let worktreeName = WorktreeNameSanitizer.sanitize(worktree.branch)
+                let resolvedSessionID = sessionID ?? "\(runtime.rawValue):\(worktreeName):\(callerPath)"
+                appState.wrappedValue.repos[repoIndex].worktrees[worktreeIndex].attention = Attention(
+                    text: "\(AgentStopNotification.displayName(runtime)) needs input",
+                    timestamp: timestamp
+                )
+                AgentNotificationRouter.shared.post(
+                    AgentStopNotification.content(
+                        runtime: runtime,
+                        worktreeName: worktreeName,
+                        worktreePath: callerPath,
+                        sessionID: resolvedSessionID,
+                        timestamp: timestamp
+                    )
+                )
+                return
+            }
+        }
+    }
+
+    @MainActor
+    private static func activateAgentStopNotification(
+        _ payload: AgentStopNotificationPayload,
+        appState: Binding<AppState>,
+        terminalManager: TerminalManager
+    ) {
+        NSApp.activate(ignoringOtherApps: true)
+        AgentStopNotification.acknowledgeSelection(
+            appState: &appState.wrappedValue,
+            worktreePath: payload.worktreePath,
+            timestamp: payload.attentionTimestamp
+        )
+        if let worktree = appState.wrappedValue.worktree(forPath: payload.worktreePath),
+           let terminalID = worktree.focusedTerminalID ?? worktree.splitTree.allLeaves.first {
+            terminalManager.setFocus(terminalID)
         }
     }
 
