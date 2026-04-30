@@ -9,6 +9,7 @@ import SwiftUI
 /// terminal fullscreen.
 public struct WorktreeDetailView: View {
     public let host: Host
+    public let baseURL: URL
     public let worktree: WorktreePanes
     public let onSelectPane: (_ sessionName: String) -> Void
 
@@ -17,10 +18,23 @@ public struct WorktreeDetailView: View {
 
     public init(
         host: Host,
+        baseURL: URL? = nil,
         worktree: WorktreePanes,
         onSelectPane: @escaping (_ sessionName: String) -> Void
     ) {
         self.host = host
+        self.baseURL = baseURL ?? host.baseURL
+        self.worktree = worktree
+        self.onSelectPane = onSelectPane
+    }
+
+    public init(
+        connection: ResolvedHostConnection,
+        worktree: WorktreePanes,
+        onSelectPane: @escaping (_ sessionName: String) -> Void
+    ) {
+        self.host = connection.host
+        self.baseURL = connection.baseURL
         self.worktree = worktree
         self.onSelectPane = onSelectPane
     }
@@ -47,7 +61,7 @@ public struct WorktreeDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: host.id) {
             if controller == nil {
-                let text = await GhosttyConfigFetcher.fetch(baseURL: host.baseURL)
+                let text = await GhosttyConfigFetcher.fetch(baseURL: baseURL)
                 controller = TerminalController(
                     configSource: text.map { .generated($0) } ?? .none
                 )
@@ -57,7 +71,7 @@ public struct WorktreeDetailView: View {
             guard let layout = worktree.layout else { return }
             if previews == nil {
                 previews = PanePreviewClientPool { sessionName in
-                    let wsURL = RootView.makeWebSocketURL(base: host.baseURL, session: sessionName)
+                    let wsURL = RootView.makeWebSocketURL(base: baseURL, session: sessionName)
                     let ws = URLSessionWebSocketClient(url: wsURL)
                     return SessionClient(sessionName: sessionName, webSocket: ws)
                 }

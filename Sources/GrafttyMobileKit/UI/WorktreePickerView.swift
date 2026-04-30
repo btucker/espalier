@@ -6,10 +6,18 @@ public struct WorktreePickerView: View {
     @State private var state: LoadState = .loading
     @State private var isAddSheetPresented: Bool = false
     public let host: Host
+    public let baseURL: URL
     public let onSelect: (WorktreePanes) -> Void
 
     public init(host: Host, onSelect: @escaping (WorktreePanes) -> Void) {
         self.host = host
+        self.baseURL = host.baseURL
+        self.onSelect = onSelect
+    }
+
+    public init(connection: ResolvedHostConnection, onSelect: @escaping (WorktreePanes) -> Void) {
+        self.host = connection.host
+        self.baseURL = connection.baseURL
         self.onSelect = onSelect
     }
 
@@ -69,7 +77,7 @@ public struct WorktreePickerView: View {
             }
         }
         .sheet(isPresented: $isAddSheetPresented) {
-            AddWorktreeSheetView(host: host) { response in
+            AddWorktreeSheetView(host: host, baseURL: baseURL) { response in
                 Task { await handleCreated(response) }
             }
         }
@@ -83,7 +91,7 @@ public struct WorktreePickerView: View {
 
     private func refresh() async {
         do {
-            let list = try await WorktreePanesFetcher.fetch(baseURL: host.baseURL)
+            let list = try await WorktreePanesFetcher.fetch(baseURL: baseURL)
             state = .loaded(list)
         } catch WorktreePanesFetcher.FetchError.forbidden {
             state = .error("Not authorized — is this device on your tailnet?")

@@ -7,7 +7,12 @@ public struct RootView: View {
 
     @State private var hostStore = HostStore()
     @State private var gate = BiometricGate()
-    @State private var navigationPath = NavigationPath()
+    @State private var navigationPath: [RootRoute] = []
+    @State private var connectionResolver = HostConnectionResolver()
+    @State private var hostKeyPinStore = FileSSHHostKeyPinStore()
+    @State private var pendingHost: Host?
+    @State private var connectionError: String?
+    @State private var trustChallenge: SSHHostKeyChallenge?
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
@@ -15,37 +20,70 @@ public struct RootView: View {
     public var body: some View {
         ZStack {
             NavigationStack(path: $navigationPath) {
-                HostPickerView(store: hostStore)
-                    .navigationDestination(for: Host.self) { host in
-                        WorktreePickerView(host: host) { wt in
-                            navigationPath.append(WorktreeStep(host: host, worktree: wt))
+                HostPickerView(store: hostStore) { host in
+                    Task { @MainActor in await connect(to: host) }
+                }
+                    .navigationDestination(for: RootRoute.self) { route in
+                        switch route {
+                        case .host(let connection):
+                            WorktreePickerView(connection: connection) { wt in
+                                navigationPath.append(.worktree(WorktreeStep(
+                                    connection: connection,
+                                    worktree: wt
+                                )))
+                            }
+                        case .worktree(let step):
+                            WorktreeDetailView(
+                                connection: step.connection,
+                                worktree: step.worktree
+                            ) { sessionName in
+                                navigationPath.append(.session(SessionStep(
+                                    connection: step.connection,
+                                    sessionName: sessionName,
+                                    title: step.worktree.layout?.title(for: sessionName) ?? sessionName
+                                )))
+                            }
+                        case .session(let step):
+                            SingleSessionView(step: step, navigationPath: $navigationPath)
                         }
-                    }
-                    .navigationDestination(for: WorktreeStep.self) { step in
-                        WorktreeDetailView(
-                            host: step.host,
-                            worktree: step.worktree
-                        ) { sessionName in
-                            navigationPath.append(SessionStep(
-                                host: step.host,
-                                sessionName: sessionName,
-                                title: step.worktree.layout?.title(for: sessionName) ?? sessionName
-                            ))
-                        }
-                    }
-                    .navigationDestination(for: SessionStep.self) { step in
-                        SingleSessionView(step: step, navigationPath: $navigationPath)
                     }
             }
             if gate.state == .locked {
                 lockOverlay
             }
+            if pendingHost != nil {
+                ProgressView()
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
         }
         .task { await gate.authenticate() }
+        .alert("Couldn't connect", isPresented: Binding(
+            get: { connectionError != nil },
+            set: { if !$0 { connectionError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(connectionError ?? "")
+        }
+        .alert(item: $trustChallenge) { challenge in
+            Alert(
+                title: Text("Trust this Mac?"),
+                message: Text("SSH host key \(challenge.fingerprint.value)"),
+                primaryButton: .default(Text("Trust")) {
+                    Task { @MainActor in await trustAndRetry(challenge) }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+        .onChange(of: navigationPath) { oldValue, newValue in
+            closeConnectionsRemoved(from: oldValue, to: newValue)
+        }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:
                 gate.applicationDidEnterBackground()
+                closeAllConnections()
             case .active:
                 gate.applicationWillEnterForeground()
                 if gate.state == .locked {
@@ -54,6 +92,62 @@ public struct RootView: View {
             default:
                 break
             }
+        }
+    }
+
+    @MainActor
+    private func connect(to host: Host) async {
+        pendingHost = host
+        defer { pendingHost = nil }
+        do {
+            let connection = try await connectionResolver.resolve(host)
+            navigationPath.append(.host(connection))
+        } catch SSHTunnelError.unknownHostKey(let target, let fingerprint) {
+            trustChallenge = SSHHostKeyChallenge(host: host, target: target, fingerprint: fingerprint)
+        } catch SSHTunnelError.changedHostKey(_, let expected, let actual) {
+            connectionError = "The SSH host key changed.\nExpected \(expected.value)\nGot \(actual.value)"
+        } catch {
+            connectionError = "Couldn't open the SSH tunnel."
+        }
+    }
+
+    @MainActor
+    private func trustAndRetry(_ challenge: SSHHostKeyChallenge) async {
+        do {
+            try hostKeyPinStore.trust(challenge.fingerprint, for: challenge.target)
+            await connect(to: challenge.host)
+        } catch {
+            connectionError = "Couldn't save the SSH host key."
+        }
+    }
+
+    @MainActor
+    private func closeConnectionsRemoved(from oldValue: [RootRoute], to newValue: [RootRoute]) {
+        let activeIDs = Set(newValue.map(\.connection.id))
+        var closedIDs = Set<UUID>()
+        let removed = oldValue.map(\.connection).filter { connection in
+            guard !activeIDs.contains(connection.id), !closedIDs.contains(connection.id) else {
+                return false
+            }
+            closedIDs.insert(connection.id)
+            return true
+        }
+        for connection in removed {
+            Task { await connection.close() }
+        }
+    }
+
+    @MainActor
+    private func closeAllConnections() {
+        var closedIDs = Set<UUID>()
+        let connections = navigationPath.map(\.connection).filter { connection in
+            guard !closedIDs.contains(connection.id) else { return false }
+            closedIDs.insert(connection.id)
+            return true
+        }
+        navigationPath.removeAll()
+        for connection in connections {
+            Task { await connection.close() }
         }
     }
 
@@ -78,14 +172,38 @@ public struct RootView: View {
 }
 
 /// Second-level nav: picked a worktree, now show its pane tree.
-struct WorktreeStep: Hashable {
+enum RootRoute: Hashable {
+    case host(ResolvedHostConnection)
+    case worktree(WorktreeStep)
+    case session(SessionStep)
+
+    var connection: ResolvedHostConnection {
+        switch self {
+        case .host(let connection):
+            return connection
+        case .worktree(let step):
+            return step.connection
+        case .session(let step):
+            return step.connection
+        }
+    }
+}
+
+struct SSHHostKeyChallenge: Identifiable {
+    var id: String { "\(target.host):\(target.port):\(fingerprint.value)" }
     let host: Host
+    let target: SSHHostKeyPinTarget
+    let fingerprint: SSHHostKeyFingerprint
+}
+
+struct WorktreeStep: Hashable {
+    let connection: ResolvedHostConnection
     let worktree: WorktreePanes
 }
 
 /// Third-level nav: picked a pane, now show its terminal fullscreen.
 struct SessionStep: Hashable {
-    let host: Host
+    let connection: ResolvedHostConnection
     let sessionName: String
     let title: String
 }
@@ -95,7 +213,7 @@ struct SessionStep: Hashable {
 /// the view pops from the stack.
 struct SingleSessionView: View {
     let step: SessionStep
-    @Binding var navigationPath: NavigationPath
+    @Binding var navigationPath: [RootRoute]
 
     @State private var client: SessionClient
     /// Per-host TerminalController constructed with the Mac's ghostty
@@ -117,10 +235,10 @@ struct SingleSessionView: View {
     /// keyboard programmatically from the show-keyboard button.
     @State private var focusRequestCount: Int = 0
 
-    init(step: SessionStep, navigationPath: Binding<NavigationPath>) {
+    init(step: SessionStep, navigationPath: Binding<[RootRoute]>) {
         self.step = step
         self._navigationPath = navigationPath
-        let wsURL = RootView.makeWebSocketURL(base: step.host.baseURL, session: step.sessionName)
+        let wsURL = RootView.makeWebSocketURL(base: step.connection.baseURL, session: step.sessionName)
         let ws = URLSessionWebSocketClient(url: wsURL)
         self._client = State(initialValue: SessionClient(sessionName: step.sessionName, webSocket: ws))
     }
@@ -166,14 +284,14 @@ struct SingleSessionView: View {
                 for: UIResponder.keyboardWillHideNotification
             )) { _ in isKeyboardVisible = false }
             .task { client.start() }
-            .task(id: step.host.id) {
+            .task(id: step.connection.id) {
                 // Fetch Mac config, then construct the per-host
                 // TerminalController with it baked into the init source.
                 // Doing it this way (vs. TerminalController.shared +
                 // updateConfigSource) means `baseConfigTemplate` captures
                 // the Mac config, so scene-phase / trait-collection
                 // color-scheme recomputes preserve the Mac theme.
-                let text = await GhosttyConfigFetcher.fetch(baseURL: step.host.baseURL)
+                let text = await GhosttyConfigFetcher.fetch(baseURL: step.connection.baseURL)
                 if controller == nil {
                     controller = TerminalController(
                         configSource: text.map { .generated($0) } ?? .none

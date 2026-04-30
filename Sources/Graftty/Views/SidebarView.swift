@@ -12,11 +12,16 @@ struct SidebarView: View {
     let theme: GhosttyTheme
     let statsStore: WorktreeStatsStore
     let prStatusStore: PRStatusStore
-    let onSelect: (String) -> Void
+    let onSelect: (UUID, String) -> Void
     let onSelectPane: (String, TerminalID) -> Void
     let onAddRepo: () -> Void
+    let onAddHost: () -> Void
     let onAddPath: (String) -> Void
     let onRemoveRepo: (RepoEntry) -> Void
+    let onTestHost: (MacHost) -> Void
+    let onDisconnectHost: (MacHost) -> Void
+    let onRemoveHost: (MacHost) -> Void
+    let onCopySSHCommand: (MacHost) -> Void
     let onStopWorktree: (String) -> Void
     let onDeleteWorktree: (String) -> Void
     let onMovePane: (TerminalID, String) -> Void
@@ -43,8 +48,20 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             List {
-                ForEach(appState.repos) { repo in
-                    repoSection(repo)
+                ForEach(HostRepositorySnapshot.groups(for: appState)) { group in
+                    if let header = group.hostHeader {
+                        Section {
+                            ForEach(group.repos) { repo in
+                                repoSection(repo, host: group.host)
+                            }
+                        } header: {
+                            hostHeader(header, host: group.host)
+                        }
+                    } else {
+                        ForEach(group.repos) { repo in
+                            repoSection(repo, host: group.host)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -56,11 +73,15 @@ struct SidebarView: View {
             Divider()
                 .opacity(0.4)
 
-            Button(action: onAddRepo) {
-                Label("Add Repository", systemImage: "plus")
+            Menu {
+                Button("Add Repository", action: onAddRepo)
+                Button("Add Host", action: onAddHost)
+            } label: {
+                Label("Add", systemImage: "plus")
                     .frame(maxWidth: .infinity)
                     .foregroundColor(theme.foreground.opacity(0.8))
             }
+            .menuStyle(.button)
             .buttonStyle(.plain)
             .padding(8)
         }
@@ -84,7 +105,23 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func repoSection(_ repo: RepoEntry) -> some View {
+    private func hostHeader(_ header: String, host: MacHost) -> some View {
+        Text(header)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .contextMenu {
+                if host.id != MacHost.localID {
+                    Button("Test Connection") { onTestHost(host) }
+                    Button("Disconnect") { onDisconnectHost(host) }
+                    Button("Copy SSH Command") { onCopySSHCommand(host) }
+                    Divider()
+                    Button("Remove Host") { onRemoveHost(host) }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func repoSection(_ repo: RepoEntry, host: MacHost) -> some View {
         DisclosureGroup(
             isExpanded: Binding(
                 get: { !repo.isCollapsed },
@@ -96,7 +133,7 @@ struct SidebarView: View {
             )
         ) {
             ForEach(repo.worktrees) { worktree in
-                worktreeBlock(worktree, repo: repo)
+                worktreeBlock(worktree, repo: repo, host: host)
                     // Outdent the worktree rows so each row's state
                     // indicator lines up under the parent repo's folder
                     // icon rather than sitting further right than the
@@ -121,21 +158,25 @@ struct SidebarView: View {
                         .font(.system(size: 11))
                 }
                 Spacer()
-                Button {
-                    pendingAddWorktree = AddWorktreeRequest(repo: repo, prefill: "")
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.foreground.opacity(0.6))
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
+                if host.id == MacHost.localID {
+                    Button {
+                        pendingAddWorktree = AddWorktreeRequest(repo: repo, prefill: "")
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(theme.foreground.opacity(0.6))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add worktree to \(repo.displayName)")
                 }
-                .buttonStyle(.plain)
-                .help("Add worktree to \(repo.displayName)")
             }
             .contextMenu {
-                Button("Remove Repository") {
-                    onRemoveRepo(repo)
+                if host.id == MacHost.localID {
+                    Button("Remove Repository") {
+                        onRemoveRepo(repo)
+                    }
                 }
             }
         }
@@ -149,13 +190,13 @@ struct SidebarView: View {
     /// focused pane is distinguished by text emphasis rather than a
     /// second background.
     @ViewBuilder
-    private func worktreeBlock(_ worktree: WorktreeEntry, repo: RepoEntry) -> some View {
+    private func worktreeBlock(_ worktree: WorktreeEntry, repo: RepoEntry, host: MacHost) -> some View {
         let isActive = appState.selectedWorktreePath == worktree.path
         let attention = SidebarAttentionLayout.layout(for: worktree)
         let isDropTarget = dropTargetWorktreeID == worktree.id
         VStack(spacing: 0) {
             Button {
-                onSelect(worktree.path)
+                onSelect(host.id, worktree.path)
             } label: {
                 WorktreeRow(
                     entry: worktree,
@@ -204,7 +245,7 @@ struct SidebarView: View {
                 }
             }
             .rightClickMenu {
-                buildWorktreeMenu(worktree, repo: repo)
+                buildWorktreeMenu(worktree, repo: repo, host: host)
             }
 
             if worktree.state == .running {
@@ -268,8 +309,14 @@ struct SidebarView: View {
     /// Worktree row's right-click menu. Built as `NSMenu` (not a
     /// SwiftUI `.contextMenu`) for the List-row hoisting reason
     /// `.rightClickMenu` documents.
-    private func buildWorktreeMenu(_ worktree: WorktreeEntry, repo: RepoEntry) -> NSMenu {
+    private func buildWorktreeMenu(_ worktree: WorktreeEntry, repo: RepoEntry, host: MacHost) -> NSMenu {
         let menu = NSMenu()
+        if host.id != MacHost.localID {
+            menu.addItem(ClosureMenuItem(title: "Copy Remote Path") {
+                Pasteboard.copy(worktree.path)
+            })
+            return menu
+        }
         // While an entry is in `.creating`, the on-disk worktree may
         // not exist yet (`git worktree add` is still running, possibly
         // blocked on hooks). Open-in-Finder, Stop, and Delete-Worktree
