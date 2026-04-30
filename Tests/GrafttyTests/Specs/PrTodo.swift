@@ -9,11 +9,6 @@ import Testing
 @Suite("PR — pending specs")
 struct PrTodo {
     @Test("""
-@spec PR-1.1: When the application resolves the PR for a worktree's branch on a GitHub origin, it shall scope the lookup to PRs whose head ref lives in the same repository as the base so that PRs from forks which happen to share the branch name are not associated with the worktree. Because `gh pr list --head` does not support the `<owner>:<branch>` syntax (it silently returns an empty result), the filter shall be implemented by passing the bare branch name to `gh`, requesting `headRepositoryOwner` in the JSON output, and discarding results whose `headRepositoryOwner.login` does not match the origin owner (compared case-insensitively).
-""", .disabled("not yet implemented"))
-    func pr_1_1() async throws { }
-
-    @Test("""
 @spec PR-1.2: If more than one PR in the same repository matches the worktree's branch and state, the application shall associate the worktree with the most recently created one.
 """, .disabled("not yet implemented"))
     func pr_1_2() async throws { }
@@ -69,11 +64,6 @@ struct PrTodo {
     func pr_4_3() async throws { }
 
     @Test("""
-@spec PR-4.4: `GitOriginHost.detect` shall treat a `git remote get-url origin` nonZeroExit as a legitimate "no origin remote" answer (returning nil, cacheable per `PR-7.11`) only when stderr contains "no such remote" (case-insensitive). Every other nonZeroExit shall rethrow so the store's caller-side don't-cache-on-throw safeguard prevents a transient failure — e.g. `.git/config` being rewritten during a concurrent `git worktree add`, brief lock contention under load, an FSEvents-driven re-read mid-pack-operation — from poisoning `hostByRepo` with nil for the remainder of the session. Without this discrimination, a single transient git error at first-poll turns a repo's PR status off until Espalier is relaunched; the symptom is silent (no logs, no badge) because `tick()` skips cached-nil repos and `performFetch` treats the cache as authoritative. `LC_ALL=C` (`TECH-5`) keeps the stderr match locale-stable.
-""", .disabled("not yet implemented"))
-    func pr_4_4() async throws { }
-
-    @Test("""
 @spec PR-5.1: For GitHub origins, the application shall fetch open PRs via `gh pr list --repo <owner>/<repo> --head <branch> --state open --limit 5 --json number,title,url,state,headRefName,headRepositoryOwner` and take the first result whose `headRepositoryOwner.login` matches the origin owner. Merged PRs shall use the same shape with `--state merged` and the additional `mergedAt` JSON field. The limit is 5 (rather than 1) so a fork PR returned first by `gh`'s default sort cannot crowd out a same-repo PR that the owner filter would otherwise accept.
 """, .disabled("not yet implemented"))
     func pr_5_1() async throws { }
@@ -87,21 +77,6 @@ struct PrTodo {
 @spec PR-5.3: For GitLab origins, the application shall fetch merge requests via `glab mr list --repo <path> --source-branch <branch> --per-page 5 -F json` (appending `--merged` for the merged-state sweep; the default list is opened-only) and take the first result whose `source_project_id` equals its `target_project_id`. Pipeline status for an opened MR comes from a separate `glab mr view <iid> --repo <path> -F json` call and is derived from the returned `head_pipeline.status` — the MR list endpoint (backing `glab mr list`) does not populate `head_pipeline`, only the single-MR view does. glab's earlier string-valued `--state <opened|merged>` flag was removed upstream; invocations that still carry it fail with "Unknown flag: --state" and yield no MR at all, which is why the flag-based spelling above is load-bearing. The per-page bound is 5 (rather than 1) so a fork MR returned first by glab's default sort cannot crowd out a same-repo MR that the source/target project-id filter would otherwise accept — parity with the GitHub-side fork defense in `PR-5.1`. An MR whose project IDs cannot be verified (both fields absent in the response) is excluded rather than accepted, for the same reason the GitHub filter excludes PRs with a missing `headRepositoryOwner`. If the `mr view` pipeline-status call fails after `mr list` succeeded, the MR is still surfaced with `.none` checks rather than dropping the whole `PRInfo` — parity with `PR-5.4`.
 """, .disabled("not yet implemented"))
     func pr_5_3() async throws { }
-
-    @Test("""
-@spec PR-5.4: When `gh pr list` succeeds but the subsequent `gh pr checks` call for the resolved PR fails (auth hiccup, rate limit, subcommand regression, network blip), the application shall still surface the PR's identity with `.none` check status rather than propagating the checks error out of the fetch. The `#<number>` sidebar badge (`PR-3.2`) and the breadcrumb PR button shall remain visible — losing them because checks couldn't be resolved produces worse UX than displaying them with neutral check state.
-""", .disabled("not yet implemented"))
-    func pr_5_4() async throws { }
-
-    @Test("""
-@spec PR-5.5: When the application stores a PR/MR title into a `PRInfo` for display (breadcrumb `PRButton`, accessibility label, tooltip), it shall first strip every Unicode bidirectional-override scalar (the embedding, override, and isolate families — the same ranges as `ATTN-1.14`). PR titles are author-controlled, including authors who submit from malicious forks; a poisoned title like `"Fix \\u{202E}redli\\u{202C} helper"` would otherwise render RTL-reversed in the breadcrumb as `"Fix ildeeper helper"`-style text — the same Trojan Source visual deception (CVE-2021-42574) `ATTN-1.14` and `LAYOUT-2.18` block on self-owned surfaces. Unlike those surfaces, the PR-title path STRIPS rather than REJECTS: a poisoned title shouldn't hide the PR entirely from the user (they still need to see "a PR exists"); stripping yields a legible-ish version and the user can click through to the hosting provider for the raw text. Applies to both `GitHubPRFetcher` and `GitLabPRFetcher`.
-""", .disabled("not yet implemented"))
-    func pr_5_5() async throws { }
-
-    @Test("""
-@spec PR-5.6: When `GitOriginHost.parse` normalises a remote URL, it shall strip trailing `/` characters from the repo path segment before stripping the `.git` suffix. Scp-style URLs (`git@host:owner/repo.git/`) don't go through `URL`'s path normalisation, so a configured remote with a stray trailing slash — common on copy-paste from a browser address bar into `git remote set-url` — would otherwise retain `repo.git` as the repo slug. The downstream `gh pr list --repo <owner>/<repo.git>` returns no results and the sidebar silently shows no PR badge for the whole session.
-""", .disabled("not yet implemented"))
-    func pr_5_6() async throws { }
 
     @Test("""
 @spec PR-6.1: A PR's overall check status shall roll up its individual check buckets as follows: any `fail` → `.failure`; any `pending` bucket or any in-flight state (`IN_PROGRESS`, `QUEUED`, `PENDING`) → `.pending`; all-`pass` → `.success`; anything else (including `skipping`, `cancel`, or unclassified) → `.none` (neutral).
@@ -149,27 +124,7 @@ struct PrTodo {
     func pr_7_9() async throws { }
 
     @Test("""
-@spec PR-7.10: When a PR fetch fails (network error, rate limit, expired `gh` auth), the application shall preserve the worktree's last-known `PRInfo` cache entry rather than removing it. A transient failure is not evidence that the PR stopped existing, and dropping cached info on every failed poll makes the sidebar badge and breadcrumb PR button flicker in and out while the `PR-7.2` backoff waits to retry. The next successful fetch either confirms the cached state or updates it.
-""", .disabled("not yet implemented"))
-    func pr_7_10() async throws { }
-
-    @Test("""
 @spec PR-7.11: When host detection (`GitOriginHost.detect` or equivalent) throws for a repository — process launch failure, git binary missing from PATH, etc. — the application shall not cache the failure in the `hostByRepo` map. Only successful detections (whether returning a resolved `HostingOrigin` or a legitimate "no origin remote" nil) shall be cached. Otherwise a transient environment glitch at first fetch poisons the repo's PR tracking for the whole session, since the poll tick skips cached-nil repos and no code path re-attempts detection.
 """, .disabled("not yet implemented"))
     func pr_7_11() async throws { }
-
-    @Test("""
-@spec PR-7.12: When the user selects a worktree in the sidebar, the application shall call `PRStatusStore.refresh` for that worktree, bypassing the `PR-7.2` cadence backoff. Rationale: even with the `PR-7.2` 60-second cap, a worst-case 60-second wait for a freshly-merged PR to appear in the breadcrumb is longer than the click-to-feedback loop a user expects on selection. Sidebar selection is a strong "user cares about this worktree now" signal, and the existing `refresh` path already short-circuits cadence and resets `failureStreak` on success — wiring it to selection closes the stale-UI escape hatch without any new mechanism.
-""", .disabled("not yet implemented"))
-    func pr_7_12() async throws { }
-
-    @Test("""
-@spec PR-7.13: `PRStatusStore` shall time-bound its per-worktree `inFlight` refresh guard so a hung `gh pr list` / `gh pr checks` subprocess cannot permanently lock out subsequent polls and user-triggered refreshes. A dispatch whose start timestamp is within the inFlight cap (30 seconds, intentionally independent of the `PR-7.1` poll cadence which can be tighter for pending CI — shrinking the inFlight cap alongside the poll cadence would kill legitimately slow `gh` calls before they finish) shall suppress a fresh refresh; beyond that cap, the prior dispatch shall be treated as abandoned and superseded, with the per-path `generation` counter bumped so the abandoned Task's late write is dropped if it ever returns. Without this, a single stuck subprocess (network flake, rate-limit back-off, expired gh auth refresh loop) freezes that worktree's sidebar badge and breadcrumb PR button at their last-cached state until the app is relaunched — the user-observable shape "PR status only updates when I click between worktrees". Mirrors `WorktreeStatsStore`'s `DIVERGE-4.4` recovery pattern for the equivalent stats-store bug.
-""", .disabled("not yet implemented"))
-    func pr_7_13() async throws { }
-
-    @Test("""
-@spec PR-7.14: The PR polling tick shall dispatch eligible per-worktree fetches and return without awaiting those fetch Tasks. The ticker loop itself must remain live even if a `gh` / `glab` subprocess hangs, otherwise `PR-7.13`'s abandoned-in-flight recovery never gets a later polling tick on which to supersede the stuck fetch. A hung fetch may occupy that worktree's `inFlight` slot until the `PR-7.13` 30-second inFlight cap elapses, but it must not stop unrelated worktrees from polling or require the user to click the sidebar to trigger the separate on-demand refresh path.
-""", .disabled("not yet implemented"))
-    func pr_7_14() async throws { }
 }

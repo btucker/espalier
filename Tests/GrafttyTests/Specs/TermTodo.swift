@@ -99,11 +99,6 @@ struct TermTodo {
     func term_5_2() async throws { }
 
     @Test("""
-@spec TERM-5.3: When a terminal pane's child process exits, the application shall automatically remove the pane from the split tree and free its surface without requiring user action.
-""", .disabled("not yet implemented"))
-    func term_5_3() async throws { }
-
-    @Test("""
 @spec TERM-5.4: When an auto-closed pane was the last pane in its worktree, the application shall transition the worktree entry to the closed state, matching the user-initiated close behavior.
 """, .disabled("not yet implemented"))
     func term_5_4() async throws { }
@@ -122,11 +117,6 @@ struct TermTodo {
 @spec TERM-5.7: When libghostty's `close_surface_cb` fires for a pane whose `SurfaceHandle` has already been torn down by Graftty (e.g. via `terminalManager.destroySurfaces(...)` during a `Stop Worktree` action), the application's close-event handler shall observe the missing surface handle and no-op rather than modifying the worktree's `splitTree`. Without this guard, the async close-event cascade that follows `Stop` would re-enter `closePane` for each leaf and strip them from the preserved split tree, emptying `splitTree` and violating `TERM-1.2`'s "re-open recreates the saved layout" contract. The guard applies only to library-initiated close events; user-initiated closes are covered by `TERM-5.8`.
 """, .disabled("not yet implemented"))
     func term_5_7() async throws { }
-
-    @Test("""
-@spec TERM-5.8: When the user explicitly invokes a pane close (`Cmd+W`, CLI `graftty pane close <id>`, or a context-menu Close action) against a leaf whose `SurfaceHandle` is absent — i.e. a phantom pane whose surface never created successfully because libghostty refused (OOM / resource pressure, `TERM-5.5`) — the application shall still remove the leaf from the worktree's `splitTree`. Without this, a phantom leaf is uncloseable: the sidebar renders a black / progress placeholder, `pane list` reports it, but every close path silently no-ops via `TERM-5.7`'s guard. The implementation seam is a `userInitiated` parameter on `closePane`: user paths pass `true` to bypass the handle guard; libghostty's async `close_surface_cb` passes `false` (default) so Stop cascades continue to preserve the tree.
-""", .disabled("not yet implemented"))
-    func term_5_8() async throws { }
 
     @Test("""
 @spec TERM-5.9: When `SurfaceHandle.setFrameSize` forwards a backing-pixel dimension to `ghostty_surface_set_size`, the conversion from `CGFloat` to `UInt32` shall be performed via a defensive clamp that maps `NaN` and values `≤ 1` to `1`, `+∞` and values `≥ UInt32.max` to `UInt32.max`, and all other finite values to their truncated `UInt32` representation. Naive `UInt32(max(1, Int(dim)))` traps on `NaN` and on out-of-`Int`-range values; SwiftUI `GeometryReader` has been observed to emit `.infinity` transiently during certain rebinding flows, and a trap on the view's layout pass crashes the whole process (every open pane dies). The helper is `SurfacePixelDimension.clamp(_:)` in GrafttyKit so the rule is unit-testable without an NSView host.
@@ -152,11 +142,6 @@ struct TermTodo {
 @spec TERM-7.2: The application shall support keyboard navigation between panes using directional shortcuts (e.g., Cmd+Opt+Arrow).
 """, .disabled("not yet implemented"))
     func term_7_2() async throws { }
-
-    @Test("""
-@spec TERM-7.3: When the user navigates between panes via directional keyboard (Cmd+Opt+Arrow, or libghostty's `goto_split` left/right/up/down actions), the application shall move focus to the leaf that is spatially adjacent in the requested direction — determined by walking the split tree from the focused leaf up to the nearest ancestor whose split orientation matches the motion axis and whose source-side subtree contains the current leaf, then descending into the opposite subtree's near-edge leaf. If no such ancestor exists, the application shall leave focus unchanged rather than wrapping around the tree in DFS order.
-""", .disabled("not yet implemented"))
-    func term_7_3() async throws { }
 
     @Test("""
 @spec TERM-7.4: When the application launches with a selected running worktree, the application shall automatically promote that worktree's focused pane to the window's first responder so the user can begin typing without first clicking inside a terminal.

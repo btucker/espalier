@@ -159,16 +159,6 @@ struct IosTodo {
     func ios_6_2() async throws { }
 
     @Test("""
-@spec IOS-6.3: When the outbound keystroke pipe (`SessionClient.box.onBytes`) receives a payload consisting of exactly one LF byte (`0x0A`), the application shall translate it to a single CR byte (`0x0D`) before sending it to the server. This reconciles iOS's soft-keyboard Return — which UIKit delivers as LF via `UIKeyInput.insertText("\\n")` — with the CR convention that physical terminals send on Return and that TUIs (Claude Code, readline, etc.) interpret as "submit." Without this translation, tapping Return on the iOS keyboard inserts a literal newline into the TUI's input buffer instead of submitting the current line, and there is no way to produce a submit keystroke from the soft keyboard. The rule is narrowed to a *standalone* single-byte LF so that multi-byte payloads with embedded newlines (pastes from the clipboard, programmatic text insertion) pass through unchanged and preserve their own line structure.
-""", .disabled("not yet implemented"))
-    func ios_6_3() async throws { }
-
-    @Test("""
-@spec IOS-6.4: When the user taps the terminal control bar's "Insert newline" control, the application shall send a single literal LF byte (`0x0A`) to the remote session, bypassing the `IOS-6.3` LF→CR rule via `SessionClient.insertNewline()`. This is the only way to insert a multi-line boundary into a TUI prompt from the iOS soft keyboard after Return has been reserved for submission.
-""", .disabled("not yet implemented"))
-    func ios_6_4() async throws { }
-
-    @Test("""
 @spec IOS-6.5: On the first user keystroke within a session, the iOS client shall claim size-leadership by sending its last-measured viewport `(cols, rows)` to the server via a `WebControlEnvelope.resize` frame. Subsequent libghostty-reported layout changes shall be forwarded to the server. Before this moment, layout-driven resize callbacks shall be memoized but not sent, so the Mac pane's `TIOCGWINSZ` dictates the PTY's dimensions and `IOS-5.6`'s scroll-view path governs rendering.
 """, .disabled("not yet implemented"))
     func ios_6_5() async throws { }

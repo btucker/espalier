@@ -29,19 +29,9 @@ struct WebTodo {
     func web_1_4() async throws { }
 
     @Test("""
-@spec WEB-1.5: If the user-configured port is outside the 0–65535 range NIO will accept (e.g., the Settings TextField lets the user type any integer, including "99999" or a negative number), the application shall surface a readable "Port must be 0–65535 (got N)" error in the Settings status row rather than attempting to bind and surfacing an opaque `NIOBindError`, and shall not start the server until the value is corrected.
-""", .disabled("not yet implemented"))
-    func web_1_5() async throws { }
-
-    @Test("""
 @spec WEB-1.6: When resolving the Tailscale LocalAPI, the application shall try Unix domain socket endpoints first (OSS / sandboxed App Store installs) and, if none are reachable, shall fall back to the macsys DMG's TCP endpoint by reading the port from `/Library/Tailscale/ipnport` (file or symlink) and the auth token from `/Library/Tailscale/sameuserproof-<port>`.
 """, .disabled("not yet implemented"))
     func web_1_6() async throws { }
-
-    @Test("""
-@spec WEB-1.7: Every UI surface that renders a TCP port — the Settings pane's Port input `TextField`, the status row, any future port label — shall suppress the locale grouping separator (e.g., `Listening on 100.64.0.5:49161`, never `49,161`; Port field value `8799`, never `8,799`). Input and display formatters go through `WebPortFormat.noGrouping` (an `IntegerFormatStyle<Int>` with `.grouping(.never)`) so every surface is identical.
-""", .disabled("not yet implemented"))
-    func web_1_7() async throws { }
 
     @Test("""
 @spec WEB-1.8: The diagnostic "Listening on …" row in the Settings pane shall bracket IPv6 hosts per RFC 3986 authority syntax (e.g., `[fd7a:115c::5]:8799`). Copyable URLs (Settings Base URL, sidebar "Copy web URL") no longer contain IP literals — they use the MagicDNS FQDN (WEB-8.1) — so this bracketing rule applies only to the diagnostic list. `WebURLComposer.authority(host:port:)` owns the bracket logic.
@@ -52,11 +42,6 @@ struct WebTodo {
 @spec WEB-1.9: When `WebURLComposer.url(session:host:port:)` percent-encodes the session name for interpolation into the URL path, it shall use `CharacterSet.urlPathAllowed` rather than `urlQueryAllowed`. The latter leaves reserved path/query/fragment separators (`?`, `#`) unescaped, so a session name containing `?` would cause the browser to parse the URL as path-and-query and the client router would see only the prefix. Graftty's own session names per `ZMX-2.1` never include such characters, but socket clients producing custom session names would otherwise silently break.
 """, .disabled("not yet implemented"))
     func web_1_9() async throws { }
-
-    @Test("""
-@spec WEB-1.10: The Settings pane status row ("Listening on …") shall render each listening address with its port individually (via `WebURLComposer.authority(host:port:)`), bracketing IPv6 hosts. Example: `Listening on [fd7a:115c::5]:49161, 100.64.0.5:49161`. (127.0.0.1 is no longer bound per WEB-1.1.)
-""", .disabled("not yet implemented"))
-    func web_1_10() async throws { }
 
     @Test("""
 @spec WEB-1.11: When the server fails to bind because the configured port is already in use (EADDRINUSE), the application shall surface the status as `.portUnavailable` — rendered as "Port in use" in the Settings pane — rather than the raw NIO error string (`"bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)"`). Recognition is locale-stable: classify by the bridged `NSPOSIXErrorDomain` + `EADDRINUSE` errno code, with the NIO string-match kept as a secondary path. Both `WebServer.start` and `WebServerController` use a single shared `WebServer.isAddressInUse(_:)` classifier so they cannot drift on recognising the same error.
@@ -189,11 +174,6 @@ struct WebTodo {
     func web_5_5() async throws { }
 
     @Test("""
-@spec WEB-5.6: When the client's WebSocket closes for any reason other than a deliberate page unmount (mobile tab suspension, laptop sleep, transient network wobble, Tailscale peer rotation), the client shall automatically attempt to reconnect to the same `/ws?session=<name>` URL with exponential backoff starting at 500 ms and capped at 8 s, with ±25 % jitter per attempt, keeping the `Terminal` instance and its scrollback alive across reconnects; on `visibilitychange` to `visible`, if the socket is not `OPEN` the client shall reset backoff and reconnect immediately rather than wait out any pending timeout. On each successful `open`, the client shall resend the current `(cols, rows)` as a resize envelope so the freshly-spawned `zmx attach` child's PTY matches the terminal grid. Rationale: without this, every transient drop required a full page refresh — a refresh loses the URL-bound session-picker state and visually blanks the terminal for the ~300 ms of wasm re-init. The daemon session surviving per `WEB-4.5` makes reconnection a safe retry rather than a "recreate from scratch" cost.
-""", .disabled("not yet implemented"))
-    func web_5_6() async throws { }
-
-    @Test("""
 @spec WEB-5.7: On mobile browsers the client shall (a) translate a single-finger vertical drag on the terminal host into `term.scrollLines(-deltaLines)` so scrollback is reachable without a hardware wheel (ghostty-web's built-in scrolling is wheel-only and mobile browsers do not synthesize wheel events from single-finger drag); and (b) size the terminal host to `window.visualViewport.{width,height}` (fallback `window.innerWidth/Height`), updating on `visualViewport` `resize` and `scroll` events, so when the software keyboard opens the host shrinks to the remaining visible area and the existing ResizeObserver refits `(cols, rows)` — keeping the cursor row above the keyboard rather than occluded beneath it. Taps shorter than one character-cell of movement shall still reach the terminal's own focus handler (which shows the mobile keyboard); multi-touch gestures (pinch, two-finger pan) shall pass through untouched. The terminal host shall declare `touch-action: none` and `overscroll-behavior: none` so the browser doesn't interpret the drag as page-scroll/pan/zoom or rubber-band the viewport before our handler sees the event.
 """, .disabled("not yet implemented"))
     func web_5_7() async throws { }
@@ -257,11 +237,6 @@ struct WebTodo {
 @spec WEB-8.1: When binding the HTTPS server, the application shall read `Self.DNSName` from Tailscale LocalAPI `/status`, strip the trailing dot, and use the resulting FQDN as the TLS SNI name and as the hostname in every composed Base URL / session URL. If `DNSName` is absent or empty, the application shall enter `.magicDNSDisabled` status and not bind. Settings shall render a "MagicDNS must be enabled on your tailnet" message plus a link to `https://login.tailscale.com/admin/dns`.
 """, .disabled("not yet implemented"))
     func web_8_1() async throws { }
-
-    @Test("""
-@spec WEB-8.2: The application shall fetch the TLS cert+key pair for the MagicDNS FQDN from Tailscale LocalAPI `/localapi/v0/cert/<fqdn>?type=pair`. If the response is classified (HTTP status ≥ 400 + body mentioning "HTTPS" and "enable") as "HTTPS disabled for this tailnet", the application shall enter `.httpsCertsNotEnabled` status and render an admin-console link without attempting to bind. Any other fetch failure shall enter `.certFetchFailed(<message>)` status.
-""", .disabled("not yet implemented"))
-    func web_8_2() async throws { }
 
     @Test("""
 @spec WEB-8.3: While the server is listening, the application shall re-fetch the cert every 24 hours. If the returned PEM bytes differ from the currently-serving material, the application shall construct a new `NIOSSLContext` and atomically swap the reference read by the per-channel `ChannelInitializer` via `WebTLSContextProvider.swap(_:)`. The application shall not close the listening socket and shall not disturb in-flight connections — existing WebSocket streams keep their prior context for their lifetime.

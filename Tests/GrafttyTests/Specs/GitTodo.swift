@@ -19,16 +19,6 @@ struct GitTodo {
     func git_1_2() async throws { }
 
     @Test("""
-@spec GIT-1.3: When the pre-`discover` step `GitRepoDetector.detect(path:)` throws while resolving the user-picked folder (e.g. the `.git` file exists but is unreadable due to permissions or a truncated write), the application shall present an `NSAlert` mirroring `GIT-1.2` rather than swallowing the throw via `try?`. Pre-fix the sync-detect path was the one remaining silent-return in the Add Repository flow — the async discover path (`GIT-1.2`) and the Delete Worktree path (`GIT-4.11`) already alert on throws, so the sync-detect throw stood out as the odd silent failure.
-""", .disabled("not yet implemented"))
-    func git_1_3() async throws { }
-
-    @Test("""
-@spec GIT-1.4: When `GitRepoDetector.detect(path:)` reads a linked worktree's `.git` file and finds a `gitdir: <path>` entry, it shall resolve a relative `<path>` against the worktree directory (the directory containing the `.git` file) rather than feeding it verbatim to `realpath(3)`. Git ≥ 2.52 with `worktree.useRelativePaths=true` writes entries like `gitdir: ../repo/.git/worktrees/name`; passing that to `realpath` resolves against the process cwd — usually unrelated to the worktree dir — so the returned `repoPath` was wrong and the "Add Repository" flow attached a dragged worktree to the wrong repo (or none at all). The absolute-gitdir case (older git and the default config) is unaffected. Mirrors `GIT-3.14`'s same-class fix in `WorktreeMonitor.resolveHeadLogPath`.
-""", .disabled("not yet implemented"))
-    func git_1_4() async throws { }
-
-    @Test("""
 @spec GIT-2.1: While a repository is in the sidebar, the application shall watch the repository's `.git/worktrees/` directory for changes using FSEvents.
 """, .disabled("not yet implemented"))
     func git_2_1() async throws { }
@@ -54,11 +44,6 @@ struct GitTodo {
     func git_2_5() async throws { }
 
     @Test("""
-@spec GIT-2.6: While a worktree is in the sidebar and non-stale, the application shall recursively watch the worktree's directory with `FSEventStreamCreate` (coalescing latency 0.5s) so that working-tree edits, stages / unstages via `.git/index`, and untracked-file creation surface as content-change events. Events for the worktree root, the bare `.git` directory, and the `.git/objects/` subtree shall be filtered out: the root and `.git` are coarse parent-mtime bumps that fire alongside more specific descendant events and carry no additional signal, and `.git/objects/` is pure pack-churn noise from `git gc` / pack writes. The watched path shall be resolved via `realpath(3)` before use because FSEvents always reports canonical paths (e.g. `/private/var/...` rather than `/var/...`) and an unresolved root makes the filter's `hasPrefix` comparison miss every event. The other watchers in GIT-2.1–GIT-2.5 use kqueue vnode sources (`DispatchSourceFileSystemObject`), which cannot watch a subtree recursively; the real FSEvents API is used here because the working tree is inherently recursive.
-""", .disabled("not yet implemented"))
-    func git_2_6() async throws { }
-
-    @Test("""
 @spec GIT-2.7: When a content-change event fires for a worktree, the application shall trigger a divergence-stats recompute for that worktree. The recompute is idempotent via `WorktreeStatsStore.inFlight` deduplication, so a burst of file events coalesces to at most one in-flight git subprocess pipeline.
 """, .disabled("not yet implemented"))
     func git_2_7() async throws { }
@@ -72,11 +57,6 @@ struct GitTodo {
 @spec GIT-2.9: When the origin-ref watcher from `GIT-2.5` observes a remote-tracking ref movement, the application shall refresh the repo's local remote-branch set before deciding which worktrees should receive PR/MR polling.
 """, .disabled("not yet implemented"))
     func git_2_9() async throws { }
-
-    @Test("""
-@spec GIT-2.10: When the application renders a worktree's branch name in the UI (the breadcrumb bar per `LAYOUT-1.3`, the secondary label in the sidebar row, and the main-checkout label in right-click "Move to <name>" menu entries — both in the sidebar pane row's menu and the terminal surface menu, per `PWD-1.1` / `PWD-1.3` / `TERM-8.10`), it shall read `WorktreeEntry.displayBranch` rather than `WorktreeEntry.branch`. `displayBranch` strips every Unicode bidirectional-override scalar (same ranges as `PR-5.5`) so a collaborator-controlled branch name like `"feat\\u{202E}lanigiro"` — which git accepts and which propagates into `state.json` via `git worktree list --porcelain` — can't render RTL-reversed in the breadcrumb, row, or menu items. `branch` itself is preserved unchanged so downstream `git` subprocess calls, `gh pr list --head <branch>`, and the `PRStatusStore.isFetchableBranch` gate keep operating on the real ref. This is the same strip-not-reject policy `PR-5.5` uses for externally-sourced text. The shared `SidebarWorktreeLabel.text(for:inRepoAtPath:siblingPaths:)` helper is the single call site for sidebar-adjacent labels so menu items and the row can't drift on the main-checkout path.
-""", .disabled("not yet implemented"))
-    func git_2_10() async throws { }
 
     @Test("""
 @spec GIT-3.1: When a new worktree is detected, the application shall add a new entry in the closed state and briefly flash its background highlight.
@@ -129,11 +109,6 @@ struct GitTodo {
     func git_3_10() async throws { }
 
     @Test("""
-@spec GIT-3.11: `WorktreeMonitor`'s `DispatchSource` watchers (one per watched worktree-directory, worktree-path, HEAD reflog, and origin-refs directory) shall release their underlying file descriptors on cancel. Specifically: `createFileWatcher` installs `source.setCancelHandler { close(fd) }`, and no `watch*` method shall override that handler — DispatchSource allows only one cancel handler per source, and an override silently leaks the fd. A long-running session that churns repos (add/remove, stale/resurrect) would otherwise monotonically grow its open-fd count and eventually hit macOS's 256-fd ulimit, failing every subsequent `open` (including socket accepts, terminal PTYs, and config reloads).
-""", .disabled("not yet implemented"))
-    func git_3_11() async throws { }
-
-    @Test("""
 @spec GIT-3.12: When `GitWorktreeDiscovery.discover(repoPath:)` throws (missing `git` binary, non-repo path passed due to a stale state.json entry, subprocess exceeding the timeout, transient FS glitch), the application shall log the failure via `NSLog` at every call site in `GrafttyApp` — `reconcileOnLaunch`, `worktreeMonitorDidDetectChange`, and `worktreeMonitorDidDetectBranchChange` — rather than swallow via `try?`. Analogue of `ATTN-2.7` / `PERSIST-2.2`. Without this, a transient discovery failure silently skips that repo's reconcile tick: Andy creates a new worktree, FSEvents fires, discover throws once, and the worktree never appears in the sidebar with no trail of why.
 """, .disabled("not yet implemented"))
     func git_3_12() async throws { }
@@ -147,11 +122,6 @@ struct GitTodo {
 @spec GIT-3.14: When `WorktreeMonitor.resolveHeadLogPath` reads a linked worktree's `.git` file and finds a `gitdir: <path>` line, it shall resolve a relative `<path>` against the worktree directory rather than feeding it verbatim to `open(2)`. Git ≥ 2.52 with `worktree.useRelativePaths=true` writes relative gitdir entries like `gitdir: ../.git/worktrees/name`; passing that to `open` resolves it against the process cwd — usually nothing like the worktree dir — so the HEAD-reflog watcher silently targets the wrong path (or fails outright). The absolute-gitdir case (older git and the default config) is unaffected.
 """, .disabled("not yet implemented"))
     func git_3_14() async throws { }
-
-    @Test("""
-@spec GIT-3.15: When a worktree transitions to the `.stale` state — regardless of which channel observed it (`worktreeMonitorDidDetectDeletion` for the FSEvents path, or `reconcileOnLaunch` / `worktreeMonitorDidDetectChange` when `git worktree list --porcelain` stops listing an entry) — the application shall call `WorktreeMonitor.stopWatchingWorktree(_:)` to drop the path / HEAD-reflog / content watchers for that worktree. Otherwise the watchers stay registered with fds bound to the reaped inode. A subsequent `git worktree add` at the same path (resurrection) would hit the reconciler's "idempotent" re-register (`guard sources[key] == nil else { return }`) and leave the new inode uncovered — the next `rm -rf` would go undetected, and `git commit` would not refresh PR / divergence state until the 30s / 5m polling safety nets catch up. The three stale-transition paths must be symmetric on this, matching `GIT-3.13`'s rule for the stats / PR cache clear.
-""", .disabled("not yet implemented"))
-    func git_3_15() async throws { }
 
     @Test("""
 @spec GIT-3.16: When a stale worktree is resurrected via user click (`selectWorktree` per `GIT-3.8`) rather than via the reconciler, the application shall re-arm the path / HEAD-reflog / content watchers for the worktree on the new inode. A user-click resurrection does not fire a `.git/worktrees/` FSEvents tick (no git subprocess ran), so the reconciler's re-register loop in `worktreeMonitorDidDetectChange` never runs — without this, the resurrected worktree has no real-time stats / PR refresh until the 30s / 5m polling safety nets catch up or the user triggers a git operation that bumps the `.git/worktrees/` dir.
@@ -262,11 +232,6 @@ struct GitTodo {
 @spec GIT-5.7: When `git worktree add` started by `GIT-5.4` fails, the application shall (a) remove the `.creating` placeholder from the sidebar and (b) present an `NSAlert` titled "Could not create worktree" whose informative text shows git's stderr (or "git worktree add failed" when stderr is empty). Inline error display in the sheet is no longer reachable since `GIT-5.4` already dismissed the sheet on submit. Mirrors `GIT-1.2` / `GIT-4.4` / `GIT-4.11`'s alert-not-silent-return policy on the symmetric create path.
 """, .disabled("not yet implemented"))
     func git_5_7() async throws { }
-
-    @Test("""
-@spec GIT-5.8: While a worktree entry is in the `.creating` state, the reconciler (`WorktreeReconciler.reconcile`) shall not transition the entry to `.stale` even when the path is absent from `git worktree list --porcelain` output. The placeholder is in flight by definition — git hasn't finished writing its admin entry yet — and only `AddWorktreeFlow` is permitted to clear the placeholder (success → `.running`, failure → remove). Without this guard, an FSEvents tick on `.git/worktrees/` that fires before git's admin write completes (or one driven by an unrelated change in another worktree) would briefly flash the spinning placeholder to `.stale`.
-""", .disabled("not yet implemented"))
-    func git_5_8() async throws { }
 
     @Test("""
 @spec GIT-5.9: When persisting `WorktreeEntry` to `state.json`, the application shall encode `.creating` as `.closed`. The `.creating` state is in-memory-only; if the app crashes mid-creation, the next launch's reconciler classifies the entry from `git worktree list --porcelain` rather than restoring a phantom spinner that would never resolve.

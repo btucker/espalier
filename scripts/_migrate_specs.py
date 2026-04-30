@@ -223,16 +223,16 @@ def collect_already_promoted() -> set[str]:
 
 def main() -> None:
     text = SPECS_MD.read_text()
-    specs = parse_specs_md(text)
-    print(f"Parsed {len(specs)} specs from SPECS.md")
+    all_specs = parse_specs_md(text)
+    print(f"Parsed {len(all_specs)} specs from SPECS.md")
 
     promoted = collect_already_promoted()
+    specs = all_specs
     if promoted:
-        before = len(specs)
-        specs = [s for s in specs if s.spec_id not in promoted]
+        specs = [s for s in all_specs if s.spec_id not in promoted]
         print(
-            f"Skipping {before - len(specs)} specs already promoted to "
-            "real tests / type doc comments outside *Todo.swift."
+            f"Skipping {len(all_specs) - len(specs)} specs already promoted "
+            "to real tests / type doc comments outside *Todo.swift."
         )
 
     seen: dict[str, Spec] = {}
@@ -250,7 +250,23 @@ def main() -> None:
             "renumbering one occurrence before re-running."
         )
 
-    config = derive_section_titles(specs)
+    # Section titles come from the FULL set of parsed specs (including
+    # promoted ones), so a fully-promoted prefix doesn't lose its title
+    # in scripts/spec-sections.json.
+    config = derive_section_titles(all_specs)
+
+    # Preserve titles from any existing sections.json — once the file
+    # has been bootstrapped from the original old-format SPECS.md, later
+    # re-runs (against the regenerated new-format SPECS.md) can't re-
+    # derive titles from headings the new format doesn't carry. Merge:
+    # existing non-empty titles win; new prefixes pick up empty defaults
+    # the user can fill in.
+    if SECTIONS_JSON.exists():
+        existing = json.loads(SECTIONS_JSON.read_text())
+        for key in ("sections", "subsections"):
+            for prefix, title in existing.get(key, {}).items():
+                if title and not config[key].get(prefix):
+                    config[key][prefix] = title
     SECTIONS_JSON.parent.mkdir(parents=True, exist_ok=True)
     SECTIONS_JSON.write_text(json.dumps(config, indent=2) + "\n")
     print(f"Wrote {SECTIONS_JSON.relative_to(REPO_ROOT)}")
