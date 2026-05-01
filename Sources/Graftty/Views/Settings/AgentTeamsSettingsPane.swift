@@ -23,9 +23,9 @@ struct AgentTeamsSettingsPane: View {
                 Section {
                     ChannelRoutingMatrixView(prefs: $teamEventRoutingPreferences)
                 } header: {
-                    Text("Automated event routing")
+                    Text("Team event routing")
                 } footer: {
-                    Text("Choose which agents receive each automated team event. \"Worktree agent\" means the agent in the worktree the event is about (e.g., the branch whose CI just failed); \"Other worktree agents\" means every other coworker in the same repo. Use the prompt below to define what each agent should do when it receives an event.")
+                    Text("Choose which agents receive each automated team event. Events flow into the team inbox and are delivered to agents through hook context. \"Worktree agent\" means the agent in the worktree the event is about; \"Other worktree agents\" means every other coworker in the same repo.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -38,9 +38,12 @@ struct AgentTeamsSettingsPane: View {
                 } header: {
                     Text("Session prompt")
                 } footer: {
-                    Text("Stencil template rendered once when each Codex or Claude session starts. Appended to the hook-provided team context, so it stays in the agent's context for the whole session. Useful for stable team-level coordination policy that doesn't depend on individual events.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Stencil template rendered once when each Codex or Claude session starts. Appended to the hook-provided team context, so it stays in the agent's context for the whole session. Useful for stable team-level coordination policy that doesn't depend on individual events.")
+                        Text("Changes apply when each agent session next starts. Live in-session refresh has been removed.")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -51,9 +54,12 @@ struct AgentTeamsSettingsPane: View {
                 } header: {
                     Text("Per-event prompt")
                 } footer: {
-                    Text("Stencil template rendered freshly for each automated event delivered to each agent. The rendered text is prepended to the event the agent receives. Useful for event-aware reactions — branch on agent.this_worktree to react differently when the event is about the agent's own worktree.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Stencil template rendered freshly for each automated event delivered to each agent. The rendered text is prepended to the event the agent receives. Useful for event-aware reactions — branch on agent.this_worktree to react differently when the event is about the agent's own worktree.")
+                        Text("Changes apply when each agent session next starts. Live in-session refresh has been removed.")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
