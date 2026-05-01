@@ -70,6 +70,56 @@ public final class TeamEventDispatcher {
         )
     }
 
+    // MARK: - Routable matrix events (TEAM-5.5, TEAM-5.6)
+
+    /// Fans a routable `ChannelServerMessage.event(...)` out to one inbox row
+    /// per recipient resolved by `TeamEventRouter`. No-ops for events outside
+    /// the matrix (`team_message`, `team_member_*`, etc.) and for subject
+    /// worktrees that aren't part of a team.
+    public func dispatchRoutableEvent(
+        _ event: ChannelServerMessage,
+        subjectWorktreePath: String,
+        repos: [RepoEntry]
+    ) throws {
+        guard case let .event(type, attrs, originalBody) = event else { return }
+        guard let routable = RoutableEvent(channelEventType: type, attrs: attrs) else { return }
+        guard let team = TeamLookup.team(for: subjectWorktreePath, in: repos) else { return }
+
+        let recipients = TeamEventRouter.recipients(
+            event: routable,
+            subjectWorktreePath: subjectWorktreePath,
+            repos: repos,
+            preferences: preferencesProvider()
+        )
+        guard !recipients.isEmpty else { return }
+
+        for recipientPath in recipients {
+            let body = renderBody(
+                type: type,
+                attrs: attrs,
+                originalBody: originalBody,
+                recipientWorktreePath: recipientPath,
+                subjectWorktreePath: subjectWorktreePath,
+                repos: repos
+            )
+            let recipientMember = team.members.first(where: { $0.worktreePath == recipientPath })
+            try inbox.appendMessage(
+                teamID: TeamLookup.id(of: team),
+                teamName: team.repoDisplayName,
+                repoPath: team.repoPath,
+                from: .system(repoPath: team.repoPath),
+                to: TeamInboxEndpoint(
+                    member: recipientMember?.name ?? "",
+                    worktree: recipientPath,
+                    runtime: nil
+                ),
+                priority: .normal,
+                kind: type,
+                body: body
+            )
+        }
+    }
+
     // MARK: - Body rendering
 
     /// Renders the user's `teamPrompt` template against the per-recipient
