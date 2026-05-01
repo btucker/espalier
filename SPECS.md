@@ -100,8 +100,6 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### STATE-1.x — State Definitions
 
-**STATE-1.1** Each worktree entry shall have one of three states: closed, running, or stale.
-
 **STATE-1.2** While a worktree entry is in the closed state, the sidebar shall display its type icon (house for the main checkout, branch for linked worktrees) in a dimmed foreground color.
 
 **STATE-1.3** While a worktree entry is in the running state, the sidebar shall display its type icon tinted green.
