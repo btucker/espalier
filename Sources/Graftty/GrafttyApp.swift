@@ -260,7 +260,8 @@ struct GrafttyApp: App {
                 prStatusStore: services.prStatusStore,
                 remoteBranchStore: services.remoteBranchStore,
                 worktreeMonitor: services.worktreeMonitor,
-                channelRouter: services.channelRouter
+                channelRouter: services.channelRouter,
+                teamEventDispatcher: services.teamEventDispatcher
             )
                 .environmentObject(webController)
                 .environmentObject(updaterController)
@@ -792,7 +793,7 @@ struct GrafttyApp: App {
         // isolation as the native sidebar's "+" button.
         let worktreeMonitor = services.worktreeMonitor
         let statsStore = services.statsStore
-        let channelRouterForWeb = services.channelRouter
+        let dispatcherForWeb = services.teamEventDispatcher
         webController.setWorktreeCreator { req in
             let result = await AddWorktreeFlow.add(
                 repoPath: req.repoPath,
@@ -802,16 +803,10 @@ struct GrafttyApp: App {
                 worktreeMonitor: worktreeMonitor,
                 statsStore: statsStore,
                 terminalManager: tm,
-                channelDispatch: EventBodyRenderer.dispatchClosure(
-                    repos: appStateBinding.wrappedValue.repos,
-                    inner: { path, msg in channelRouterForWeb.dispatch(worktreePath: path, message: msg) }
-                )
+                teamEventDispatcher: dispatcherForWeb
             )
             switch result {
             case .success(let outcome):
-                // TEAM-3.4: refresh instructions for all subscribers so
-                // they see the updated roster after the new member joined.
-                await channelRouterForWeb.broadcastInstructions()
                 return .success(WebServer.CreateWorktreeResponse(
                     sessionName: outcome.sessionName,
                     worktreePath: outcome.worktreePath
