@@ -26,11 +26,12 @@ struct WebServerWorktreeEndpointTests {
     }
 
     private static func startServer(
-        config: WebServer.Config
+        config: WebServer.Config,
+        isAllowed: @escaping @Sendable (String) async -> Bool = { _ in true }
     ) throws -> (server: WebServer, port: Int) {
         let server = WebServer(
             config: config,
-            auth: WebServer.AuthPolicy(isAllowed: { _ in true }),
+            auth: WebServer.AuthPolicy(isAllowed: isAllowed),
             bindAddresses: ["127.0.0.1"],
             tlsProvider: try makeTestTLSProvider()
         )
@@ -41,7 +42,10 @@ struct WebServerWorktreeEndpointTests {
         return (server, port)
     }
 
-    @Test func reposEndpointEncodesProviderOutput() async throws {
+    @Test("""
+    @spec WEB-7.1: When a client requests `GET /repos`, the application shall respond with a JSON array of the currently-tracked repositories (one entry per top-level `RepoEntry` in `AppState.repos`) with fields `path` (opaque absolute path round-tripped on `POST /worktrees`) and `displayName` (matching the native sidebar's top-level label). Access is gated by the same Tailscale-whois authorization (`WEB-2.1` / `WEB-2.2`).
+    """)
+    func reposEndpointEncodesProviderOutput() async throws {
         let (server, port) = try Self.startServer(config: Self.makeConfig(repos: [
             WebServer.RepoInfo(path: "/tmp/alpha", displayName: "alpha"),
             WebServer.RepoInfo(path: "/tmp/beta", displayName: "beta"),
@@ -58,6 +62,26 @@ struct WebServerWorktreeEndpointTests {
         #expect(decoded.count == 2)
         #expect(decoded[0].displayName == "alpha")
         #expect(decoded[1].path == "/tmp/beta")
+    }
+
+    @Test func deniedReposRequestReturns403WithoutCallingProvider() async throws {
+        let config = WebServer.Config(
+            port: 0,
+            zmxExecutable: URL(fileURLWithPath: "/dev/null"),
+            zmxDir: URL(fileURLWithPath: "/tmp"),
+            reposProvider: {
+                Issue.record("reposProvider should not run before auth succeeds")
+                return []
+            }
+        )
+        let (server, port) = try Self.startServer(config: config, isAllowed: { _ in false })
+        defer { server.stop() }
+
+        let (_, response) = try await trustAllSession().data(
+            from: URL(string: "https://localhost:\(port)/repos")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 403)
     }
 
     @Test func reposEndpointReturnsEmptyArrayWhenNoProvider() async throws {
