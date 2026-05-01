@@ -99,11 +99,6 @@ struct TeamTodo {
     func team_4_3() async throws { }
 
     @Test("""
-@spec TEAM-5.1: The application shall emit a `team_message` channel event when `graftty team msg` is invoked successfully. Routing: addressed to the recipient's worktree only. Attributes: `team` (repo display name), `from` (sender's member name). Body: the message text.
-""", .disabled("not yet implemented"))
-    func team_5_1() async throws { }
-
-    @Test("""
 @spec TEAM-5.2: The application shall emit a `team_member_joined` channel event when a worktree is added to a team (a new worktree appears in a team-enabled repo, or a single-worktree repo gains a second worktree). Routing: addressed to the team's lead's worktree only. Attributes: `team`, `member` (joiner's member name), `branch`, `worktree` (joiner's path).
 """, .disabled("not yet implemented"))
     func team_5_2() async throws { }

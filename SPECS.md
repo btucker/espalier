@@ -1286,7 +1286,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### TEAM-5.x — `team_*` Channel Events
 
-**TEAM-5.1** The application shall emit a `team_message` channel event when `graftty team msg` is invoked successfully. Routing: addressed to the recipient's worktree only. Attributes: `team` (repo display name), `from` (sender's member name). Body: the message text.
+**TEAM-5.1** When team_message is dispatched, the application shall append exactly one inbox row addressed to the named recipient.
 
 **TEAM-5.2** The application shall emit a `team_member_joined` channel event when a worktree is added to a team (a new worktree appears in a team-enabled repo, or a single-worktree repo gains a second worktree). Routing: addressed to the team's lead's worktree only. Attributes: `team`, `member` (joiner's member name), `branch`, `worktree` (joiner's path).
 

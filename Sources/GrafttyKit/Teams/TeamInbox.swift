@@ -144,6 +144,7 @@ public final class TeamInbox {
         from: TeamInboxEndpoint,
         to: TeamInboxEndpoint,
         priority: TeamInboxPriority,
+        kind: String = "team_message",
         body: String
     ) throws -> TeamInboxMessage {
         let message = TeamInboxMessage(
@@ -155,6 +156,7 @@ public final class TeamInbox {
             from: from,
             to: to,
             priority: priority,
+            kind: kind,
             body: body
         )
         try append(message, teamID: teamID)
