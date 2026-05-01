@@ -1340,6 +1340,10 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **TEAM-8.1** When the application starts, the application shall best-effort run `claude mcp remove graftty-channel`, ignoring non-zero exit and logging failure.
 
+**TEAM-8.2** When the application starts, the application shall delete `~/.claude/.mcp.json` if it exists and contains no MCP server entries other than `graftty-channel`.
+
+**TEAM-8.3** When the application starts, the application shall delete `~/.claude/plugins/graftty-channel` if present.
+
 ## EDITOR — Editor Integration
 
 ### EDITOR-1.x
