@@ -116,7 +116,7 @@ public struct TeamInboxWorktreeWatermark: Codable, Sendable, Equatable {
 }
 
 public final class TeamInbox {
-    private let rootDirectory: URL
+    public let rootDirectory: URL
     private let idGenerator: () -> String
     private let now: () -> Date
     private let encoder: JSONEncoder
@@ -312,7 +312,18 @@ public final class TeamInbox {
     }
 
     private func messagesURL(teamID: String) -> URL {
-        teamDirectory(teamID: teamID).appendingPathComponent("messages.jsonl")
+        Self.messagesURLFor(rootDirectory: rootDirectory, teamID: teamID)
+    }
+
+    /// Static helper used by `TeamInboxObserver` so the FSEvents tail
+    /// computes the same path as the writer without needing a live
+    /// `TeamInbox` instance reference. Mirrors the directory layout
+    /// `<rootDirectory>/<sanitized-teamID>/messages.jsonl` produced by
+    /// `appendMessage` / `messages(teamID:)`.
+    public static func messagesURLFor(rootDirectory: URL, teamID: String) -> URL {
+        rootDirectory
+            .appendingPathComponent(fileComponent(teamID), isDirectory: true)
+            .appendingPathComponent("messages.jsonl")
     }
 
     private func cursorURL(teamID: String, sessionID: String) -> URL {

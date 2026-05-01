@@ -1318,6 +1318,10 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **TEAM-6.2** Right-clicking any team-enabled worktree's row shall include a *Show Team Members…* context-menu item. Selecting it shall display a popover listing each team member by name, branch, and role (lead / coworker), populated from the same source as `graftty team list`.
 
+### TEAM-7.x
+
+**TEAM-7.4** When the messages.jsonl file appended-to is the team's inbox, the application shall emit the parsed message list to the registered observer callback within one second of the append, including when the file is created after the observer started watching.
+
 ## EDITOR — Editor Integration
 
 ### EDITOR-1.x
