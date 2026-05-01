@@ -1298,6 +1298,10 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **TEAM-5.6** When pr_state_changed has attrs.to == 'merged', the dispatcher shall use the prMerged matrix row.
 
+**TEAM-5.7** When a worktree joins a team-enabled repo, the dispatcher shall append one team_member_joined inbox row addressed to the lead.
+
+**TEAM-5.8** When a worktree is removed from a team-enabled repo (collapsing to one worktree), the dispatcher shall still append one team_member_left inbox row addressed to the lead.
+
 ### TEAM-6.x — Sidebar Visualization
 
 **TEAM-6.1** While `agentTeamsEnabled` is true and a `RepoEntry` has two or more worktrees, the sidebar shall render that repo with a small "team" icon (SF Symbol `person.2.fill`) adjacent to its disclosure header. No per-worktree accent stripe is applied; the header icon is sufficient to indicate team membership.

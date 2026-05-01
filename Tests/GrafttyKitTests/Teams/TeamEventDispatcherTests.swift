@@ -112,4 +112,53 @@ struct TeamEventDispatcherTests {
         #expect(messages.count == 1)
         #expect(messages.first?.to.worktree == "/repo")
     }
+
+    @Test("@spec TEAM-5.7: When a worktree joins a team-enabled repo, the dispatcher shall append one team_member_joined inbox row addressed to the lead.")
+    func memberJoinedAddressesLead() throws {
+        let root = try Self.temporaryDirectory()
+        let repo = TeamTestFixtures.makeRepo(path: "/repo", displayName: "repo", branches: ["main", "alice"])
+        let inbox = TeamInbox(rootDirectory: root)
+        let dispatcher = TeamEventDispatcher(
+            inbox: inbox,
+            preferencesProvider: { TeamEventRoutingPreferences() },
+            templateProvider: { "" }
+        )
+
+        try dispatcher.dispatchMemberJoined(
+            joinerWorktreePath: "/repo/.worktrees/alice",
+            repos: [repo]
+        )
+
+        let team = TeamLookup.team(for: "/repo", in: [repo])!
+        let messages = try inbox.messages(teamID: TeamLookup.id(of: team))
+        #expect(messages.count == 1)
+        #expect(messages.first?.to.worktree == "/repo")
+        #expect(messages.first?.kind == "team_member_joined")
+        #expect(messages.first?.from.member == "system")
+    }
+
+    @Test("@spec TEAM-5.8: When a worktree is removed from a team-enabled repo (collapsing to one worktree), the dispatcher shall still append one team_member_left inbox row addressed to the lead.")
+    func memberLeftAddressesLeadEvenWhenTeamShrinks() throws {
+        let root = try Self.temporaryDirectory()
+        let repo = TeamTestFixtures.makeRepo(path: "/repo", displayName: "repo", branches: ["main"])  // alice is gone
+        let inbox = TeamInbox(rootDirectory: root)
+        let dispatcher = TeamEventDispatcher(
+            inbox: inbox,
+            preferencesProvider: { TeamEventRoutingPreferences() },
+            templateProvider: { "" }
+        )
+
+        try dispatcher.dispatchMemberLeft(
+            leaverBranch: "alice",
+            leaverWorktreePath: "/repo/.worktrees/alice",
+            reason: .removed,
+            repos: [repo]
+        )
+
+        let teamID = TeamLookup.id(forRepoPath: "/repo")
+        let messages = try inbox.messages(teamID: teamID)
+        #expect(messages.count == 1)
+        #expect(messages.first?.to.worktree == "/repo")
+        #expect(messages.first?.kind == "team_member_left")
+    }
 }
