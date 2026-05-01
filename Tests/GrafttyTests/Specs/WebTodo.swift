@@ -24,11 +24,6 @@ struct WebTodo {
     func web_1_3() async throws { }
 
     @Test("""
-@spec WEB-1.4: The feature shall be off by default.
-""", .disabled("not yet implemented"))
-    func web_1_4() async throws { }
-
-    @Test("""
 @spec WEB-1.8: The diagnostic "Listening on …" row in the Settings pane shall bracket IPv6 hosts per RFC 3986 authority syntax (e.g., `[fd7a:115c::5]:8799`). Copyable URLs (Settings Base URL, sidebar "Copy web URL") no longer contain IP literals — they use the MagicDNS FQDN (WEB-8.1) — so this bracketing rule applies only to the diagnostic list. `WebURLComposer.authority(host:port:)` owns the bracket logic.
 """, .disabled("not yet implemented"))
     func web_1_8() async throws { }
