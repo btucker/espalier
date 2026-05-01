@@ -139,11 +139,6 @@ struct WebTodo {
     func web_8_1() async throws { }
 
     @Test("""
-@spec WEB-8.3: While the server is listening, the application shall re-fetch the cert every 24 hours. If the returned PEM bytes differ from the currently-serving material, the application shall construct a new `NIOSSLContext` and atomically swap the reference read by the per-channel `ChannelInitializer` via `WebTLSContextProvider.swap(_:)`. The application shall not close the listening socket and shall not disturb in-flight connections — existing WebSocket streams keep their prior context for their lifetime.
-""", .disabled("not yet implemented"))
-    func web_8_3() async throws { }
-
-    @Test("""
 @spec WEB-8.4: For `.magicDNSDisabled` and `.httpsCertsNotEnabled`, the Settings pane shall render a human-readable explanation plus a SwiftUI `Link` to the relevant Tailscale admin page (`https://login.tailscale.com/admin/dns`). For `.certFetchFailed`, it shall render the underlying message plus a note that Graftty retries automatically.
 """, .disabled("not yet implemented"))
     func web_8_4() async throws { }
