@@ -1,6 +1,6 @@
 import Foundation
 
-/// One of the four event types the channel routing matrix governs.
+/// One of the four event types the team-event routing matrix governs.
 /// Maps wire-format `ChannelServerMessage.event(...)` payloads to matrix rows.
 public enum RoutableEvent: Sendable, Equatable {
     case prStateChanged
@@ -13,15 +13,15 @@ public enum RoutableEvent: Sendable, Equatable {
     /// `pr_state_changed` with `attrs.to == "merged"` as the merged row.
     public init?(channelEventType type: String, attrs: [String: String]) {
         switch type {
-        case ChannelEventType.prStateChanged:
+        case TeamChannelEvents.WireType.prStateChanged:
             if attrs["to"] == "merged" {
                 self = .prMerged
             } else {
                 self = .prStateChanged
             }
-        case ChannelEventType.ciConclusionChanged:
+        case TeamChannelEvents.WireType.ciConclusionChanged:
             self = .ciConclusionChanged
-        case ChannelEventType.mergeStateChanged:
+        case TeamChannelEvents.WireType.mergeStateChanged:
             self = .mergabilityChanged
         default:
             return nil
@@ -38,17 +38,17 @@ public enum RoutableEvent: Sendable, Equatable {
         }
     }
 
-    /// The wire-format `ChannelEventType` string for this routable event.
-    /// `prStateChanged` and `prMerged` collapse to the same wire type
+    /// The wire-format `TeamChannelEvents.WireType` string for this routable
+    /// event. `prStateChanged` and `prMerged` collapse to the same wire type
     /// (`pr_state_changed`); the matrix distinguishes them via `attrs.to`.
     public var wireType: String {
         switch self {
         case .prStateChanged, .prMerged:
-            return ChannelEventType.prStateChanged
+            return TeamChannelEvents.WireType.prStateChanged
         case .ciConclusionChanged:
-            return ChannelEventType.ciConclusionChanged
+            return TeamChannelEvents.WireType.ciConclusionChanged
         case .mergabilityChanged:
-            return ChannelEventType.mergeStateChanged
+            return TeamChannelEvents.WireType.mergeStateChanged
         }
     }
 

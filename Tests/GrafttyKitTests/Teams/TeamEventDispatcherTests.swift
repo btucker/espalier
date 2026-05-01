@@ -58,7 +58,7 @@ struct TeamEventDispatcherTests {
         )
 
         let event = ChannelServerMessage.event(
-            type: ChannelEventType.prStateChanged,
+            type: TeamChannelEvents.WireType.prStateChanged,
             attrs: ["worktree": "/repo/.worktrees/alice", "to": "open", "from": "draft", "pr_number": "42", "pr_url": "https://x", "provider": "github", "repo": "x/y"],
             body: "PR #42 state changed: draft → open"
         )
@@ -96,7 +96,7 @@ struct TeamEventDispatcherTests {
         )
 
         let event = ChannelServerMessage.event(
-            type: ChannelEventType.prStateChanged,
+            type: TeamChannelEvents.WireType.prStateChanged,
             attrs: ["worktree": "/repo", "to": "open", "from": "draft", "pr_number": "42", "pr_url": "https://x", "provider": "github", "repo": "x/y"],
             body: "PR #42"
         )
@@ -126,7 +126,7 @@ struct TeamEventDispatcherTests {
         )
 
         let event = ChannelServerMessage.event(
-            type: ChannelEventType.prStateChanged,
+            type: TeamChannelEvents.WireType.prStateChanged,
             attrs: ["worktree": "/repo/.worktrees/alice", "to": "merged", "from": "open", "pr_number": "42", "pr_url": "https://x", "provider": "github", "repo": "x/y"],
             body: "PR #42 state changed: open → merged"
         )
