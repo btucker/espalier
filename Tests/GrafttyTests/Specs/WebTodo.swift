@@ -109,16 +109,6 @@ struct WebTodo {
     func web_4_3() async throws { }
 
     @Test("""
-@spec WEB-4.4: For each incoming WebSocket, the application shall spawn one child `zmx attach <session>` whose PTY it owns (per §13 naming and ZMX_DIR rules from Phase 1).
-""", .disabled("not yet implemented"))
-    func web_4_4() async throws { }
-
-    @Test("""
-@spec WEB-4.5: When a WebSocket closes, the application shall send SIGTERM to the associated `zmx attach` child, leaving the zmx daemon alive.
-""", .disabled("not yet implemented"))
-    func web_4_5() async throws { }
-
-    @Test("""
 @spec WEB-4.6: When the application forks a `zmx attach` child for a web WebSocket, the child shall close every inherited file descriptor above 2 before `execve`. Rationale: without this, parent-opened sockets (notably the `WebServer` listen socket) without `FD_CLOEXEC` leak into the zmx child and survive the parent. After Graftty quits, the listen port stays bound to an orphan zmx process and the next Graftty launch cannot rebind.
 """, .disabled("not yet implemented"))
     func web_4_6() async throws { }
