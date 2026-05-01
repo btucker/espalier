@@ -70,6 +70,8 @@ final class AppServices {
     let statsStore: WorktreeStatsStore
     let remoteBranchStore: RemoteBranchStore
     let prStatusStore: PRStatusStore
+    let teamInbox: TeamInbox
+    let teamEventDispatcher: TeamEventDispatcher
     var worktreeMonitorBridge: WorktreeMonitorBridge?
     /// Provides the current AppState for the team PR-merged dispatch hook.
     /// Set in GrafttyApp.startup() once @State is accessible (TEAM-5.4).
@@ -101,7 +103,6 @@ final class AppServices {
         let observer = ChannelSettingsObserver(
             router: router,
             onEnable: {
-                GrafttyApp.installAgentHookAssets()
                 Task { await GrafttyApp.installChannelMCPServer() }
             }
         )
@@ -116,48 +117,48 @@ final class AppServices {
         self.remoteBranchStore = remoteBranchStore
         self.prStatusStore = PRStatusStore(remoteBranchStore: remoteBranchStore)
 
-        // Route PRStatusStore transitions into ChannelRouter. Captured weakly
-        // so AppServices can own both without a retain cycle.
-        //
+        // Phase 2 of channels-to-inbox: PR/CI/membership events flow
+        // through `TeamEventDispatcher` which writes to a per-team
+        // `TeamInbox` directory rather than into the live channel
+        // socket. Lift the inbox up here so the request handler
+        // (`teamInboxRequestHandler()`) and dispatcher share one disk
+        // root rather than each constructing its own.
+        let teamInbox = TeamInbox(
+            rootDirectory: AppState.defaultDirectory
+                .appendingPathComponent("team-inbox", isDirectory: true)
+        )
+        self.teamInbox = teamInbox
+        self.teamEventDispatcher = TeamEventDispatcher(
+            inbox: teamInbox,
+            preferencesProvider: {
+                let raw = UserDefaults.standard.string(forKey: SettingsKeys.channelRoutingPreferences) ?? ""
+                return TeamEventRoutingPreferences(rawValue: raw) ?? TeamEventRoutingPreferences()
+            },
+            templateProvider: {
+                UserDefaults.standard.string(forKey: SettingsKeys.teamPrompt) ?? ""
+            }
+        )
+
+        // Route PRStatusStore transitions through the inbox dispatcher.
         // `appStateProvider` is set later in startup() once @State is live;
         // before that point the guard below is a no-op.
-        self.prStatusStore.onTransition = { [weak router, weak self] subjectWorktreePath, message in
-            guard let router, let self else { return }
+        self.prStatusStore.onTransition = { [weak self] routable, subjectWorktreePath, attrs in
+            guard let self else { return }
             guard UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) else { return }
-            guard case let .event(eventType, attrs, _) = message else {
-                // Non-event messages (shouldn't happen for PRStatusStore transitions, but defensive).
-                router.dispatch(worktreePath: subjectWorktreePath, message: message)
-                return
-            }
-
-            guard let routableEvent = RoutableEvent(channelEventType: eventType, attrs: attrs) else {
-                // Non-routable channel events still get dispatched to the originating worktree.
-                router.dispatch(worktreePath: subjectWorktreePath, message: message)
-                return
-            }
-
-            let prefsRaw = UserDefaults.standard.string(forKey: SettingsKeys.channelRoutingPreferences) ?? ""
-            let prefs = ChannelRoutingPreferences(rawValue: prefsRaw) ?? ChannelRoutingPreferences()
-
             let appState = self.appStateProvider?() ?? AppState()
-            let recipients = ChannelEventRouter.recipients(
-                event: routableEvent,
-                subjectWorktreePath: subjectWorktreePath,
-                repos: appState.repos,
-                preferences: prefs
+            let event = ChannelServerMessage.event(
+                type: routable.wireType,
+                attrs: attrs,
+                body: routable.defaultBody(attrs: attrs)
             )
-
-            let template = UserDefaults.standard.string(forKey: SettingsKeys.teamPrompt) ?? ""
-
-            for recipient in recipients {
-                let renderedMessage = EventBodyRenderer.body(
-                    for: message,
-                    recipientWorktreePath: recipient,
+            do {
+                try self.teamEventDispatcher.dispatchRoutableEvent(
+                    event,
                     subjectWorktreePath: subjectWorktreePath,
-                    repos: appState.repos,
-                    templateString: template
+                    repos: appState.repos
                 )
-                router.dispatch(worktreePath: recipient, message: renderedMessage)
+            } catch {
+                NSLog("[Graftty] dispatchRoutableEvent failed: %@", String(describing: error))
             }
         }
     }
@@ -387,6 +388,10 @@ struct GrafttyApp: App {
         let zmxLauncher = ZmxLauncher(executable: zmxBinary, zmxDir: zmxDir)
         terminalManager.zmxLauncher = zmxLauncher
 
+        // Wrappers always go on PATH; the Agent Teams toggle is read inside
+        // the wrapper at request time.
+        Self.installAgentHookAssets()
+
         if !zmxLauncher.isAvailable {
             DispatchQueue.main.async {
                 ZmxFallbackBanner.presentIfNeeded()
@@ -591,18 +596,7 @@ struct GrafttyApp: App {
             NSLog("[Graftty] SocketServer.start() failed: %@", String(describing: error))
         }
 
-        // Claude Code Channels — only active when agent teams are enabled.
-        // On enable, register the graftty-channel user-scope MCP server via
-        // `claude mcp` (idempotent) and start the router so new Claude sessions
-        // launched by the user with
-        // `--dangerously-load-development-channels server:graftty-channel`
-        // connect successfully. The user is responsible for the launch
-        // flag — Graftty no longer auto-injects it, since the injection
-        // only covered sessions started from `defaultCommand`. MCP
-        // registration is fire-and-forget: it does subprocess I/O and the
-        // router does not depend on it completing before start().
         if UserDefaults.standard.bool(forKey: SettingsKeys.agentTeamsEnabled) {
-            Self.installAgentHookAssets()
             Task { await Self.installChannelMCPServer() }
             do {
                 try services.channelRouter.start()
@@ -633,10 +627,18 @@ struct GrafttyApp: App {
             }
         }
         let router = services.channelRouter
+        let teamInbox = services.teamInbox
+        let teamEventDispatcher = services.teamEventDispatcher
         services.socketServer.onRequest = { message in
             MainActor.assumeIsolated {
-                Self.handlePaneRequest(message, appState: binding, terminalManager: tm,
-                                       channelRouter: router)
+                Self.handlePaneRequest(
+                    message,
+                    appState: binding,
+                    terminalManager: tm,
+                    channelRouter: router,
+                    teamInbox: teamInbox,
+                    teamEventDispatcher: teamEventDispatcher
+                )
             }
         }
 
@@ -1321,7 +1323,9 @@ struct GrafttyApp: App {
         _ message: NotificationMessage,
         appState: Binding<AppState>,
         terminalManager: TerminalManager,
-        channelRouter: ChannelRouter
+        channelRouter: ChannelRouter,
+        teamInbox: TeamInbox,
+        teamEventDispatcher: TeamEventDispatcher
     ) -> ResponseMessage? {
         switch message {
         case .listPanes(let path):
@@ -1339,7 +1343,9 @@ struct GrafttyApp: App {
                 text: text,
                 priority: .normal,
                 appState: appState,
-                channelRouter: channelRouter
+                channelRouter: channelRouter,
+                teamInbox: teamInbox,
+                teamEventDispatcher: teamEventDispatcher
             )
         case .teamSend(let callerPath, let recipient, let text, let priority):
             return handleTeamSend(
@@ -1348,7 +1354,9 @@ struct GrafttyApp: App {
                 text: text,
                 priority: priority,
                 appState: appState,
-                channelRouter: channelRouter
+                channelRouter: channelRouter,
+                teamInbox: teamInbox,
+                teamEventDispatcher: teamEventDispatcher
             )
         case .teamBroadcast(let callerPath, let text, let priority):
             return handleTeamBroadcast(
@@ -1356,7 +1364,9 @@ struct GrafttyApp: App {
                 text: text,
                 priority: priority,
                 appState: appState,
-                channelRouter: channelRouter
+                channelRouter: channelRouter,
+                teamInbox: teamInbox,
+                teamEventDispatcher: teamEventDispatcher
             )
         case .teamHook(let callerPath, let runtime, let event, let sessionID):
             return handleTeamHook(
@@ -1364,7 +1374,8 @@ struct GrafttyApp: App {
                 runtime: runtime,
                 event: event,
                 sessionID: sessionID,
-                appState: appState
+                appState: appState,
+                teamInbox: teamInbox
             )
         case .teamInbox(let callerPath, let worktree, let repo, let member, let unread, let all):
             return handleTeamInbox(
@@ -1374,21 +1385,24 @@ struct GrafttyApp: App {
                 member: member,
                 unread: unread,
                 all: all,
-                appState: appState
+                appState: appState,
+                teamInbox: teamInbox
             )
         case .teamMembers(let callerPath, let worktree, let repo):
             return handleTeamMembers(
                 callerPath: callerPath,
                 worktree: worktree,
                 repo: repo,
-                appState: appState
+                appState: appState,
+                teamInbox: teamInbox
             )
         case .teamList(let callerPath):
             return handleTeamMembers(
                 callerPath: callerPath,
                 worktree: nil,
                 repo: nil,
-                appState: appState
+                appState: appState,
+                teamInbox: teamInbox
             )
         case .notify, .clear:
             // Fire-and-forget cases — no response. `onMessage` already handled them.
@@ -1403,10 +1417,12 @@ struct GrafttyApp: App {
         text: String,
         priority: TeamInboxPriority,
         appState: Binding<AppState>,
-        channelRouter: ChannelRouter
+        channelRouter: ChannelRouter,
+        teamInbox: TeamInbox,
+        teamEventDispatcher: TeamEventDispatcher
     ) -> ResponseMessage {
         do {
-            let handler = teamInboxRequestHandler()
+            let handler = teamInboxRequestHandler(inbox: teamInbox)
             let delivery = try handler.send(
                 callerWorktree: callerPath,
                 recipient: recipient,
@@ -1430,10 +1446,12 @@ struct GrafttyApp: App {
         text: String,
         priority: TeamInboxPriority,
         appState: Binding<AppState>,
-        channelRouter: ChannelRouter
+        channelRouter: ChannelRouter,
+        teamInbox: TeamInbox,
+        teamEventDispatcher: TeamEventDispatcher
     ) -> ResponseMessage {
         do {
-            let handler = teamInboxRequestHandler()
+            let handler = teamInboxRequestHandler(inbox: teamInbox)
             let deliveries = try handler.broadcast(
                 callerWorktree: callerPath,
                 text: text,
@@ -1458,10 +1476,11 @@ struct GrafttyApp: App {
         runtime: TeamHookRuntime,
         event: TeamHookEvent,
         sessionID: String?,
-        appState: Binding<AppState>
+        appState: Binding<AppState>,
+        teamInbox: TeamInbox
     ) -> ResponseMessage {
         do {
-            let output = try teamInboxRequestHandler().hook(
+            let output = try teamInboxRequestHandler(inbox: teamInbox).hook(
                 callerWorktree: callerPath,
                 runtime: runtime,
                 event: event,
@@ -1543,10 +1562,11 @@ struct GrafttyApp: App {
         member: String?,
         unread: Bool,
         all: Bool,
-        appState: Binding<AppState>
+        appState: Binding<AppState>,
+        teamInbox: TeamInbox
     ) -> ResponseMessage {
         do {
-            let messages = try teamInboxRequestHandler().diagnosticMessages(
+            let messages = try teamInboxRequestHandler(inbox: teamInbox).diagnosticMessages(
                 callerWorktree: callerPath,
                 worktree: worktree,
                 repo: repo,
@@ -1569,10 +1589,11 @@ struct GrafttyApp: App {
         callerPath: String?,
         worktree: String?,
         repo: String?,
-        appState: Binding<AppState>
+        appState: Binding<AppState>,
+        teamInbox: TeamInbox
     ) -> ResponseMessage {
         do {
-            let result = try teamInboxRequestHandler().members(
+            let result = try teamInboxRequestHandler(inbox: teamInbox).members(
                 callerWorktree: callerPath,
                 worktree: worktree,
                 repo: repo,
@@ -1610,12 +1631,21 @@ struct GrafttyApp: App {
         )
     }
 
-    private static func teamInboxRequestHandler() -> TeamInboxRequestHandler {
+    private static func teamInboxRequestHandler(
+        inbox: TeamInbox
+    ) -> TeamInboxRequestHandler {
         TeamInboxRequestHandler(
-            inbox: TeamInbox(
-                rootDirectory: AppState.defaultDirectory
-                    .appendingPathComponent("team-inbox", isDirectory: true)
-            )
+            inbox: inbox,
+            sessionPromptRenderer: renderTeamSessionPrompt(team:viewer:)
+        )
+    }
+
+    private static func renderTeamSessionPrompt(team: TeamView, viewer: TeamMember) -> String? {
+        let template = UserDefaults.standard.string(forKey: SettingsKeys.teamSessionPrompt) ?? ""
+        return EventBodyRenderer.renderSessionPrompt(
+            template: template,
+            branch: viewer.branch,
+            lead: viewer.role == .lead
         )
     }
 
@@ -2339,15 +2369,10 @@ struct GrafttyApp: App {
         }
     }
 
-    /// Register the graftty-channel user-scope MCP server via `claude mcp`,
-    /// and remove any leftover config from prior versions (the plugin-
-    /// wrapper directory and the abandoned `~/.claude/.mcp.json`). Logs on
-    /// failure; never throws.
-    ///
-    /// Static so that both `startup()` and `ChannelSettingsObserver`'s
-    /// `onEnable` closure can call it without needing a live `GrafttyApp`
-    /// struct instance (the struct is a SwiftUI App value type; capturing
-    /// `self` across scenes is awkward).
+    /// Registers the graftty-channel user-scope MCP server via `claude mcp`
+    /// and removes leftover config from prior versions (the plugin-wrapper
+    /// directory and the abandoned `~/.claude/.mcp.json`). Logs on failure;
+    /// never throws.
     @MainActor
     static func installChannelMCPServer() async {
         // Absolute path to the CLI binary. When Graftty is bundled, the CLI

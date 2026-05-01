@@ -37,4 +37,38 @@ public enum RoutableEvent: Sendable, Equatable {
         case .mergabilityChanged:    return prefs.mergabilityChanged
         }
     }
+
+    /// The wire-format `ChannelEventType` string for this routable event.
+    /// `prStateChanged` and `prMerged` collapse to the same wire type
+    /// (`pr_state_changed`); the matrix distinguishes them via `attrs.to`.
+    public var wireType: String {
+        switch self {
+        case .prStateChanged, .prMerged:
+            return ChannelEventType.prStateChanged
+        case .ciConclusionChanged:
+            return ChannelEventType.ciConclusionChanged
+        case .mergabilityChanged:
+            return ChannelEventType.mergeStateChanged
+        }
+    }
+
+    /// Default English body text the legacy channel path produced, given
+    /// the same `attrs` map. Kept here so `PRStatusStore` callers don't
+    /// duplicate the format strings — the dispatcher is the only consumer
+    /// today, but a future producer that wants to fire a synthetic
+    /// transition (e.g. a unit test or a "dry-run" CLI) gets the same
+    /// wording for free.
+    public func defaultBody(attrs: [String: String]) -> String {
+        let prNum = attrs["pr_number"] ?? "?"
+        let from = attrs["from"] ?? "?"
+        let to = attrs["to"] ?? "?"
+        switch self {
+        case .prStateChanged, .prMerged:
+            return "PR #\(prNum) state changed: \(from) → \(to)"
+        case .ciConclusionChanged:
+            return "CI on PR #\(prNum): \(from) → \(to)"
+        case .mergabilityChanged:
+            return "PR #\(prNum) mergability: \(from) → \(to)"
+        }
+    }
 }
