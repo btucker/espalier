@@ -48,6 +48,10 @@ public final class TeamInboxObserver: @unchecked Sendable {
     /// observer's private dispatch queue (not main). The first
     /// invocation delivers the current on-disk state (which may be
     /// empty if the file does not yet exist).
+    ///
+    /// Calling `start` twice without an intervening `cancel()` is a
+    /// programmer error — the second call is a no-op (returns a
+    /// no-op `Cancellable`).
     public func start(_ callback: @escaping ([TeamInboxMessage]) -> Void) -> Cancellable {
         queue.async { [weak self] in
             guard let self else { return }
@@ -59,6 +63,11 @@ public final class TeamInboxObserver: @unchecked Sendable {
     }
 
     private func attach(callback: @escaping ([TeamInboxMessage]) -> Void) {
+        // Idempotent guard: if a previous `start` is still active, leave
+        // its sources in place rather than orphaning their file
+        // descriptors.
+        guard dirSource == nil else { return }
+
         let messagesURL = TeamInbox.messagesURLFor(
             rootDirectory: inbox.rootDirectory,
             teamID: teamID
@@ -163,5 +172,13 @@ public final class TeamInboxObserver: @unchecked Sendable {
             self.dirSource = nil
             self.dirFD = -1
         }
+    }
+
+    deinit {
+        // Tear down synchronously: by deinit, no Cancellable is alive to
+        // call cancel(), but the dispatch sources still hold the fds.
+        // Cancel inline (no `queue.async`) since `self` is going away.
+        fileSource?.cancel()
+        dirSource?.cancel()
     }
 }
