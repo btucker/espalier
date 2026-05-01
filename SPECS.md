@@ -1320,6 +1320,10 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### TEAM-7.x
 
+**TEAM-7.1** When the user invokes the *Window → Team Activity Log* command, the application shall open the Team Activity Log window for the focused worktree's team — and shall disable the command when the focused selection has no team (single-worktree repo, no selection, or `agentTeamsEnabled` off).
+
+**TEAM-7.2** Right-clicking a team-enabled worktree row in the sidebar shall include a *Show Team Activity…* item that opens the activity-log window for that team. The routing key derives from the same `(teamID, teamName)` pair the Window menu command uses, so both entry points target the same per-team `WindowGroup` instance.
+
 **TEAM-7.3** While the Team Activity Log window is open for a team, the application shall display every `TeamInboxMessage` for that team in chronological order, refreshing live as new rows land in the inbox.
 
 **TEAM-7.4** When the messages.jsonl file appended-to is the team's inbox, the application shall emit the parsed message list to the registered observer callback within one second of the append, including when the file is created after the observer started watching.

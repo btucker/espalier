@@ -334,6 +334,16 @@ struct GrafttyApp: App {
                 bridgedButton("Close Pane", action: .closeSurface) { handleClosePane() }
             }
 
+            // TEAM-7.1: *Window → Team Activity Log* opens the activity
+            // window for the focused worktree's team. Disabled when the
+            // current selection has no team (single-worktree repo or
+            // teams disabled). The button is hosted inside a tiny View
+            // wrapper so it can read the `\.openWindow` environment
+            // value, which is unavailable directly inside `.commands`.
+            CommandGroup(after: .windowList) {
+                TeamActivityLogMenuButton(appState: $appState)
+            }
+
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {
                     updaterController.checkForUpdatesWithUI()
@@ -372,6 +382,32 @@ struct GrafttyApp: App {
                     .tabItem { Label("Web Access", systemImage: "network") }
                 AgentTeamsSettingsPane()
                     .tabItem { Label("Agent Teams", systemImage: "person.2.fill") }
+            }
+        }
+
+        // TEAM-7.1: Team Activity Log window. Opened via the *Window*
+        // menu command (TEAM-7.1) and the sidebar's worktree-row
+        // context menu (TEAM-7.2). The window's `for:` value is a
+        // `TeamActivityLogWindowID` (Hashable+Codable) so SwiftUI can
+        // route `openWindow(id:value:)` invocations and so each team
+        // gets its own window instance keyed by team ID.
+        WindowGroup(
+            "Team Activity Log",
+            id: TeamActivityLogWindowID.windowGroupID,
+            for: TeamActivityLogWindowID.self
+        ) { $boundID in
+            if let boundID {
+                TeamActivityLogWindow(
+                    rootDirectory: AppState.defaultDirectory
+                        .appendingPathComponent("team-inbox", isDirectory: true),
+                    teamID: boundID.teamID,
+                    teamName: boundID.teamName
+                )
+            } else {
+                Text("No team selected.")
+                    .foregroundStyle(.secondary)
+                    .padding()
+                    .frame(minWidth: 480, minHeight: 360)
             }
         }
     }
