@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import GrafttyKit
+import GrafttyProtocol
 
 @Suite("WebServer — auth gate", .serialized)
 struct WebServerAuthTests {
@@ -28,6 +29,76 @@ struct WebServerAuthTests {
         let (_, response) = try await trustAllSession().data(from: URL(string: "https://localhost:\(port)/")!)
         let http = response as! HTTPURLResponse
         #expect(http.statusCode == 403)
+    }
+
+    @Test func deniedSessionsRequestReturns403WithoutCallingProvider() async throws {
+        let probe = SessionsProviderProbe()
+        let server = WebServer(
+            config: WebServer.Config(
+                port: 0,
+                zmxExecutable: URL(fileURLWithPath: "/dev/null"),
+                zmxDir: URL(fileURLWithPath: "/tmp"),
+                sessionsProvider: { await probe.sessions() }
+            ),
+            auth: WebServer.AuthPolicy(isAllowed: { _ in false }),
+            bindAddresses: ["127.0.0.1"],
+            tlsProvider: try makeTestTLSProvider()
+        )
+        try server.start()
+        defer { server.stop() }
+        guard case let .listening(_, port) = server.status else {
+            Issue.record("server not listening"); return
+        }
+        let (_, response) = try await trustAllSession().data(
+            from: URL(string: "https://localhost:\(port)/sessions")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 403)
+        #expect(await probe.callCount == 0)
+    }
+
+    @Test("""
+    @spec WEB-5.4: When a client requests `GET /sessions`, the application shall respond with a JSON array of the currently-running sessions, one entry per live pane across all running worktrees, with fields `name` (the zmx session name derived per `ZMX-2.1`), `worktreePath`, `repoDisplayName`, and `worktreeDisplayName`. The bundled client's root page (`/`) shall fetch this endpoint and render a clickable picker grouped by `repoDisplayName`, so a user who visits the server's root URL without a session query gets a functional entry point rather than a bare "no session" placeholder. Access to `/sessions` shall be gated by the same Tailscale-whois authorization as every other path (`WEB-2.1` / `WEB-2.2`).
+    """)
+    func sessionsEndpointReturnsJSONFromProvider() async throws {
+        let expected = [
+            SessionInfo(
+                name: "graftty-alpha",
+                worktreePath: "/repos/alpha",
+                repoDisplayName: "alpha",
+                worktreeDisplayName: "main"
+            ),
+            SessionInfo(
+                name: "graftty-beta",
+                worktreePath: "/repos/beta/.worktrees/feature",
+                repoDisplayName: "beta",
+                worktreeDisplayName: "feature"
+            ),
+        ]
+        let server = WebServer(
+            config: WebServer.Config(
+                port: 0,
+                zmxExecutable: URL(fileURLWithPath: "/dev/null"),
+                zmxDir: URL(fileURLWithPath: "/tmp"),
+                sessionsProvider: { expected }
+            ),
+            auth: WebServer.AuthPolicy(isAllowed: { _ in true }),
+            bindAddresses: ["127.0.0.1"],
+            tlsProvider: try makeTestTLSProvider()
+        )
+        try server.start()
+        defer { server.stop() }
+        guard case let .listening(_, port) = server.status else {
+            Issue.record("server not listening"); return
+        }
+        let (data, response) = try await trustAllSession().data(
+            from: URL(string: "https://localhost:\(port)/sessions")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 200)
+        #expect(http.value(forHTTPHeaderField: "Content-Type") == "application/json; charset=utf-8")
+        let decoded = try JSONDecoder().decode([SessionInfo].self, from: data)
+        #expect(decoded == expected)
     }
 
     @Test("""
@@ -193,5 +264,16 @@ struct WebServerAuthTests {
             from: URL(string: "https://localhost:\(port)/")!
         )
         #expect((r2 as! HTTPURLResponse).statusCode == 200)
+    }
+}
+
+private actor SessionsProviderProbe {
+    private var calls = 0
+
+    var callCount: Int { calls }
+
+    func sessions() -> [SessionInfo] {
+        calls += 1
+        return []
     }
 }
