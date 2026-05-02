@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Foundation
+import UIKit
 
 /// Process-local cache of resolved Ghostty configs keyed by baseURL.
 /// Fetched once per host per app launch — navigating pane→pane on the
