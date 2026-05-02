@@ -77,7 +77,9 @@ struct WorktreeMonitorBridgeTests {
         try await waitUntil(timeout: 2.0) {
             prStore.infos["/repo/wt"]?.number == 42
         }
-        #expect(await fetcher.invocations >= 2)
+        try await waitUntil(timeout: 2.0) {
+            await fetcher.invocations >= 3
+        }
         #expect(!prStore.absent.contains("/repo/wt"))
         #expect(stateBox.state.selectedWorktreePath == nil)
     }
@@ -115,8 +117,10 @@ private actor SequencedPRFetcher: PRFetcher {
 
     func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
         invocations += 1
-        if results.isEmpty { return nil }
-        return results.removeFirst()
+        if results.count > 1 {
+            return results.removeFirst()
+        }
+        return results.first ?? nil
     }
 }
 
