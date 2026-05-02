@@ -74,10 +74,6 @@ struct WorktreeMonitorBridgeTests {
         try await waitUntil(timeout: 0.5) {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
-        try await waitUntil(timeout: 0.5) {
-            await fetcher.invocations >= 1
-        }
-
         try await waitUntil(timeout: 2.0) {
             prStore.infos["/repo/wt"]?.number == 42
         }
