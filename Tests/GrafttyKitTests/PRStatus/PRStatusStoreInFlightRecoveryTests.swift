@@ -87,6 +87,52 @@ struct PRStatusStoreInFlightRecoveryTests {
 
         hang.continuation.finish()
     }
+
+    @MainActor
+    @Test func refreshRequestedDuringInFlightRunsAfterCurrentFetchCompletes() async throws {
+        let firstRelease = AsyncStream<Void>.makeStream()
+        let firstIterator = Box(firstRelease.stream.makeAsyncIterator())
+        let freshPR = PRInfo(
+            number: 42,
+            title: "hello",
+            url: URL(string: "https://github.com/foo/bar/pull/42")!,
+            state: .open,
+            checks: .none,
+            fetchedAt: Date()
+        )
+        let fetcher = FirstNilThenFreshFetcher(
+            firstIterator: firstIterator,
+            fresh: freshPR
+        )
+        let origin = HostingOrigin(
+            provider: .github, host: "github.com", owner: "foo", repo: "bar"
+        )
+        let store = PRStatusStore(
+            executor: FakeCLIExecutor(),
+            fetcherFor: { _ in fetcher },
+            detectHost: { _ in origin }
+        )
+
+        store.refresh(worktreePath: "/wt", repoPath: "/repo", branch: "feat")
+        for _ in 0..<100 {
+            if await fetcher.invocations == 1 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await fetcher.invocations == 1)
+
+        store.refresh(worktreePath: "/wt", repoPath: "/repo", branch: "feat")
+        firstRelease.continuation.yield(())
+        firstRelease.continuation.finish()
+
+        for _ in 0..<100 {
+            if store.infos["/wt"] == freshPR { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(await fetcher.invocations >= 2)
+        #expect(store.infos["/wt"] == freshPR)
+        #expect(!store.absent.contains("/wt"))
+    }
 }
 
 /// Test double: first invocation suspends on a never-signaled stream;
@@ -112,6 +158,26 @@ private actor HangingFetcher: PRFetcher {
         if n == 1 {
             _ = await hangIterator.value.next()
             // Unreachable in the hung scenario; kept for type-correctness.
+            return nil
+        }
+        return fresh
+    }
+}
+
+private actor FirstNilThenFreshFetcher: PRFetcher {
+    private let firstIterator: Box<AsyncStream<Void>.Iterator>
+    private let fresh: PRInfo
+    private(set) var invocations = 0
+
+    init(firstIterator: Box<AsyncStream<Void>.Iterator>, fresh: PRInfo) {
+        self.firstIterator = firstIterator
+        self.fresh = fresh
+    }
+
+    func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
+        invocations += 1
+        if invocations == 1 {
+            _ = await firstIterator.value.next()
             return nil
         }
         return fresh

@@ -55,7 +55,9 @@ struct WebServerIntegrationTests {
         }
 
         let url = URL(string: "wss://localhost:\(port)/ws?session=\(sessionName)")!
-        let wsTask = trustAllSession().webSocketTask(with: url)
+        let wsSession = trustAllSession()
+        defer { wsSession.invalidateAndCancel() }
+        let wsTask = wsSession.webSocketTask(with: url)
         wsTask.resume()
         let text = try await Self.readUntil(task: wsTask, marker: "repo/.worktrees/feature", deadline: 3.0)
         wsTask.cancel(with: .goingAway, reason: nil)
@@ -105,6 +107,7 @@ struct WebServerIntegrationTests {
 
         // First attach — creates the daemon session.
         let wsSession = trustAllSession()
+        defer { wsSession.invalidateAndCancel() }
         let first = wsSession.webSocketTask(with: url)
         first.resume()
         try await first.send(.string(#"{"type":"resize","cols":80,"rows":24}"#))
@@ -199,7 +202,9 @@ struct WebServerIntegrationTests {
 
         let sessionName = "graftty-it\(UUID().uuidString.prefix(6).lowercased())"
         let url = URL(string: "wss://localhost:\(port)/ws?session=\(sessionName)")!
-        let wsTask = trustAllSession().webSocketTask(with: url)
+        let wsSession = trustAllSession()
+        defer { wsSession.invalidateAndCancel() }
+        let wsTask = wsSession.webSocketTask(with: url)
         wsTask.resume()
 
         try await wsTask.send(.string(#"{"type":"resize","cols":80,"rows":24}"#))

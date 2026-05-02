@@ -106,8 +106,6 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### STATE-1.x — State Definitions
 
-**STATE-1.1** Each worktree entry shall have one of three states: closed, running, or stale.
-
 **STATE-1.2** While a worktree entry is in the closed state, the sidebar shall display its type icon (house for the main checkout, branch for linked worktrees) in a dimmed foreground color.
 
 **STATE-1.3** While a worktree entry is in the running state, the sidebar shall display its type icon tinted green.
@@ -407,8 +405,6 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **ATTN-2.1** The application shall listen on a Unix domain socket at `~/Library/Application Support/Graftty/graftty.sock`.
 
 **ATTN-2.2** The CLI shall communicate with the application by sending JSON messages over the Unix domain socket.
-
-**ATTN-2.3** The application shall support the following message types over the socket:
 
 **ATTN-2.4** The application shall set the environment variable `GRAFTTY_SOCK` in each terminal surface's environment, pointing to the socket path.
 
@@ -736,7 +732,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **ZMX-7.3** When `close_surface_cb` fires for a pane, the application shall always route to the close-pane path (remove from the split tree, free the surface) regardless of the zmx session's liveness. The mid-flight "rebuild surface in place" recovery explored in an earlier design was withdrawn because the available signals (session-missing + no Graftty-initiated close) cannot distinguish a clean user `exit` from an external daemon kill, and the rebuild path regressed `TERM-5.3`. Recovery from daemon loss while Graftty is running is deferred until a zmx-side signal disambiguates the two cases.
 
-**ZMX-7.4** At application launch, before any terminal surface is spawned, the application shall `unsetenv(...)` a known list of "leaky" environment variables from its own process so every downstream spawn (libghostty surface shells, CLIRunner subprocesses, zmx attach) sees a clean env regardless of the shell Graftty was launched from. The list shall include at minimum:
+**ZMX-7.4** At application launch, before any terminal surface is spawned, the application shall `unsetenv(...)` inherited process environment variables whose values would hijack downstream spawns into the parent shell's scope. The list shall include at minimum: `ZMX_SESSION`, `GIT_DIR`, and `GIT_WORK_TREE`.
 
 ### ZMX-8.x — Manual Restart
 
@@ -822,7 +818,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **WEB-3.1** The application shall serve a single static page at `/` (and `/index.html`) that bootstraps the bundled web client.
 
-**WEB-3.2** When a client requests any path that does not match a bundled
+**WEB-3.2** When a client requests any path that does not match a bundled static asset and does not begin with `/ws`, the application shall respond with the bundled `index.html` body and `Content-Type: text/html; charset=utf-8`. This serves the SPA fallback for client-side-routed URLs such as `/session/<name>`.
 
 **WEB-3.3** The application shall upgrade `/ws?session=<name>` to WebSocket after the authorization check passes.
 

@@ -32,6 +32,7 @@ public final class PRStatusStore {
     /// that took over the `inFlight` slot — and bail out before writing
     /// stale data back into `infos`/`absent`.
     @ObservationIgnored private var generation: [String: Int] = [:]
+    @ObservationIgnored private var pendingRefresh: [String: (repoPath: String, branch: String)] = [:]
     @ObservationIgnored private var ticker: PollingTickerLike?
     @ObservationIgnored private var getRepos: @MainActor () -> [RepoEntry] = { [] }
     @ObservationIgnored private let logger = Logger(subsystem: "com.btucker.graftty", category: "PRStatusStore")
@@ -101,8 +102,10 @@ public final class PRStatusStore {
         let cap = Double(Self.refreshCadence().components.seconds)
         if let started = inFlight[worktreePath],
            now.timeIntervalSince(started) < cap {
+            pendingRefresh[worktreePath] = (repoPath, branch)
             return
         }
+        pendingRefresh.removeValue(forKey: worktreePath)
         inFlight[worktreePath] = now
         generation[worktreePath, default: 0] += 1
 
@@ -136,6 +139,7 @@ public final class PRStatusStore {
         // late write is handled by the generation check in
         // `performFetch`.
         inFlight.removeValue(forKey: worktreePath)
+        pendingRefresh.removeValue(forKey: worktreePath)
         // Bump the generation so any in-flight fetch's late write
         // (after its await resumes) can detect it's been invalidated
         // and discard its result.
@@ -193,6 +197,9 @@ public final class PRStatusStore {
         defer {
             if generation[worktreePath, default: 0] == fetchGeneration {
                 inFlight.removeValue(forKey: worktreePath)
+                if let pending = pendingRefresh.removeValue(forKey: worktreePath) {
+                    refresh(worktreePath: worktreePath, repoPath: pending.repoPath, branch: pending.branch)
+                }
             }
         }
 
@@ -291,6 +298,7 @@ public final class PRStatusStore {
         if inFlight.removeValue(forKey: worktreePath) != nil {
             invalidatedInFlight = true
         }
+        pendingRefresh.removeValue(forKey: worktreePath)
         if invalidatedInFlight {
             generation[worktreePath, default: 0] += 1
         }
@@ -498,6 +506,7 @@ extension PRStatusStore {
         }
 
         for c in candidates {
+            pendingRefresh.removeValue(forKey: c.path)
             inFlight[c.path] = Date()
             generation[c.path, default: 0] += 1
             let gen = generation[c.path, default: 0]
