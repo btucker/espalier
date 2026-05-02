@@ -261,6 +261,12 @@ struct SingleSessionView: View {
         // burn a TCP/TLS handshake on a connection we'd immediately abort.
         if Task.isCancelled || connection == .ended { return }
         let new = SessionClient.live(baseURL: step.host.baseURL, sessionName: step.sessionName)
+        if Task.isCancelled || connection == .ended {
+            // Re-backgrounded (or ended) between WS construction and
+            // assignment. Stop the orphan so the WS task doesn't leak.
+            new.stop()
+            return
+        }
         new.start()
         client = new
         connection = .live

@@ -123,8 +123,12 @@ private struct PaneTile: View {
 
     @ViewBuilder
     private var paneContent: some View {
-        if let controller, controllerSourceConfig == baseConfig, let client {
-            MiniTerminalPreview(controller: controller, client: client)
+        if let controller, controllerSourceConfig == baseConfig {
+            if let client {
+                MiniTerminalPreview(controller: controller, client: client)
+            } else {
+                Color.black
+            }
         } else {
             Color.black.overlay(ProgressView().tint(.white))
         }
