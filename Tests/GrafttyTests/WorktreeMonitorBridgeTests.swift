@@ -115,12 +115,22 @@ private actor SequencedPRFetcher: PRFetcher {
         self.results = results
     }
 
-    func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
+    func fetch(
+        origin: HostingOrigin,
+        branchesOfInterest: Set<String>
+    ) async throws -> RepoPRSnapshot {
         invocations += 1
+        let next: PRInfo?
         if results.count > 1 {
-            return results.removeFirst()
+            next = results.removeFirst()
+        } else {
+            next = results.first ?? nil
         }
-        return results.first ?? nil
+        guard let pr = next else {
+            return RepoPRSnapshot(prsByBranch: [:])
+        }
+        let branch = branchesOfInterest.first ?? "feature"
+        return RepoPRSnapshot(prsByBranch: [branch: pr])
     }
 }
 
