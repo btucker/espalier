@@ -200,22 +200,29 @@ struct WorktreeRow: View {
         Button {
             NSWorkspace.shared.open(badge.url)
         } label: {
-            Text("#\(badge.number)")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(color(for: tone))
-                .padding(.horizontal, 3)
-                .overlay {
-                    if tone == .conflicting {
-                        // Outline ring on conflict — pairs with the
-                        // breadcrumb's "merge conflict" pill so both
-                        // surfaces share the same visual language.
-                        // PR-8.20.
-                        Capsule()
-                            .strokeBorder(color(for: tone), lineWidth: 1)
+            HStack(spacing: 3) {
+                Text("#\(badge.number)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(color(for: tone))
+                    .padding(.horizontal, 3)
+                    .overlay {
+                        if tone == .conflicting {
+                            // Outline ring on conflict — pairs with the
+                            // breadcrumb's "merge conflict" pill so both
+                            // surfaces share the same visual language.
+                            // PR-8.20.
+                            Capsule()
+                                .strokeBorder(color(for: tone), lineWidth: 1)
+                        }
                     }
+                    .modifier(PendingCIEmphasis(isPending: tone == .ciPending))
+                if tone == .ciPending {
+                    PendingCIPulseDot(color: PendingCIIndicatorMotion.pendingNSColor)
+                        .frame(width: 4, height: 4)
+                        .accessibilityHidden(true)
                 }
-                .modifier(PulseIfPending(isPending: tone.pulses))
+            }
         }
         .buttonStyle(.plain)
         .help("Open #\(badge.number) on \(badge.url.host ?? "")")

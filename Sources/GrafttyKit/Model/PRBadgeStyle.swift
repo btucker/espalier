@@ -6,8 +6,8 @@ import Foundation
 ///
 /// Lives in `GrafttyKit` (no SwiftUI dependency) so the decision is
 /// unit-testable without touching the UI layer; the `Graftty` view
-/// maps the returned `Tone` to a concrete `Color` and applies the
-/// pulse modifier when `tone.pulses` is true.
+/// maps the returned `Tone` to a concrete `Color` and compositor-backed
+/// emphasis for pending CI.
 ///
 /// Priority is most-actionable first: merged > CI failure > CI
 /// pending > merge conflict > open. CI signals win over a conflict
@@ -23,8 +23,6 @@ public enum PRBadgeStyle {
         case ciFailure
         case ciPending
         case conflicting
-
-        public var pulses: Bool { self == .ciPending }
     }
 
     public static func tone(

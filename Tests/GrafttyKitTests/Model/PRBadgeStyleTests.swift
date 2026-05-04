@@ -26,14 +26,6 @@ struct PRBadgeStyleTests {
         #expect(PRBadgeStyle.tone(state: .merged, checks: .none) == .merged)
     }
 
-    @Test func onlyCIPendingTonePulses() {
-        #expect(PRBadgeStyle.Tone.ciPending.pulses == true)
-        #expect(PRBadgeStyle.Tone.ciFailure.pulses == false)
-        #expect(PRBadgeStyle.Tone.open.pulses == false)
-        #expect(PRBadgeStyle.Tone.merged.pulses == false)
-        #expect(PRBadgeStyle.Tone.conflicting.pulses == false)
-    }
-
     @Test("""
     @spec PR-8.20: When the application picks the sidebar `#<number>` badge tone for a worktree's PR, the priority shall be merged > CI failure > CI pending > merge conflict > open. CI signals win over a merge conflict because they're tighter feedback on the user's current change; once CI is clean, the conflict tone surfaces and tells the user to rebase. The new `.conflicting` tone gives "PR has conflicts but CI is green" a visually distinct signal from "PR is broken in CI".
     """)

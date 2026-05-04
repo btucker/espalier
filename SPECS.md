@@ -980,7 +980,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **PR-3.4** The `#<number>` sidebar badge shall have an accessibility label of the form "Pull request `<number>`, open/merged[, CI failing|CI running]. Click to open in browser." and a tooltip showing "Open #`<number>` on `<host>`". The CI suffix is appended only when the CI tone is `ciFailure` or `ciPending` per `PR-3.5`.
 
-**PR-3.5** While a worktree's PR/MR is open, the `#<number>` sidebar badge text shall be colored to reflect CI state, overriding the open-state green: red (matching the breadcrumb PR-button failure dot, RGB ~0.97/0.32/0.29) when the latest checks verdict is `failure`, orange (matching the pending dot, RGB ~0.82/0.60/0.13) and pulsing in opacity when the verdict is `pending`. A `success` or absent (`none`) verdict shall keep the open-state green so repos without CI do not lose the open-vs-merged signal. While the PR is merged, the badge shall remain purple regardless of the CI verdict, since CI status on a merged PR is stale and would distract from the actionable signal on still-open PRs.
+**PR-3.5** While a worktree's PR/MR is open, the `#<number>` sidebar badge text shall be colored to reflect CI state, overriding the open-state green: red (matching the breadcrumb PR-button failure dot, RGB ~0.97/0.32/0.29) when the latest checks verdict is `failure`, and orange (matching the pending dot, RGB ~0.82/0.60/0.13) with compositor-backed pending emphasis when the verdict is `pending`. A `success` or absent (`none`) verdict shall keep the open-state green so repos without CI do not lose the open-vs-merged signal. While the PR is merged, the badge shall remain purple regardless of the CI verdict, since CI status on a merged PR is stale and would distract from the actionable signal on still-open PRs.
 
 ### PR-4.x — Host Detection
 
@@ -1369,3 +1369,5 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **PERF-1.6** Pane title metadata changes shall not publish through TerminalManager itself, so title churn does not invalidate MainWindow observers.
 
 **PERF-1.7** Multiple rendered pane-title changes in one debounce window shall coalesce into one sidebar invalidation.
+
+**PERF-1.8** While a PR/MR's latest checks verdict is pending, the application shall render pending-CI motion without updating SwiftUI state on a continuous timer. A live timer in every visible pending badge makes otherwise-idle CPU scale with the number of pending PR rows; compositor-backed layer animation is allowed because it does not rebuild the SwiftUI sidebar tree on every frame.
