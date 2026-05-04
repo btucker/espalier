@@ -70,15 +70,19 @@ final class PollingTicker: PollingTickerLike {
     private func sleepUntilPulseOrInterval() async {
         sleepGeneration += 1
         let myGeneration = sleepGeneration
-        let s = Task<Void, Never> { [interval] in
-            try? await Task.sleep(for: interval)
+        // Detached so the sleep task is NOT inherited onto MainActor.
+        // On Swift 6.2 a non-detached `Task { }` here inherits the
+        // enclosing `@MainActor`, putting both the outer loop's
+        // `await s.value` and the inner `Task.sleep` on the same
+        // actor — and the outer await fails to resume after the sleep
+        // completes, stalling the loop after one tick.
+        let s = Task.detached { [interval] in
+            _ = try? await Task.sleep(for: interval)
         }
         sleepTask = s
-        await s.value
-        // Generation guard: don't clobber a fresh `sleepTask` that
-        // `stop()` cleared or a re-entered loop installed during the
-        // await. Don't use `Task.==` for this — its identity semantics
-        // are not stable across Swift toolchains.
+        _ = await s.value
+        // Don't clobber a fresh `sleepTask` that `stop()` cleared or a
+        // re-entered loop installed during the await.
         if sleepGeneration == myGeneration { sleepTask = nil }
     }
 
