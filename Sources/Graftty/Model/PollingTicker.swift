@@ -48,12 +48,18 @@ final class PollingTicker: PollingTickerLike {
         installObservers()
         task = Task { @MainActor [weak self] in
             guard let self else { return }
+            var iter = 0
             while !Task.isCancelled {
+                iter += 1
+                fputs("[POLL] iter=\(iter) before onTick\n", stderr)
                 if !self.paused {
                     await onTick()
                 }
+                fputs("[POLL] iter=\(iter) after onTick, before sleep\n", stderr)
                 await self.sleepUntilPulseOrInterval()
+                fputs("[POLL] iter=\(iter) after sleep\n", stderr)
             }
+            fputs("[POLL] loop exited, isCancelled=\(Task.isCancelled)\n", stderr)
         }
     }
 
@@ -72,13 +78,18 @@ final class PollingTicker: PollingTickerLike {
     private func sleepUntilPulseOrInterval() async {
         let pulseAtEntry = pulseCount
         let deadline = ContinuousClock().now + interval
+        var sleepIter = 0
         while !Task.isCancelled
               && pulseCount == pulseAtEntry
               && ContinuousClock().now < deadline {
+            sleepIter += 1
             let remaining = deadline - ContinuousClock().now
             let chunk = min(remaining, Self.chunkDuration)
+            fputs("[SLEEP] iter=\(sleepIter) chunk=\(chunk) remaining=\(remaining)\n", stderr)
             try? await Task.sleep(for: chunk)
+            fputs("[SLEEP] iter=\(sleepIter) returned\n", stderr)
         }
+        fputs("[SLEEP] exit: cancelled=\(Task.isCancelled) pulseChanged=\(pulseCount != pulseAtEntry) deadlineReached=\(ContinuousClock().now >= deadline)\n", stderr)
     }
 
     private func installObservers() {
