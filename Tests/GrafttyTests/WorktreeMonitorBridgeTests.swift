@@ -56,6 +56,7 @@ struct WorktreeMonitorBridgeTests {
             getRepos: { stateBox.state.repos }
         )
         defer { prStore.stop() }
+        let followUps = RecordedFollowUps()
         let bridge = WorktreeMonitorBridge(
             appState: Binding(
                 get: { stateBox.state },
@@ -66,7 +67,9 @@ struct WorktreeMonitorBridgeTests {
             }, fetch: { _ in }),
             prStatusStore: prStore,
             remoteBranchStore: remoteBranchStore,
-            originRefPRFollowUpDelays: [.milliseconds(100), .milliseconds(500)]
+            originRefPRFollowUpScheduler: { _, work in
+                Task { await followUps.append(work) }
+            }
         )
 
         #expect(!remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature"))
@@ -76,21 +79,39 @@ struct WorktreeMonitorBridgeTests {
             repoPath: "/repo"
         )
 
-        // Generous timeouts: under heavy CI test parallelism each
-        // MainActor hop (and there are several in the bridge → store
-        // → fetcher chain) can take hundreds of milliseconds.
+        // Phase 1: immediate path. List runs once, hasRemote flips,
+        // the immediate refresh fetches nil → worktree marked absent,
+        // and both follow-ups get recorded by the injected scheduler.
         try await waitUntil(timeout: 5.0) {
             await remoteBranchLister.invocations(for: "/repo") == 1
         }
         try await waitUntil(timeout: 5.0) {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
-        try await waitUntil(timeout: 15.0) {
+        try await waitUntil(timeout: 5.0) {
+            prStore.absent.contains("/repo/wt")
+        }
+        try await waitUntil(timeout: 5.0) {
+            await followUps.count == 2
+        }
+        #expect(await fetcher.invocations == 1)
+
+        // Phase 2: drive the follow-ups deterministically. With
+        // wall-clock removed from the test, only per-step MainActor
+        // latency bounds each `waitUntil` — never a cumulative
+        // sleep+hop budget that CI parallelism can blow past.
+        await followUps.fireNext()
+        try await waitUntil(timeout: 5.0) {
             prStore.infos["/repo/wt"]?.number == 42
         }
-        try await waitUntil(timeout: 15.0) {
-            await fetcher.invocations >= 3
+        #expect(await fetcher.invocations == 2)
+        #expect(!prStore.absent.contains("/repo/wt"))
+
+        await followUps.fireNext()
+        try await waitUntil(timeout: 5.0) {
+            await fetcher.invocations == 3
         }
+        #expect(prStore.infos["/repo/wt"]?.number == 42)
         #expect(!prStore.absent.contains("/repo/wt"))
         #expect(stateBox.state.selectedWorktreePath == nil)
     }
@@ -115,6 +136,22 @@ private final class AppStateBox {
 
     init(_ state: AppState) {
         self.state = state
+    }
+}
+
+private actor RecordedFollowUps {
+    private var pending: [@Sendable () async -> Void] = []
+
+    var count: Int { pending.count }
+
+    func append(_ work: @escaping @Sendable () async -> Void) {
+        pending.append(work)
+    }
+
+    func fireNext() async {
+        guard !pending.isEmpty else { return }
+        let work = pending.removeFirst()
+        await work()
     }
 }
 

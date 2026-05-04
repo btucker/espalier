@@ -2171,24 +2171,40 @@ struct GrafttyApp: App {
 
 @MainActor
 final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
+    /// Tests substitute an immediate-fire recorder so a CI MainActor
+    /// starvation episode can't push the wall-clock follow-up sleep
+    /// past the test's `waitUntil` window.
+    typealias FollowUpScheduler = @Sendable (
+        _ delay: Duration,
+        _ work: @escaping @Sendable () async -> Void
+    ) -> Void
+
+    nonisolated static let defaultFollowUpScheduler: FollowUpScheduler = { delay, work in
+        Task.detached {
+            try? await Task.sleep(for: delay)
+            if Task.isCancelled { return }
+            await work()
+        }
+    }
+
     let appState: Binding<AppState>
     let statsStore: WorktreeStatsStore
     let prStatusStore: PRStatusStore
     let remoteBranchStore: RemoteBranchStore
-    private let originRefPRFollowUpDelays: [Duration]
+    private let originRefPRFollowUpScheduler: FollowUpScheduler
 
     init(
         appState: Binding<AppState>,
         statsStore: WorktreeStatsStore,
         prStatusStore: PRStatusStore,
         remoteBranchStore: RemoteBranchStore,
-        originRefPRFollowUpDelays: [Duration] = [.seconds(1), .seconds(5)]
+        originRefPRFollowUpScheduler: @escaping FollowUpScheduler = WorktreeMonitorBridge.defaultFollowUpScheduler
     ) {
         self.appState = appState
         self.statsStore = statsStore
         self.prStatusStore = prStatusStore
         self.remoteBranchStore = remoteBranchStore
-        self.originRefPRFollowUpDelays = originRefPRFollowUpDelays
+        self.originRefPRFollowUpScheduler = originRefPRFollowUpScheduler
     }
 
     /// Called when `.git/worktrees/` changes (new worktree added, existing
@@ -2344,17 +2360,12 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     }
 
     private func scheduleOriginRefPRFollowUps(repoPath: String) {
-        // Detached so the follow-up sleep runs on the global
-        // executor, not MainActor. Under MainActor pressure
-        // (e.g. heavy app startup or CI test parallelism),
-        // a `Task { @MainActor in await Task.sleep(...) }` here
-        // would have its sleep land on a starved MainActor and
-        // miss its delay by many seconds. The eventual refresh
-        // hops back to MainActor briefly via `refreshPushedPRs`.
-        for delay in originRefPRFollowUpDelays {
-            Task.detached { [weak self] in
-                try? await Task.sleep(for: delay)
-                if Task.isCancelled { return }
+        // Detached so a starved MainActor (heavy app startup, CI
+        // test parallelism) can't push the sleep out by many
+        // seconds; only the eventual `refreshPushedPRs` hops back.
+        let delays: [Duration] = [.seconds(1), .seconds(5)]
+        for delay in delays {
+            originRefPRFollowUpScheduler(delay) { [weak self] in
                 await self?.refreshPushedPRs(repoPath: repoPath)
             }
         }
