@@ -7,26 +7,33 @@ import GrafttyKit
 /// when inactive), and exposes `pulse()` to wake early for
 /// user-triggered refreshes.
 ///
-/// Each sleep races a `Task.sleep` child against a per-iteration
-/// `AsyncStream` consumer child inside `withTaskGroup`. The work
-/// runs INSIDE the children — no nested unstructured Tasks, no
-/// `await someTask.value`. That's load-bearing: awaiting an
-/// unstructured `Task<Void, Never>.value` from `@MainActor` can
-/// hang on the resume hop (swiftlang/swift#57150 / SR-14802),
-/// observable as the polling loop ticking once and then stalling.
-/// Structured children let `group.cancelAll()` actually cancel the
-/// in-flight `Task.sleep` and `for await` directly, so whichever
-/// child wins, the loser unwinds cleanly.
+/// The sleep loop uses only bare `Task.sleep` on `@MainActor` and a
+/// monotonic `pulseCount` counter as the wakeup signal. Earlier
+/// designs (inner sleep `Task` + `await s.value`, or `withTaskGroup`
+/// racing sleep against an `AsyncStream`) all hung after one tick
+/// on Swift 6.2.x — symptomatic of swiftlang/swift#57150 (SR-14802),
+/// where a continuation resume across the same actor's boundary can
+/// be dropped. Any approach with a continuation hop back to MainActor
+/// (group child completion signal, AsyncStream iterator, awaited
+/// Task.value) is vulnerable. Polling a counter avoids continuation
+/// handoffs entirely; the trade-off is up to ~one chunk of pulse
+/// latency, which is invisible for a UI refresh trigger.
 /// @spec PR-8.10
 @MainActor
 final class PollingTicker: PollingTickerLike {
     private let interval: Duration
     private let pauseWhenInactive: @MainActor () -> Bool
     private var task: Task<Void, Never>?
-    private var pulseContinuation: AsyncStream<Void>.Continuation?
+    private var pulseCount: UInt64 = 0
     private var paused = false
     private var activeObserver: NSObjectProtocol?
     private var inactiveObserver: NSObjectProtocol?
+
+    /// Granularity of the interruptible sleep. Trades pulse() latency
+    /// against wakeups-per-interval. 20ms is well below human
+    /// perception while keeping the wake count low for a multi-second
+    /// poll cadence.
+    private static let chunkDuration: Duration = .milliseconds(20)
 
     init(
         interval: Duration,
@@ -53,31 +60,24 @@ final class PollingTicker: PollingTickerLike {
     func stop() {
         task?.cancel()
         task = nil
-        pulseContinuation?.finish()
-        pulseContinuation = nil
         removeObservers()
     }
 
     func pulse() {
-        pulseContinuation?.yield(())
+        pulseCount &+= 1
     }
 
     // MARK: - Private
 
     private func sleepUntilPulseOrInterval() async {
-        let (stream, cont) = AsyncStream<Void>.makeStream()
-        pulseContinuation = cont
-        defer { pulseContinuation = nil }
-
-        await withTaskGroup(of: Void.self) { [interval] group in
-            group.addTask {
-                _ = try? await Task.sleep(for: interval)
-            }
-            group.addTask {
-                for await _ in stream { return }
-            }
-            _ = await group.next()
-            group.cancelAll()
+        let pulseAtEntry = pulseCount
+        let deadline = ContinuousClock().now + interval
+        while !Task.isCancelled
+              && pulseCount == pulseAtEntry
+              && ContinuousClock().now < deadline {
+            let remaining = deadline - ContinuousClock().now
+            let chunk = min(remaining, Self.chunkDuration)
+            try? await Task.sleep(for: chunk)
         }
     }
 
