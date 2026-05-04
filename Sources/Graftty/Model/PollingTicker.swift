@@ -7,33 +7,27 @@ import GrafttyKit
 /// when inactive), and exposes `pulse()` to wake early for
 /// user-triggered refreshes.
 ///
-/// The sleep loop chunks `Task.sleep` and re-checks a monotonic
-/// `pulseCount` counter between chunks. Pure `@MainActor` async/await
-/// — no inner unstructured Task whose `.value` we await, no
-/// `withTaskGroup` continuation handoffs, no AsyncStream iterators.
-/// Less because those are wrong, and more because under MainActor
-/// contention (parallel `@MainActor` tests, app-startup bursts) the
-/// Swift 6.2 scheduler doesn't fairly drain MainActor, and any of
-/// those mechanisms can starve. Bare `Task.sleep` plus a counter has
-/// no continuation that the runtime can drop or delay; the trade-off
-/// is up to one chunk of `pulse()` latency (~20ms), invisible for a
-/// UI refresh trigger.
+/// The sleep + pulse-counter live inside `PollingHeart`, a private
+/// actor with its own serial executor. This is load-bearing: keeping
+/// the ticker `@MainActor` would put the sleep on a heavily-contended
+/// actor (Swift 6.2's "approachable concurrency" defaults a lot of
+/// app + test code to MainActor), and `Task.sleep` would block waiting
+/// for MainActor cycles — observable on CI as 20ms sleeps taking
+/// 700ms+, the loop missing its 40ms deadline, and PR-8.10's
+/// regression tests reading `count == 1` after 220ms. Routing through
+/// `PollingHeart` lets the sleep loop run on its own executor, so the
+/// timer's cadence is independent of MainActor pressure. Only the
+/// brief `onTick()` invocation hops to MainActor.
 /// @spec PR-8.10
 @MainActor
 final class PollingTicker: PollingTickerLike {
     private let interval: Duration
     private let pauseWhenInactive: @MainActor () -> Bool
+    private let heart = PollingHeart()
     private var task: Task<Void, Never>?
-    private var pulseCount: UInt64 = 0
     private var paused = false
     private var activeObserver: NSObjectProtocol?
     private var inactiveObserver: NSObjectProtocol?
-
-    /// Granularity of the interruptible sleep. Trades pulse() latency
-    /// against wakeups-per-interval. 20ms is well below human
-    /// perception while keeping the wake count low for a multi-second
-    /// poll cadence.
-    private static let chunkDuration: Duration = .milliseconds(20)
 
     init(
         interval: Duration,
@@ -46,16 +40,20 @@ final class PollingTicker: PollingTickerLike {
     func start(onTick: @MainActor @escaping () async -> Void) {
         guard task == nil else { return }
         installObservers()
-        task = Task { @MainActor [weak self] in
-            guard let self else { return }
+        let interval = self.interval
+        let heart = self.heart
+        task = Task.detached { [weak self] in
             while !Task.isCancelled {
-                if !self.paused {
+                let isPaused = await self?.isPaused ?? true
+                if !isPaused {
                     await onTick()
                 }
-                await self.sleepUntilPulseOrInterval()
+                await heart.sleepUntilPulseOrInterval(for: interval)
             }
         }
     }
+
+    private var isPaused: Bool { paused }
 
     func stop() {
         task?.cancel()
@@ -64,21 +62,8 @@ final class PollingTicker: PollingTickerLike {
     }
 
     func pulse() {
-        pulseCount &+= 1
-    }
-
-    // MARK: - Private
-
-    private func sleepUntilPulseOrInterval() async {
-        let pulseAtEntry = pulseCount
-        let deadline = ContinuousClock().now + interval
-        while !Task.isCancelled
-              && pulseCount == pulseAtEntry
-              && ContinuousClock().now < deadline {
-            let remaining = deadline - ContinuousClock().now
-            let chunk = min(remaining, Self.chunkDuration)
-            try? await Task.sleep(for: chunk)
-        }
+        let heart = self.heart
+        Task.detached { await heart.pulse() }
     }
 
     private func installObservers() {
@@ -108,5 +93,35 @@ final class PollingTicker: PollingTickerLike {
         let center = NotificationCenter.default
         if let o = activeObserver { center.removeObserver(o); activeObserver = nil }
         if let o = inactiveObserver { center.removeObserver(o); inactiveObserver = nil }
+    }
+}
+
+/// Owns the polling cadence on its own actor executor — independent
+/// of MainActor contention. Sleep chunks are interruptible: `pulse()`
+/// bumps a monotonic counter, the sleep loop re-checks between
+/// chunks. Up to ~20ms pulse latency, invisible for UI refresh.
+private actor PollingHeart {
+    private var pulseCount: UInt64 = 0
+
+    /// Granularity of the interruptible sleep. Trades pulse() latency
+    /// against wakeups-per-interval. 20ms is well below human
+    /// perception while keeping the wake count low for a multi-second
+    /// poll cadence.
+    private static let chunkDuration: Duration = .milliseconds(20)
+
+    func pulse() {
+        pulseCount &+= 1
+    }
+
+    func sleepUntilPulseOrInterval(for interval: Duration) async {
+        let pulseAtEntry = pulseCount
+        let deadline = ContinuousClock().now + interval
+        while !Task.isCancelled
+              && pulseCount == pulseAtEntry
+              && ContinuousClock().now < deadline {
+            let remaining = deadline - ContinuousClock().now
+            let chunk = min(remaining, Self.chunkDuration)
+            try? await Task.sleep(for: chunk)
+        }
     }
 }
