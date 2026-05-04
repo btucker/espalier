@@ -72,7 +72,7 @@ final class PollingTicker: PollingTickerLike {
         }
         sleepTask = s
         await s.value
-        if sleepTask === s { sleepTask = nil }
+        if sleepTask == s { sleepTask = nil }
     }
 
     private func installObservers() {
