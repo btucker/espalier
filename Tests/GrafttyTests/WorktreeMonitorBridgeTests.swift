@@ -4,7 +4,7 @@ import Testing
 import GrafttyKit
 @testable import Graftty
 
-@Suite("WorktreeMonitorBridge origin-ref refresh")
+@Suite("WorktreeMonitorBridge origin-ref refresh", .serialized)
 struct WorktreeMonitorBridgeTests {
 
     @MainActor
@@ -48,6 +48,14 @@ struct WorktreeMonitorBridgeTests {
             ],
             selectedWorktreePath: nil
         ))
+        // Mirror app launch: prStore needs `getRepos` set before it
+        // can apply fetched snapshots to worktrees. The bridge does
+        // not start the store; the app does.
+        prStore.start(
+            ticker: PollingTicker(interval: .seconds(60)),
+            getRepos: { stateBox.state.repos }
+        )
+        defer { prStore.stop() }
         let bridge = WorktreeMonitorBridge(
             appState: Binding(
                 get: { stateBox.state },
@@ -68,16 +76,19 @@ struct WorktreeMonitorBridgeTests {
             repoPath: "/repo"
         )
 
-        try await waitUntil(timeout: 0.5) {
+        // Generous timeouts: under heavy CI test parallelism each
+        // MainActor hop (and there are several in the bridge → store
+        // → fetcher chain) can take hundreds of milliseconds.
+        try await waitUntil(timeout: 5.0) {
             await remoteBranchLister.invocations(for: "/repo") == 1
         }
-        try await waitUntil(timeout: 0.5) {
+        try await waitUntil(timeout: 5.0) {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
-        try await waitUntil(timeout: 2.0) {
+        try await waitUntil(timeout: 15.0) {
             prStore.infos["/repo/wt"]?.number == 42
         }
-        try await waitUntil(timeout: 2.0) {
+        try await waitUntil(timeout: 15.0) {
             await fetcher.invocations >= 3
         }
         #expect(!prStore.absent.contains("/repo/wt"))
@@ -115,12 +126,22 @@ private actor SequencedPRFetcher: PRFetcher {
         self.results = results
     }
 
-    func fetch(origin: HostingOrigin, branch: String) async throws -> PRInfo? {
+    func fetch(
+        origin: HostingOrigin,
+        branchesOfInterest: Set<String>
+    ) async throws -> RepoPRSnapshot {
         invocations += 1
+        let next: PRInfo?
         if results.count > 1 {
-            return results.removeFirst()
+            next = results.removeFirst()
+        } else {
+            next = results.first ?? nil
         }
-        return results.first ?? nil
+        guard let pr = next else {
+            return RepoPRSnapshot(prsByBranch: [:])
+        }
+        let branch = branchesOfInterest.first ?? "feature"
+        return RepoPRSnapshot(prsByBranch: [branch: pr])
     }
 }
 

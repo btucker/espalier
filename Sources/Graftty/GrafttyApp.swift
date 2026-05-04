@@ -2344,11 +2344,18 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     }
 
     private func scheduleOriginRefPRFollowUps(repoPath: String) {
+        // Detached so the follow-up sleep runs on the global
+        // executor, not MainActor. Under MainActor pressure
+        // (e.g. heavy app startup or CI test parallelism),
+        // a `Task { @MainActor in await Task.sleep(...) }` here
+        // would have its sleep land on a starved MainActor and
+        // miss its delay by many seconds. The eventual refresh
+        // hops back to MainActor briefly via `refreshPushedPRs`.
         for delay in originRefPRFollowUpDelays {
-            Task { @MainActor [weak self] in
+            Task.detached { [weak self] in
                 try? await Task.sleep(for: delay)
                 if Task.isCancelled { return }
-                self?.refreshPushedPRs(repoPath: repoPath)
+                await self?.refreshPushedPRs(repoPath: repoPath)
             }
         }
     }
