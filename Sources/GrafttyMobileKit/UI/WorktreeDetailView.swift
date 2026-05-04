@@ -1,5 +1,4 @@
 #if canImport(UIKit)
-import GhosttyTerminal
 import GrafttyProtocol
 import SwiftUI
 
@@ -16,7 +15,7 @@ public struct WorktreeDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.biometricGate) private var gate
 
-    @State private var controller: TerminalController?
+    @State private var baseConfig: String?
     @State private var previews: PanePreviewClientPool<SessionClient>?
 
     public init(
@@ -34,7 +33,7 @@ public struct WorktreeDetailView: View {
             if let layout = worktree.layout {
                 PaneLayoutView(
                     layout: layout,
-                    controller: controller,
+                    baseConfig: baseConfig,
                     previewClient: { previews?.clients[$0] }
                 ) { sessionName in
                     onSelectPane(sessionName)
@@ -50,12 +49,8 @@ public struct WorktreeDetailView: View {
         .navigationTitle(worktree.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: host.id) {
-            if controller == nil {
-                let text = await GhosttyConfigFetcher.fetch(baseURL: host.baseURL)
-                controller = TerminalController(
-                    configSource: text.map { .generated($0) } ?? .none
-                )
-            }
+            baseConfig = nil
+            baseConfig = await GhosttyConfigFetcher.fetch(baseURL: host.baseURL) ?? ""
         }
         // Re-keys on layout / scene-phase / gate transitions so we tear
         // the pool down on `.background` and rebuild on `.active +
@@ -81,6 +76,12 @@ public struct WorktreeDetailView: View {
         }
         guard LiveSessionReadiness.isActive(scene: scenePhase, gateUnlocked: gate.isUnlocked) else { return }
         guard let layout = worktree.layout else { return }
+        // IOS-4.14: skip the preview WebSocket pool for single-pane worktrees.
+        guard !layout.isLeaf else {
+            previews?.stopAll()
+            previews = nil
+            return
+        }
         if previews == nil {
             previews = PanePreviewClientPool { sessionName in
                 SessionClient.live(baseURL: host.baseURL, sessionName: sessionName)

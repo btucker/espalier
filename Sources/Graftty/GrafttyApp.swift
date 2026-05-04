@@ -757,6 +757,23 @@ struct GrafttyApp: App {
             }
         }
 
+        // Web/iOS attaches spawn their own `zmx attach` process. If that
+        // attach wins the race to create a new zmx daemon, its cwd becomes
+        // the daemon's shell cwd, so resolve the pane back to its worktree.
+        webController.setSessionWorktreeProvider { sessionName in
+            await MainActor.run { () -> String? in
+                for repo in appStateBinding.wrappedValue.repos {
+                    for wt in repo.worktrees where wt.state == .running {
+                        for leafID in wt.splitTree.allLeaves
+                        where ZmxLauncher.sessionName(for: leafID.id) == sessionName {
+                            return wt.path
+                        }
+                    }
+                }
+                return nil
+            }
+        }
+
         // IOS-4.10: per-worktree pane trees + titles for the mobile
         // client's worktree→pane drilldown. Only running worktrees
         // with at least one pane are returned.
@@ -2619,11 +2636,18 @@ final class WorktreeMonitorBridge: WorktreeMonitorDelegate {
     }
 
     private func scheduleOriginRefPRFollowUps(repoPath: String) {
+        // Detached so the follow-up sleep runs on the global
+        // executor, not MainActor. Under MainActor pressure
+        // (e.g. heavy app startup or CI test parallelism),
+        // a `Task { @MainActor in await Task.sleep(...) }` here
+        // would have its sleep land on a starved MainActor and
+        // miss its delay by many seconds. The eventual refresh
+        // hops back to MainActor briefly via `refreshPushedPRs`.
         for delay in originRefPRFollowUpDelays {
-            Task { @MainActor [weak self] in
+            Task.detached { [weak self] in
                 try? await Task.sleep(for: delay)
                 if Task.isCancelled { return }
-                self?.refreshPushedPRs(repoPath: repoPath)
+                await self?.refreshPushedPRs(repoPath: repoPath)
             }
         }
     }
