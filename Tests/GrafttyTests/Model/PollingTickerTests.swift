@@ -2,28 +2,18 @@ import Foundation
 import Testing
 @testable import Graftty
 
-/// Regression tests for the polling-loop hang. The previous
-/// `sleepOrPulse` raced an `AsyncStream` consumer Task against a
-/// `Task.sleep` Task inside a nested `withTaskGroup`. When one of
-/// the two child Tasks completed and `cancelAll()` was called, the
-/// OTHER child was still awaiting the OUTER Task's `.value` — and
-/// `Task<Void, Never>.value` does not propagate cancellation back
-/// to the awaited Task. So the outer pulseTask kept iterating the
-/// stream forever, the awaiting child could never finish, the
-/// `withTaskGroup` could not return, and `sleepOrPulse` blocked
-/// permanently. The user-visible shape: the polling loop fired
-/// exactly one initial tick at startup, then never again — only
-/// the on-demand `refresh()` path (sidebar selection) produced
-/// fresh data. Earlier `PR-7.13` / `PR-7.14` fixes addressed
-/// scenarios where the ticker is alive but failing; none of them
-/// touched the case where the ticker itself stops running, and
-/// the previous regression test for `PR-7.14` used a fake
-/// `CapturingTicker`, which is why this hang stayed undetected.
+/// Liveness regression tests for `PollingTicker`. The original
+/// failure mode was the loop firing one initial tick and then
+/// stalling forever — only the on-demand `refresh()` path produced
+/// fresh data, observable as "PR / stats status only updates when I
+/// click on a worktree tab". `PR-7.13` / `PR-7.14` covered tickers
+/// that were alive but failing; this suite covers the case where
+/// the ticker itself stops running.
 @MainActor
 @Suite("""
 PollingTicker liveness
 
-@spec PR-8.10: The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cancel the in-progress sleep so the next tick fires immediately rather than waiting for the full interval. The ticker's sleep mechanism must not depend on `AsyncStream` iteration awaited via `Task.value`, because `Task<Void, Never>.value` does not propagate cancellation to the awaited Task and that pattern can deadlock the polling loop after a single sleep-wins iteration — observable to the user as "PR / stats status only updates when I click on a worktree tab".
+@spec PR-8.10: The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cause the next tick to fire ahead of schedule, with bounded latency, rather than waiting for the full interval.
 """, .serialized)
 struct PollingTickerTests {
 
@@ -39,16 +29,9 @@ struct PollingTickerTests {
         ticker.start { await counter.increment() }
         defer { ticker.stop() }
 
-        // Poll until we see ≥2 ticks or hit the timeout. The bug
-        // PR-8.10 is meant to catch is the loop firing exactly once
-        // and then stalling forever — `count >= 2` proves the loop
-        // keeps itself alive across sleep cycles. We deliberately
-        // don't assert a stricter cadence: under heavy CI test
-        // parallelism each `onTick` hop to MainActor can take
-        // hundreds of milliseconds, and asserting "≥4 ticks at 40ms
-        // cadence" flakes. Liveness is what the spec actually says
-        // ("indefinitely"); cadence-precision is a property of an
-        // unloaded scheduler.
+        // Liveness, not cadence: ≥2 falsifies the "fires once then
+        // stalls forever" regression. Strict cadence isn't asserted —
+        // a loaded scheduler can stretch any specific tick budget.
         let deadline = Date().addingTimeInterval(10.0)
         while await counter.value < 2 && Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))

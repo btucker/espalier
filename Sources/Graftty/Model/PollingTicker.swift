@@ -7,17 +7,14 @@ import GrafttyKit
 /// when inactive), and exposes `pulse()` to wake early for
 /// user-triggered refreshes.
 ///
-/// The sleep + pulse-counter live inside `PollingHeart`, a private
-/// actor with its own serial executor. This is load-bearing: keeping
-/// the ticker `@MainActor` would put the sleep on a heavily-contended
-/// actor (Swift 6.2's "approachable concurrency" defaults a lot of
-/// app + test code to MainActor), and `Task.sleep` would block waiting
-/// for MainActor cycles — observable on CI as 20ms sleeps taking
-/// 700ms+, the loop missing its 40ms deadline, and PR-8.10's
-/// regression tests reading `count == 1` after 220ms. Routing through
-/// `PollingHeart` lets the sleep loop run on its own executor, so the
-/// timer's cadence is independent of MainActor pressure. Only the
-/// brief `onTick()` invocation hops to MainActor.
+/// The sleep lives inside `PollingHeart`, a private actor with its
+/// own serial executor. This is load-bearing: keeping the sleep on
+/// `@MainActor` made `Task.sleep` block waiting for MainActor cycles
+/// under contention (Swift 6.2's "approachable concurrency" defaults
+/// a lot of code to MainActor), so a 40ms interval would stretch to
+/// hundreds of ms. Routing through `PollingHeart` decouples cadence
+/// from MainActor pressure. Only the brief `onTick()` invocation hops
+/// to MainActor.
 /// @spec PR-8.10
 @MainActor
 final class PollingTicker: PollingTickerLike {
@@ -44,7 +41,7 @@ final class PollingTicker: PollingTickerLike {
         let heart = self.heart
         task = Task.detached { [weak self] in
             while !Task.isCancelled {
-                let isPaused = await self?.isPaused ?? true
+                let isPaused = await self?.paused ?? true
                 if !isPaused {
                     await onTick()
                 }
@@ -53,11 +50,14 @@ final class PollingTicker: PollingTickerLike {
         }
     }
 
-    private var isPaused: Bool { paused }
-
     func stop() {
         task?.cancel()
         task = nil
+        // Wake the heart's in-flight sleep so the cancelled polling
+        // loop can return promptly instead of waiting up to a full
+        // interval.
+        let heart = self.heart
+        Task.detached { await heart.pulse() }
         removeObservers()
     }
 
@@ -97,31 +97,33 @@ final class PollingTicker: PollingTickerLike {
 }
 
 /// Owns the polling cadence on its own actor executor — independent
-/// of MainActor contention. Sleep chunks are interruptible: `pulse()`
-/// bumps a monotonic counter, the sleep loop re-checks between
-/// chunks. Up to ~20ms pulse latency, invisible for UI refresh.
+/// of MainActor contention. `pulse()` cancels the current sleep so
+/// the next tick fires immediately; if `pulse()` arrives between
+/// sleeps, the `pulsePending` flag makes the next sleep return
+/// without waiting.
 private actor PollingHeart {
-    private var pulseCount: UInt64 = 0
-
-    /// Granularity of the interruptible sleep. Trades pulse() latency
-    /// against wakeups-per-interval. 20ms is well below human
-    /// perception while keeping the wake count low for a multi-second
-    /// poll cadence.
-    private static let chunkDuration: Duration = .milliseconds(20)
+    private var sleepTask: Task<Void, Never>?
+    private var pulsePending = false
 
     func pulse() {
-        pulseCount &+= 1
+        pulsePending = true
+        sleepTask?.cancel()
     }
 
     func sleepUntilPulseOrInterval(for interval: Duration) async {
-        let pulseAtEntry = pulseCount
-        let deadline = ContinuousClock().now + interval
-        while !Task.isCancelled
-              && pulseCount == pulseAtEntry
-              && ContinuousClock().now < deadline {
-            let remaining = deadline - ContinuousClock().now
-            let chunk = min(remaining, Self.chunkDuration)
-            try? await Task.sleep(for: chunk)
+        if pulsePending {
+            pulsePending = false
+            return
         }
+        let s = Task.detached { [interval] in
+            _ = try? await Task.sleep(for: interval)
+        }
+        sleepTask = s
+        _ = await s.value
+        sleepTask = nil
+        // Either the sleep completed naturally or `pulse()` cancelled
+        // it; in both cases consume the flag so the next sleep doesn't
+        // also short-circuit.
+        pulsePending = false
     }
 }

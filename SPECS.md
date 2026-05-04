@@ -1032,7 +1032,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### PR-8.x
 
-**PR-8.10** The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cancel the in-progress sleep so the next tick fires immediately rather than waiting for the full interval. The ticker's sleep mechanism must not depend on `AsyncStream` iteration awaited via `Task.value`, because `Task<Void, Never>.value` does not propagate cancellation to the awaited Task and that pattern can deadlock the polling loop after a single sleep-wins iteration — observable to the user as "PR / stats status only updates when I click on a worktree tab".
+**PR-8.10** The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cause the next tick to fire ahead of schedule, with bounded latency, rather than waiting for the full interval.
 
 **PR-8.11** 
 
