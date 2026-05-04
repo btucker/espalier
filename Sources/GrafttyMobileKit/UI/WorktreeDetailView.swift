@@ -76,6 +76,12 @@ public struct WorktreeDetailView: View {
         }
         guard LiveSessionReadiness.isActive(scene: scenePhase, gateUnlocked: gate.isUnlocked) else { return }
         guard let layout = worktree.layout else { return }
+        // IOS-4.14: skip the preview WebSocket pool for single-pane worktrees.
+        guard !layout.isLeaf else {
+            previews?.stopAll()
+            previews = nil
+            return
+        }
         if previews == nil {
             previews = PanePreviewClientPool { sessionName in
                 SessionClient.live(baseURL: host.baseURL, sessionName: sessionName)

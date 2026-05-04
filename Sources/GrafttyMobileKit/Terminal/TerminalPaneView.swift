@@ -131,6 +131,16 @@ final class TerminalSoftwareKeyboardProxyView: UIView, UIKeyInput, UITextInputTr
         nil
     }
 
+    /// IOS-6.8: hit-test transparent. Touches pass through to
+    /// `UITerminalView` underneath so its pan-to-scroll and pinch-to-zoom
+    /// gesture recognizers receive them. The keyboard responder chain
+    /// is independent of hit-testing — `becomeFirstResponder()` from the
+    /// container's tap recognizer still routes software-keyboard input
+    /// here per IOS-6.6.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        nil
+    }
+
     func insertText(_ text: String) {
         insertTextHandler?(text)
     }
@@ -177,26 +187,38 @@ final class TerminalSoftwareKeyboardProxyView: UIView, UIKeyInput, UITextInputTr
 
 /// libghostty-spm's `UITerminalView` is `final` and unconditionally returns
 /// its own `terminalInputAccessory` from `inputAccessoryView`. On iOS it
-/// auto-focuses itself in `touchesBegan`, so even when the parent's tap
-/// recognizer hands focus back to `inputProxy`, every tap reinstalls
-/// `UITerminalView` as first responder for one runloop tick — long enough
-/// for UIKit to mount the GhosttyKit bar above the keyboard alongside
-/// graftty's own SwiftUI `terminalControlBar` (`IOS-6.1`). The package
-/// exposes no opt-out, so we replace the `@objc` `inputAccessoryView`
-/// getter at the ObjC runtime level: UIKit's keyboard machinery dispatches
-/// via `objc_msgSend`, picks up our nil-returning IMP, and never installs
-/// the GhosttyKit bar regardless of which view wins the responder race.
-/// The swap is idempotent (`dispatch_once` semantics via `static let`) and
-/// fires from `GrafttyMobileApp.init`. (`IOS-6.7`.)
+/// also auto-focuses itself in `touchesBegan` — once the keyboard responder
+/// — UIKit mounts the GhosttyKit bar above the keyboard alongside graftty's
+/// own SwiftUI `terminalControlBar` (`IOS-6.1`). The package exposes no
+/// opt-out, so we replace two `@objc` getters at the ObjC runtime level:
+///   - `inputAccessoryView` → nil, so even if `UITerminalView` ever does
+///      win the responder race, no accessory mounts.
+///   - `canBecomeFirstResponder` → false, so the `becomeFirstResponder()`
+///      call inside its `touchesBegan` is a no-op and our `inputProxy`
+///      stays the first responder (IOS-6.6 routing). The view's pan and
+///      pinch gesture recognizers are unaffected — UIKit doesn't gate
+///      gesture recognizers on responder status.
+/// UIKit's keyboard / responder machinery dispatches via `objc_msgSend`
+/// and picks up our IMPs. The swaps are idempotent (`dispatch_once`
+/// semantics via `static let`) and fire from `GrafttyMobileApp.init`.
+/// (`IOS-6.7`.)
 extension UITerminalView {
     static func suppressGhosttyInputAccessory() {
         _ = swizzleInputAccessoryViewToNilOnce
+        _ = swizzleCanBecomeFirstResponderToFalseOnce
     }
 
     private static let swizzleInputAccessoryViewToNilOnce: Void = {
         let selector = #selector(getter: UIResponder.inputAccessoryView)
         guard let method = class_getInstanceMethod(UITerminalView.self, selector) else { return }
         let block: @convention(block) (UIResponder) -> UIView? = { _ in nil }
+        method_setImplementation(method, imp_implementationWithBlock(block))
+    }()
+
+    private static let swizzleCanBecomeFirstResponderToFalseOnce: Void = {
+        let selector = #selector(getter: UIResponder.canBecomeFirstResponder)
+        guard let method = class_getInstanceMethod(UITerminalView.self, selector) else { return }
+        let block: @convention(block) (UIResponder) -> Bool = { _ in false }
         method_setImplementation(method, imp_implementationWithBlock(block))
     }()
 }
