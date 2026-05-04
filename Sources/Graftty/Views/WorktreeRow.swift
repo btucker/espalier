@@ -204,6 +204,17 @@ struct WorktreeRow: View {
                 .font(.caption)
                 .fontWeight(.medium)
                 .foregroundColor(color(for: tone))
+                .padding(.horizontal, 3)
+                .overlay {
+                    if tone == .conflicting {
+                        // Outline ring on conflict — pairs with the
+                        // breadcrumb's "merge conflict" pill so both
+                        // surfaces share the same visual language.
+                        // PR-8.20.
+                        Capsule()
+                            .strokeBorder(color(for: tone), lineWidth: 1)
+                    }
+                }
                 .modifier(PulseIfPending(isPending: tone.pulses))
         }
         .buttonStyle(.plain)
