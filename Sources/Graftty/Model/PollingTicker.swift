@@ -7,23 +7,23 @@ import GrafttyKit
 /// when inactive), and exposes `pulse()` to wake early for
 /// user-triggered refreshes.
 ///
-/// `pulse()` cancels the in-progress sleep directly (the sleep Task
-/// is owned by the ticker). The earlier implementation raced an
-/// `AsyncStream` consumer Task against a `Task.sleep` Task inside a
-/// nested `withTaskGroup`; on each iteration the losing child
-/// awaited `Task<Void, Never>.value` of the outer pulseTask, which
-/// does not propagate cancellation, so the group could never
-/// return and the polling loop deadlocked after a single
-/// sleep-wins iteration. Single owned sleep Task + direct
-/// cancellation removes that class of bug structurally.
+/// Each sleep races a `Task.sleep` child against a per-iteration
+/// `AsyncStream` consumer child inside `withTaskGroup`. The work
+/// runs INSIDE the children — no nested unstructured Tasks, no
+/// `await someTask.value`. That's load-bearing: awaiting an
+/// unstructured `Task<Void, Never>.value` from `@MainActor` can
+/// hang on the resume hop (swiftlang/swift#57150 / SR-14802),
+/// observable as the polling loop ticking once and then stalling.
+/// Structured children let `group.cancelAll()` actually cancel the
+/// in-flight `Task.sleep` and `for await` directly, so whichever
+/// child wins, the loser unwinds cleanly.
 /// @spec PR-8.10
 @MainActor
 final class PollingTicker: PollingTickerLike {
     private let interval: Duration
     private let pauseWhenInactive: @MainActor () -> Bool
     private var task: Task<Void, Never>?
-    private var sleepTask: Task<Void, Never>?
-    private var sleepGeneration = 0
+    private var pulseContinuation: AsyncStream<Void>.Continuation?
     private var paused = false
     private var activeObserver: NSObjectProtocol?
     private var inactiveObserver: NSObjectProtocol?
@@ -53,37 +53,32 @@ final class PollingTicker: PollingTickerLike {
     func stop() {
         task?.cancel()
         task = nil
-        sleepTask?.cancel()
-        sleepTask = nil
+        pulseContinuation?.finish()
+        pulseContinuation = nil
         removeObservers()
     }
 
     func pulse() {
-        // Cancellation makes `Task.sleep` throw, the `try?` swallows
-        // it, and `sleepUntilPulseOrInterval` returns — so the next
-        // iteration of the polling loop fires `onTick` immediately.
-        sleepTask?.cancel()
+        pulseContinuation?.yield(())
     }
 
     // MARK: - Private
 
     private func sleepUntilPulseOrInterval() async {
-        sleepGeneration += 1
-        let myGeneration = sleepGeneration
-        // Detached so the sleep task is NOT inherited onto MainActor.
-        // On Swift 6.2 a non-detached `Task { }` here inherits the
-        // enclosing `@MainActor`, putting both the outer loop's
-        // `await s.value` and the inner `Task.sleep` on the same
-        // actor — and the outer await fails to resume after the sleep
-        // completes, stalling the loop after one tick.
-        let s = Task.detached { [interval] in
-            _ = try? await Task.sleep(for: interval)
+        let (stream, cont) = AsyncStream<Void>.makeStream()
+        pulseContinuation = cont
+        defer { pulseContinuation = nil }
+
+        await withTaskGroup(of: Void.self) { [interval] group in
+            group.addTask {
+                _ = try? await Task.sleep(for: interval)
+            }
+            group.addTask {
+                for await _ in stream { return }
+            }
+            _ = await group.next()
+            group.cancelAll()
         }
-        sleepTask = s
-        _ = await s.value
-        // Don't clobber a fresh `sleepTask` that `stop()` cleared or a
-        // re-entered loop installed during the await.
-        if sleepGeneration == myGeneration { sleepTask = nil }
     }
 
     private func installObservers() {
