@@ -104,15 +104,15 @@ struct PRStatusStoreIntegrationTests {
             )
         )
 
-        let repoBox = RepoEntryBox(repo: RepoEntry(
-            path: "/repo",
-            displayName: "repo",
-            worktrees: [WorktreeEntry(path: "/wt", branch: "branchA", state: .running)]
-        ))
-        let store = PRStatusStore(executor: fake, detectHost: { _ in Self.origin })
-        let ticker = ManualTicker()
-        await MainActor.run {
-            store.start(ticker: ticker, getRepos: { [repoBox.repo] })
+        let (repoBox, store) = await MainActor.run {
+            let repoBox = RepoEntryBox(repo: RepoEntry(
+                path: "/repo",
+                displayName: "repo",
+                worktrees: [WorktreeEntry(path: "/wt", branch: "branchA", state: .running)]
+            ))
+            let store = PRStatusStore(executor: fake, detectHost: { _ in Self.origin })
+            store.start(ticker: ManualTicker(), getRepos: { [repoBox.repo] })
+            return (repoBox, store)
         }
 
         await store.refresh(worktreePath: "/wt", repoPath: "/repo", branch: "branchA")

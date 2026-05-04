@@ -11,18 +11,13 @@ import Foundation
 struct PRStatusStoreRefreshBranchGateTests {
 
     /// Counts `fetch` calls so we can verify the gate is respected.
-    final class CountingFetcher: PRFetcher, @unchecked Sendable {
-        private let lock = NSLock()
-        private var _count = 0
-        var fetchCount: Int {
-            lock.lock(); defer { lock.unlock() }
-            return _count
-        }
+    actor CountingFetcher: PRFetcher {
+        private(set) var fetchCount = 0
         func fetch(
             origin: HostingOrigin,
             branchesOfInterest: Set<String>
         ) async throws -> RepoPRSnapshot {
-            lock.lock(); _count += 1; lock.unlock()
+            fetchCount += 1
             return RepoPRSnapshot(prsByBranch: [:])
         }
     }
@@ -40,7 +35,7 @@ struct PRStatusStoreRefreshBranchGateTests {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         #expect(!store.isInFlightForTesting("/r"), "sentinel branch must not enter inFlight")
-        #expect(fetcher.fetchCount == 0, "no `gh` invocations for sentinel branches")
+        #expect(await fetcher.fetchCount == 0, "no `gh` invocations for sentinel branches")
     }
 
     @MainActor
@@ -54,11 +49,11 @@ struct PRStatusStoreRefreshBranchGateTests {
 
         store.refresh(worktreePath: "/wt", repoPath: "/r", branch: "main")
         for _ in 0..<20 {
-            if fetcher.fetchCount > 0 { break }
+            if await fetcher.fetchCount > 0 { break }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        #expect(fetcher.fetchCount == 1, "real branches are still fetched")
+        #expect(await fetcher.fetchCount == 1, "real branches are still fetched")
     }
 
     @MainActor
