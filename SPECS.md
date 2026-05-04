@@ -1038,6 +1038,10 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **PR-7.14** The PR polling tick shall dispatch eligible per-worktree fetches and return without awaiting those fetch Tasks. The ticker loop itself must remain live even if a `gh` / `glab` subprocess hangs, otherwise `PR-7.13`'s abandoned-in-flight recovery never gets a later polling tick on which to supersede the stuck fetch. A hung fetch may occupy that worktree's `inFlight` slot until the `PR-7.13` 30-second inFlight cap elapses, but it must not stop unrelated worktrees from polling or require the user to click the sidebar to trigger the separate on-demand refresh path.
 
+### PR-8.x
+
+**PR-8.10** The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cancel the in-progress sleep so the next tick fires immediately rather than waiting for the full interval. The ticker's sleep mechanism must not depend on `AsyncStream` iteration awaited via `Task.value`, because `Task<Void, Never>.value` does not propagate cancellation to the awaited Task and that pattern can deadlock the polling loop after a single sleep-wins iteration — observable to the user as "PR / stats status only updates when I click on a worktree tab".
+
 ## CHAN — Claude Code Channels
 
 ### CHAN-1.x — Router and Subscriber Routing

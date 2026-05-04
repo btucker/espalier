@@ -3,16 +3,26 @@ import AppKit
 import GrafttyKit
 
 /// Drives a single long-lived Task that fires `onTick` on a cadence.
-/// Reacts to app active/inactive notifications (optionally pausing when
-/// inactive), and exposes `pulse()` to wake early for user-triggered
-/// refreshes.
+/// Reacts to app active/inactive notifications (optionally pausing
+/// when inactive), and exposes `pulse()` to wake early for
+/// user-triggered refreshes.
+///
+/// `pulse()` cancels the in-progress sleep directly (the sleep Task
+/// is owned by the ticker). The earlier implementation raced an
+/// `AsyncStream` consumer Task against a `Task.sleep` Task inside a
+/// nested `withTaskGroup`; on each iteration the losing child
+/// awaited `Task<Void, Never>.value` of the outer pulseTask, which
+/// does not propagate cancellation, so the group could never
+/// return and the polling loop deadlocked after a single
+/// sleep-wins iteration. Single owned sleep Task + direct
+/// cancellation removes that class of bug structurally.
+/// @spec PR-8.10
 @MainActor
 final class PollingTicker: PollingTickerLike {
     private let interval: Duration
     private let pauseWhenInactive: @MainActor () -> Bool
     private var task: Task<Void, Never>?
-    private var pulseContinuation: AsyncStream<Void>.Continuation?
-    private var pulseStream: AsyncStream<Void>?
+    private var sleepTask: Task<Void, Never>?
     private var paused = false
     private var activeObserver: NSObjectProtocol?
     private var inactiveObserver: NSObjectProtocol?
@@ -27,19 +37,14 @@ final class PollingTicker: PollingTickerLike {
 
     func start(onTick: @MainActor @escaping () async -> Void) {
         guard task == nil else { return }
-        let (stream, cont) = AsyncStream<Void>.makeStream()
-        pulseStream = stream
-        pulseContinuation = cont
-
         installObservers()
-
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 if !self.paused {
                     await onTick()
                 }
-                await self.sleepOrPulse()
+                await self.sleepUntilPulseOrInterval()
             }
         }
     }
@@ -47,39 +52,27 @@ final class PollingTicker: PollingTickerLike {
     func stop() {
         task?.cancel()
         task = nil
-        pulseContinuation?.finish()
-        pulseContinuation = nil
-        pulseStream = nil
+        sleepTask?.cancel()
+        sleepTask = nil
         removeObservers()
     }
 
     func pulse() {
-        pulseContinuation?.yield(())
+        // Cancellation makes `Task.sleep` throw, the `try?` swallows
+        // it, and `sleepUntilPulseOrInterval` returns — so the next
+        // iteration of the polling loop fires `onTick` immediately.
+        sleepTask?.cancel()
     }
 
     // MARK: - Private
 
-    private func sleepOrPulse() async {
-        let sleepTask = Task<Void, Never> { [interval] in
+    private func sleepUntilPulseOrInterval() async {
+        let s = Task<Void, Never> { [interval] in
             try? await Task.sleep(for: interval)
         }
-        let pulseTask: Task<Void, Never>
-        if let pulseStream {
-            pulseTask = Task {
-                for await _ in pulseStream {
-                    return
-                }
-            }
-        } else {
-            pulseTask = Task {}
-        }
-        // Await whichever finishes first.
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await sleepTask.value }
-            group.addTask { await pulseTask.value }
-            await group.next()
-            group.cancelAll()
-        }
+        sleepTask = s
+        await s.value
+        if sleepTask === s { sleepTask = nil }
     }
 
     private func installObservers() {
