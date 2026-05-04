@@ -39,10 +39,20 @@ struct PollingTickerTests {
         ticker.start { await counter.increment() }
         defer { ticker.stop() }
 
-        try await Task.sleep(for: .milliseconds(220))
+        // Poll until we see 4 ticks or hit the timeout. At 40ms cadence
+        // on an idle machine this takes ~160ms; under heavy CI
+        // parallelism (170+ test suites contending for MainActor for
+        // each onTick hop), each tick can take many times that — so
+        // give the test a generous budget. The bug we're guarding
+        // against is the loop ticking once and never again, which the
+        // timeout-bound liveness check catches reliably.
+        let deadline = Date().addingTimeInterval(5.0)
+        while await counter.value < 4 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         let count = await counter.value
-        #expect(count >= 4, "expected ≥4 ticks within 220ms at 40ms cadence; got \(count)")
+        #expect(count >= 4, "expected ≥4 ticks within 5s; got \(count) (loop must keep firing between sleep cycles)")
     }
 
     /// `pulse()` cancels the active sleep and the loop fires the
