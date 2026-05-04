@@ -23,6 +23,7 @@ final class PollingTicker: PollingTickerLike {
     private let pauseWhenInactive: @MainActor () -> Bool
     private var task: Task<Void, Never>?
     private var sleepTask: Task<Void, Never>?
+    private var sleepGeneration = 0
     private var paused = false
     private var activeObserver: NSObjectProtocol?
     private var inactiveObserver: NSObjectProtocol?
@@ -67,12 +68,18 @@ final class PollingTicker: PollingTickerLike {
     // MARK: - Private
 
     private func sleepUntilPulseOrInterval() async {
+        sleepGeneration += 1
+        let myGeneration = sleepGeneration
         let s = Task<Void, Never> { [interval] in
             try? await Task.sleep(for: interval)
         }
         sleepTask = s
         await s.value
-        if sleepTask == s { sleepTask = nil }
+        // Generation guard: don't clobber a fresh `sleepTask` that
+        // `stop()` cleared or a re-entered loop installed during the
+        // await. Don't use `Task.==` for this — its identity semantics
+        // are not stable across Swift toolchains.
+        if sleepGeneration == myGeneration { sleepTask = nil }
     }
 
     private func installObservers() {
