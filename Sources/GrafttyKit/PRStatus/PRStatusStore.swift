@@ -129,6 +129,15 @@ public final class PRStatusStore {
         fetchStateByRepo[repoPath, default: RepoFetchState()].inFlightSince = date
     }
 
+    /// Seed the last-fetch timestamp so tests can simulate enough
+    /// wall time having passed that the polling cadence guard
+    /// (`!force` branch in `dispatchRepoFetch`) won't suppress a
+    /// non-forced `tick`. Pair with `seedInFlightSinceForTesting`
+    /// when fast-forwarding both the in-flight cap and the cadence.
+    func seedLastFetchForTesting(_ date: Date, forRepo repoPath: String) {
+        fetchStateByRepo[repoPath, default: RepoFetchState()].lastFetch = date
+    }
+
     func applyInfoForTesting(worktreePath: String, info: PRInfo) {
         infos[worktreePath] = info
     }

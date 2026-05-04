@@ -48,6 +48,14 @@ struct WorktreeMonitorBridgeTests {
             ],
             selectedWorktreePath: nil
         ))
+        // Mirror app launch: prStore needs `getRepos` set before it
+        // can apply fetched snapshots to worktrees. The bridge does
+        // not start the store; the app does.
+        prStore.start(
+            ticker: PollingTicker(interval: .seconds(60)),
+            getRepos: { stateBox.state.repos }
+        )
+        defer { prStore.stop() }
         let bridge = WorktreeMonitorBridge(
             appState: Binding(
                 get: { stateBox.state },

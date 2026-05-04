@@ -153,11 +153,13 @@ struct PRStatusStoreRefreshBranchGateTests {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
 
-        // Step past the in-flight window and re-tick.
-        store.seedInFlightSinceForTesting(
-            Date().addingTimeInterval(-3600),
-            forRepo: "/repo"
-        )
+        // Step past both the in-flight window and the cadence
+        // interval, then re-tick. Without seeding `lastFetch` here,
+        // the non-forced tick is suppressed by the cadence guard
+        // because the first tick set `lastFetch` to "now".
+        let past = Date().addingTimeInterval(-3600)
+        store.seedInFlightSinceForTesting(past, forRepo: "/repo")
+        store.seedLastFetchForTesting(past, forRepo: "/repo")
         await ticker.fire()
 
         try await waitUntil(timeout: 1.0) {
