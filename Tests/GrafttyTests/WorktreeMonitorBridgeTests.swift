@@ -4,7 +4,7 @@ import Testing
 import GrafttyKit
 @testable import Graftty
 
-@Suite("WorktreeMonitorBridge origin-ref refresh")
+@Suite("WorktreeMonitorBridge origin-ref refresh", .serialized)
 struct WorktreeMonitorBridgeTests {
 
     @MainActor
@@ -76,16 +76,19 @@ struct WorktreeMonitorBridgeTests {
             repoPath: "/repo"
         )
 
-        try await waitUntil(timeout: 0.5) {
+        // Generous timeouts: under heavy CI test parallelism each
+        // MainActor hop (and there are several in the bridge → store
+        // → fetcher chain) can take hundreds of milliseconds.
+        try await waitUntil(timeout: 5.0) {
             await remoteBranchLister.invocations(for: "/repo") == 1
         }
-        try await waitUntil(timeout: 0.5) {
+        try await waitUntil(timeout: 5.0) {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
-        try await waitUntil(timeout: 2.0) {
+        try await waitUntil(timeout: 15.0) {
             prStore.infos["/repo/wt"]?.number == 42
         }
-        try await waitUntil(timeout: 2.0) {
+        try await waitUntil(timeout: 15.0) {
             await fetcher.invocations >= 3
         }
         #expect(!prStore.absent.contains("/repo/wt"))

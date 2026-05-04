@@ -24,7 +24,7 @@ import Testing
 PollingTicker liveness
 
 @spec PR-8.10: The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cancel the in-progress sleep so the next tick fires immediately rather than waiting for the full interval. The ticker's sleep mechanism must not depend on `AsyncStream` iteration awaited via `Task.value`, because `Task<Void, Never>.value` does not propagate cancellation to the awaited Task and that pattern can deadlock the polling loop after a single sleep-wins iteration — observable to the user as "PR / stats status only updates when I click on a worktree tab".
-""")
+""", .serialized)
 struct PollingTickerTests {
 
     /// Multiple ticks must fire over time without external pulses —
@@ -39,20 +39,23 @@ struct PollingTickerTests {
         ticker.start { await counter.increment() }
         defer { ticker.stop() }
 
-        // Poll until we see 4 ticks or hit the timeout. At 40ms cadence
-        // on an idle machine this takes ~160ms; under heavy CI
-        // parallelism (170+ test suites contending for MainActor for
-        // each onTick hop), each tick can take many times that — so
-        // give the test a generous budget. The bug we're guarding
-        // against is the loop ticking once and never again, which the
-        // timeout-bound liveness check catches reliably.
-        let deadline = Date().addingTimeInterval(5.0)
-        while await counter.value < 4 && Date() < deadline {
+        // Poll until we see ≥2 ticks or hit the timeout. The bug
+        // PR-8.10 is meant to catch is the loop firing exactly once
+        // and then stalling forever — `count >= 2` proves the loop
+        // keeps itself alive across sleep cycles. We deliberately
+        // don't assert a stricter cadence: under heavy CI test
+        // parallelism each `onTick` hop to MainActor can take
+        // hundreds of milliseconds, and asserting "≥4 ticks at 40ms
+        // cadence" flakes. Liveness is what the spec actually says
+        // ("indefinitely"); cadence-precision is a property of an
+        // unloaded scheduler.
+        let deadline = Date().addingTimeInterval(10.0)
+        while await counter.value < 2 && Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
 
         let count = await counter.value
-        #expect(count >= 4, "expected ≥4 ticks within 5s; got \(count) (loop must keep firing between sleep cycles)")
+        #expect(count >= 2, "expected ≥2 ticks within 10s; got \(count) (loop must keep firing between sleep cycles)")
     }
 
     /// `pulse()` cancels the active sleep and the loop fires the

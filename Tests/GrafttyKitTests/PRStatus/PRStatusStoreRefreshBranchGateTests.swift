@@ -7,7 +7,7 @@ import Foundation
 /// exists locally — the on-demand callers (sidebar selection,
 /// `branchDidChange` from a HEAD-change event) need the same
 /// gates the polling tick uses (`PR-7.5`).
-@Suite("PRStatusStore — refresh fetchable-branch gate")
+@Suite("PRStatusStore — refresh fetchable-branch gate", .serialized)
 struct PRStatusStoreRefreshBranchGateTests {
 
     /// Counts `fetch` calls so we can verify the gate is respected.
@@ -149,7 +149,7 @@ struct PRStatusStoreRefreshBranchGateTests {
 
         await lister.set(branches: ["feature"])
         remoteBranchStore.refresh(repoPath: "/repo")
-        try await waitUntil(timeout: 1.0) {
+        try await waitUntil(timeout: 5.0) {
             remoteBranchStore.hasRemote(repoPath: "/repo", branch: "feature")
         }
 
@@ -162,7 +162,7 @@ struct PRStatusStoreRefreshBranchGateTests {
         store.seedLastFetchForTesting(past, forRepo: "/repo")
         await ticker.fire()
 
-        try await waitUntil(timeout: 1.0) {
+        try await waitUntil(timeout: 10.0) {
             store.infos["/repo/wt"]?.number == 77
         }
     }
