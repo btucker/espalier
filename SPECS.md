@@ -1030,6 +1030,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **PR-7.14** The PR polling tick shall dispatch eligible per-repo fetches and return without awaiting those fetch Tasks. The ticker loop itself must remain live even if a `gh` / `glab` subprocess hangs, otherwise `PR-7.13`'s abandoned-in-flight recovery never gets a later polling tick on which to supersede the stuck fetch. A hung fetch may occupy that repo's `inFlight` slot until the `PR-7.13` 30-second inFlight cap elapses, but it must not stop unrelated repos from polling or require the user to click the sidebar to trigger the separate on-demand refresh path.
 
+**PR-7.15** PRStatusStore.onTransition shall deliver a (RoutableEvent, worktreePath, attrs) tuple on every PR state or CI conclusion transition, so consumers can re-route via TeamEventDispatcher without parsing wire-format event types.
+
 ### PR-8.x
 
 **PR-8.10** The polling ticker shall keep firing `onTick` on its configured interval indefinitely, without stalling after one or more sleep / pulse cycles. `pulse()` shall cause the next tick to fire ahead of schedule, with bounded latency, rather than waiting for the full interval.
@@ -1057,8 +1059,6 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **PR-8.21** 
 
 **PR-8.22** 
-
-**PR-7.15** PRStatusStore.onTransition shall deliver a (RoutableEvent, worktreePath, attrs) tuple on every PR state or CI conclusion transition, so consumers can re-route via TeamEventDispatcher without parsing wire-format event types.
 
 ## IOS — iOS App
 
