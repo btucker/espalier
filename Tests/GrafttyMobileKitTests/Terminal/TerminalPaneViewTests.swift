@@ -31,6 +31,63 @@ private final class DeferredEditMenuAnimator: NSObject, UIEditMenuInteractionAni
 @MainActor
 struct TerminalPaneViewTests {
 
+    @Test("@spec IOS-11.13: When the user presses and holds a displayed HTTP or HTTPS URL in the terminal, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.")
+    func longPressOpensTheCompleteURLUnderThePressedWord() throws {
+        let container = TerminalInputContainerView(frame: .zero)
+        let text = "See https://example.com/first and https://example.org/path?q=hello#part."
+        var opened: [URL] = []
+        container.openURL = { opened.append($0) }
+        container.prepareLongPressMenu(
+            at: .zero, text: text, anchorRange: (text as NSString).range(of: "hello")
+        )
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+            "Open Link", "Select", "Select All",
+        ])
+        let action = try #require(container.longPressMenuForTesting(hasPasteString: false)
+            .children.compactMap { $0 as? UIAction }.first { $0.title == "Open Link" })
+        let button = UIButton()
+        button.addAction(action, for: .touchUpInside)
+        button.sendActions(for: .touchUpInside)
+        #expect(opened.map(\.absoluteString) == ["https://example.org/path?q=hello#part"])
+        #expect(!container.selectionController.isActive)
+
+        container.prepareLongPressMenu(
+            at: .zero, text: text, anchorRange: (text as NSString).range(of: "See")
+        )
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+            "Select", "Select All",
+        ])
+        button.sendActions(for: .touchUpInside)
+        #expect(opened.count == 1, "A dismissed menu must not open a stale URL")
+    }
+
+    @Test
+    func terminalLinksResolveUTF16AnchorsAndRejectMissingTargets() {
+        let text = "🪴 https://example.com/path, ordinary text"
+        #expect(TerminalLinkResolver.url(in: text, anchorRange: (text as NSString).range(of: "path"))?
+            .absoluteString == "https://example.com/path")
+        #expect(TerminalLinkResolver.url(in: text, anchorRange: nil) == nil)
+        #expect(TerminalLinkResolver.url(in: text, anchorRange: NSRange(location: NSNotFound, length: 2)) == nil)
+        #expect(TerminalLinkResolver.url(in: text, anchorRange: NSRange(location: 1, length: Int.max)) == nil)
+        #expect(TerminalLinkResolver.url(in: text, anchorRange: NSRange(location: 2, length: 0)) == nil)
+        #expect(TerminalLinkResolver.webURL("file:///tmp/file") == nil)
+        #expect(TerminalLinkResolver.webURL("javascript:alert(1)") == nil)
+    }
+
+    @Test("When the terminal surface is replaced, selection and cached link targets are discarded")
+    func detachedSurfaceClearsSelectionAndLinks() {
+        let container = TerminalInputContainerView(frame: .zero)
+        container.selectionController.beginSelection(at: .zero)
+        container.enterSelectionModeForTesting()
+        container.prepareLongPressMenu(at: .zero, text: "https://example.com/old-surface", anchorRange: NSRange(location: 8, length: 7))
+        container.terminalDidDetachSurface()
+        #expect(!container.selectionController.isActive)
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        container.prepareLongPressMenu(at: .zero, text: "New text", anchorRange: NSRange(location: 0, length: 3))
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        #expect(container.terminalPanRecognizersAllowIndirectScrollingForTesting)
+    }
+
     @Test
     func terminalDoesNotExposeGhosttyAccessoryView() {
         let container = TerminalInputContainerView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))

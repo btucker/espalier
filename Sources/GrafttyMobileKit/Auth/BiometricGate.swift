@@ -32,11 +32,13 @@ public final class BiometricGate {
     public enum State: Equatable { case locked, unlocked }
 
     public private(set) var state: State = .locked
+    public private(set) var isAuthenticating = false
 
     private let clock: any Clock
     private let authenticator: any BiometricAuthenticator
     private let idleTimeout: TimeInterval
     private var backgroundedAt: Date?
+    private var attemptedThisForeground = false
 
     public init(
         clock: any Clock = SystemClock(),
@@ -49,6 +51,10 @@ public final class BiometricGate {
     }
 
     public func authenticate() async {
+        guard state == .locked, !isAuthenticating else { return }
+        isAuthenticating = true
+        attemptedThisForeground = true
+        defer { isAuthenticating = false }
         switch await authenticator.authenticate() {
         case .success:
             state = .unlocked
@@ -59,8 +65,15 @@ public final class BiometricGate {
     }
 
     public func applicationDidEnterBackground() {
+        attemptedThisForeground = false
         guard state == .unlocked else { return }
         backgroundedAt = clock.now
+    }
+
+    public func applicationDidBecomeActive() async {
+        applicationWillEnterForeground()
+        guard !attemptedThisForeground else { return }
+        await authenticate()
     }
 
     public func applicationWillEnterForeground() {

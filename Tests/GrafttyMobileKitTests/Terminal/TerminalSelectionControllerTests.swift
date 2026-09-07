@@ -1,6 +1,8 @@
 #if canImport(UIKit)
 import Foundation
+import GhosttyTerminal
 import Testing
+import UIKit
 @testable import GrafttyMobileKit
 
 @MainActor
@@ -43,7 +45,7 @@ final class FakePasteboard: Pasteboard {
 struct TerminalSelectionControllerTests {
 
     @Test("""
-    @spec IOS-11.2: When the user taps **Select** in the long-press menu, the application shall ask libghostty to word-select the cell under the long-press point by synthesizing a LEFT mouse-down/up pair plus a second click within libghostty's double-click window, and shall enter selection mode for that pane.
+    @spec IOS-11.2: When the user taps **Select** in the long-press menu, the application shall word-select the cell under the press by synthesizing a left click followed by a held second press, so subsequent drags extend the selection across words and lines. Copy, Cancel, and Select All shall release the held button.
     """)
     func beginSelectionSynthesizesDoubleClickAtPointAndActivatesMode() {
         let surface = FakeSurfaceProxy()
@@ -52,14 +54,86 @@ struct TerminalSelectionControllerTests {
         controller.beginSelection(at: CGPoint(x: 10, y: 20))
 
         #expect(controller.isActive)
-        // Sequence: position, down, up, down, up — two clicks at the same point.
+        // Keep the second press down so a later drag extends this word.
         #expect(surface.events == [
             .mousePos(10, 20),
             .leftDown,
             .leftUp,
             .leftDown,
-            .leftUp,
         ])
+    }
+
+    @Test
+    func copyingReleasesHeldButtonBeforeClearingSelection() {
+        let surface = FakeSurfaceProxy()
+        let controller = TerminalSelectionController(surface: surface)
+        controller.beginSelection(at: .zero)
+        controller.extend(to: CGPoint(x: 120, y: 40))
+        surface.selectionText = "first line\nsecond line"
+        let pasteboard = FakePasteboard()
+        #expect(controller.copy(toPasteboard: pasteboard) == "first line\nsecond line")
+        #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")])
+    }
+
+    @Test
+    func cancelAndSelectAllReleaseHeldButton() {
+        let surface = FakeSurfaceProxy()
+        let controller = TerminalSelectionController(surface: surface)
+        controller.beginSelection(at: .zero)
+        surface.events.removeAll()
+        controller.cancel()
+        #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")])
+        controller.beginSelection(at: .zero)
+        surface.events.removeAll()
+        controller.selectAll()
+        #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("select_all")])
+    }
+
+    @Test
+    func realSurfaceSelectionExtendsAcrossWordsAndLines() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let view = UITerminalView(frame: window.bounds)
+        let metrics = SelectionMetrics()
+        view.delegate = metrics
+        let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+        let renderer = MobileTerminalControllerFactory.make(configText: """
+        font-size = 14
+        window-padding-x = 0
+        window-padding-y = 0
+        """)
+        view.configuration = .init(backend: .inMemory(session))
+        view.controller = renderer
+        host.view.addSubview(view)
+        defer {
+            view.removeFromSuperview()
+            window.isHidden = true
+        }
+        let surface = try #require(view.surface)
+        session.receive("alpha beta gamma\r\nsecond line words")
+        for _ in 0..<100 where session.readViewportText()?.contains("second line words") != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.readViewportText()?.contains("second line words") == true)
+        let grid = try #require(metrics.value)
+        let scale = view.contentScaleFactor
+        let cellWidth = CGFloat(grid.cellWidthPixels) / scale
+        let cellHeight = CGFloat(grid.cellHeightPixels) / scale
+        let controller = TerminalSelectionController(surface: RealSurfaceProxy { surface })
+        defer { controller.cancel() }
+        controller.beginSelection(at: CGPoint(x: cellWidth * 1.5, y: cellHeight * 0.5))
+        #expect(surface.readSelection() == "alpha")
+        controller.extend(to: CGPoint(x: cellWidth * 8.5, y: cellHeight * 1.5))
+        let selected = try #require(surface.readSelection())
+        #expect(selected.contains("alpha beta gamma"))
+        #expect(selected.contains("second line"))
+    }
+
+    private final class SelectionMetrics: TerminalSurfaceGridResizeDelegate {
+        var value: TerminalGridMetrics?
+        func terminalDidResize(_ size: TerminalGridMetrics) { value = size }
     }
 
     @Test("""

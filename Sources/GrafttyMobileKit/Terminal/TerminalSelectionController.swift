@@ -8,6 +8,7 @@ import CoreGraphics
 @MainActor
 public final class TerminalSelectionController {
     public private(set) var isActive: Bool = false
+    private var isLeftMouseDown = false
     private let surface: SurfaceProxy
 
     public init(surface: SurfaceProxy) {
@@ -16,6 +17,7 @@ public final class TerminalSelectionController {
 
     /// IOS-11.2: word-select via synthesized double-click at `point`.
     public func beginSelection(at point: CGPoint) {
+        releaseMouseButton()
         surface.sendMousePos(x: Double(point.x), y: Double(point.y))
         // Two left-clicks at the same point — libghostty's mouse handler
         // promotes back-to-back presses within its double-click window
@@ -23,23 +25,21 @@ public final class TerminalSelectionController {
         surface.sendLeftMouseDown()
         surface.sendLeftMouseUp()
         surface.sendLeftMouseDown()
-        surface.sendLeftMouseUp()
+        isLeftMouseDown = true
         isActive = true
     }
 
     /// IOS-11.3: full-viewport select via libghostty's `select_all` binding.
     public func selectAll() {
+        releaseMouseButton()
         surface.performAction("select_all")
         isActive = true
     }
 
     /// IOS-11.4: forward pan to libghostty's mouse-position handler,
-    /// which extends the current selection while the LEFT button
-    /// remains pressed in libghostty's view. (Our two-press begin
-    /// leaves no button held, so for v1 we treat `extend` as
-    /// shift-click: hold shift via mods? — TODO at integration time
-    /// if drag-extend doesn't visibly extend on-device. Initial impl
-    /// uses plain sendMousePos; we'll revisit with a real surface.)
+    /// which extends the current selection while the second LEFT press
+    /// remains held. Finger lifts keep that anchor until Copy or Cancel,
+    /// allowing another drag to adjust the same selection.
     public func extend(to point: CGPoint) {
         guard isActive else { return }
         surface.sendMousePos(x: Double(point.x), y: Double(point.y))
@@ -65,8 +65,15 @@ public final class TerminalSelectionController {
     }
 
     private func exit() {
+        releaseMouseButton()
         surface.performAction("clear_selection")
         isActive = false
+    }
+
+    private func releaseMouseButton() {
+        guard isLeftMouseDown else { return }
+        surface.sendLeftMouseUp()
+        isLeftMouseDown = false
     }
 }
 #endif

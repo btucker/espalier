@@ -2569,7 +2569,8 @@ struct GrafttyApp: App {
                         worktreeMonitor: worktreeMonitor,
                         statsStore: statsStore,
                         terminalManager: terminalManager,
-                        teamEventDispatcher: dispatcherForWeb
+                        teamEventDispatcher: dispatcherForWeb,
+                        entryPoint: .pairedClient
                     )
                     switch result {
                     case .success(let outcome):

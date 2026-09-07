@@ -42,10 +42,6 @@ public struct RootView: View {
             }
         }
         .environment(\.biometricGate, gate)
-        .task {
-            await gate.authenticate()
-            updateConnectionAccess()
-        }
         .onChange(of: gate.state) { _, _ in
             updateConnectionAccess()
         }
@@ -61,7 +57,7 @@ public struct RootView: View {
                 )
             }
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
             switch newPhase {
             case .background:
                 gate.applicationDidEnterBackground()
@@ -77,8 +73,9 @@ public struct RootView: View {
             case .active:
                 gate.applicationWillEnterForeground()
                 updateConnectionAccess()
-                if gate.state == .locked {
-                    Task { await gate.authenticate() }
+                Task {
+                    guard scenePhase == .active else { return }
+                    await gate.applicationDidBecomeActive()
                 }
             default:
                 break
@@ -152,10 +149,16 @@ public struct RootView: View {
 
     private var lockOverlay: some View {
         VStack(spacing: 16) {
-            Image(systemName: "lock.shield").font(.system(size: 64))
+            Image("GrafttyLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .accessibilityHidden(true)
             Text("Graftty is locked").font(.title2)
             Button("Unlock") { Task { await gate.authenticate() } }
                 .buttonStyle(.borderedProminent)
+                .disabled(gate.isAuthenticating || scenePhase != .active)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
