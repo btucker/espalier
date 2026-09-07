@@ -7,7 +7,7 @@ import Testing
 @MainActor
 @Suite
 struct RemoteWorktreeCreationTests {
-    @Test("@spec GIT-5.23: When a paired client creates a worktree, the application shall register its first pane and return an attachable session without requiring a Mac terminal renderer or changing the Mac's selected worktree.")
+    @Test("@spec GIT-5.23: When a paired client creates a worktree, the application shall register its first pane for terminal attachment and listening-port discovery without requiring a Mac terminal renderer or changing the Mac's selected worktree.")
     func creationSucceedsWithoutMacRenderer() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("graftty-remote-create-\(UUID().uuidString)")
@@ -25,6 +25,12 @@ struct RemoteWorktreeCreationTests {
         state.selectedWorktreePath = repo
         let binding = Binding(get: { state }, set: { state = $0 })
         let manager = TerminalManager(socketPath: root.appendingPathComponent("control.sock").path)
+        let scanner = PortScanner(
+            runner: RemoteCreationLsofRunner(),
+            walker: RemoteCreationProcessTreeWalker()
+        )
+        await scanner.setPIDResolver { _ in 1234 }
+        manager.portScanner = scanner
         let monitor = WorktreeMonitor()
         let stats = WorktreeStatsStore(
             compute: { _, _, _, _ in .init(defaultBranch: nil, stats: nil) },
@@ -62,6 +68,16 @@ struct RemoteWorktreeCreationTests {
         #expect(manager.handle(for: pane) == nil)
         #expect(manager.surfaceBudget.lru.isEmpty)
         #expect(state.selectedWorktreePath == repo)
+
+        // Registration crosses to the scanner actor. Drive its ordinary
+        // polling path until that registration reaches the next scan.
+        let deadline = ContinuousClock.now + .seconds(1)
+        while ContinuousClock.now < deadline {
+            await scanner.tick()
+            if !(await scanner.bindings(for: pane)).isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await scanner.bindings(for: pane).map(\.port) == [3000])
     }
 
     private func git(_ arguments: [String]) throws {
@@ -74,4 +90,17 @@ struct RemoteWorktreeCreationTests {
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
     }
+}
+
+private struct RemoteCreationLsofRunner: LsofRunner {
+    func run(pids: String) async -> String? {
+        """
+        COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+        node 1234 test 23u IPv4 0x1 0t0 TCP 127.0.0.1:3000 (LISTEN)
+        """
+    }
+}
+
+private struct RemoteCreationProcessTreeWalker: ProcessTreeWalking {
+    func descendants(of root: pid_t) -> [pid_t] { [root] }
 }

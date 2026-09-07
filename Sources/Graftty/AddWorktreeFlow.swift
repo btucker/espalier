@@ -296,6 +296,9 @@ enum AddWorktreeFlow {
                 paneSessions: appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].paneSessions,
                 worktreePath: worktreePath
             )
+            for pane in splitTree.allLeaves {
+                terminalManager.registerForPortScan(pane)
+            }
         } else {
             let createdSurfaces = terminalManager.createSurfaces(
                 for: splitTree,

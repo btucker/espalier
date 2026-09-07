@@ -74,10 +74,11 @@ public struct RootView: View {
                 gate.applicationWillEnterForeground()
                 updateConnectionAccess()
                 Task {
-                    guard scenePhase == .active else { return }
-                    await gate.applicationDidBecomeActive()
+                    await gate.authenticateOnActivation()
                 }
-            default:
+            case .inactive:
+                gate.applicationDidBecomeInactive()
+            @unknown default:
                 break
             }
         }

@@ -456,6 +456,7 @@ public final class TerminalInputContainerView: UIView,
     /// after the gesture has ended. Updated on `.began`.
     private var lastLongPressPoint: CGPoint = .zero
     private var longPressURL: URL?
+    private(set) var terminalGridMetrics: TerminalGridMetrics?
     var openURL: (URL) -> Void = { UIApplication.shared.open($0) }
     /// Paste and edit-menu dismissal are independent UIKit callbacks whose
     /// relative ordering is not part of our contract. Pair them by long-press
@@ -585,9 +586,14 @@ public final class TerminalInputContainerView: UIView,
         terminalView.becomeFirstResponder()
     }
 
-    func prepareLongPressMenu(at point: CGPoint, text: String, anchorRange: NSRange?) {
+    func prepareLongPressMenu(at point: CGPoint, text: String) {
         lastLongPressPoint = point
-        longPressURL = TerminalLinkResolver.url(in: text, anchorRange: anchorRange)
+        longPressURL = terminalGridMetrics.flatMap {
+            TerminalLinkResolver.url(
+                in: text, at: point, grid: $0,
+                displayScale: terminalView.contentScaleFactor
+            )
+        }
         longPressMenuGeneration &+= 1
         pendingPasteRefocusGeneration = nil
         completedLongPressMenuDismissalGeneration = nil
@@ -595,7 +601,7 @@ public final class TerminalInputContainerView: UIView,
 
     private func presentLongPressMenu(for request: TerminalTextSelectionRequest) {
         prepareLongPressMenu(
-            at: request.sourcePoint, text: request.text, anchorRange: request.anchorRange
+            at: request.sourcePoint, text: request.text
         )
         let config = UIEditMenuConfiguration(
             identifier: longPressMenuIdentifier(for: longPressMenuGeneration),
@@ -613,10 +619,12 @@ public final class TerminalInputContainerView: UIView,
             selectionController.extend(to: point)
         case .changed:
             selectionController.extend(to: point)
-        case .ended:
-            selectionController.extend(to: point)
-            presentSelectionMenu(near: point)
-        case .cancelled, .failed:
+        case .ended, .cancelled, .failed:
+            selectionController.endExtension(
+                at: point,
+                viewportHeight: terminalView.bounds.height,
+                displayScale: terminalView.contentScaleFactor
+            )
             presentSelectionMenu(near: point)
         default: break
         }
@@ -971,11 +979,18 @@ extension TerminalInputContainerView: TerminalSurfaceLifecycleDelegate {
     public func terminalDidDetachSurface() {
         cancelActiveSelectionIfAny()
         longPressURL = nil
+        terminalGridMetrics = nil
         longPressMenuGeneration &+= 1
         pendingPasteRefocusGeneration = nil
         completedLongPressMenuDismissalGeneration = nil
         longPressMenu.dismissMenu()
         selectionMenu.dismissMenu()
+    }
+}
+
+extension TerminalInputContainerView: TerminalSurfaceGridResizeDelegate {
+    public func terminalDidResize(_ size: TerminalGridMetrics) {
+        terminalGridMetrics = size
     }
 }
 

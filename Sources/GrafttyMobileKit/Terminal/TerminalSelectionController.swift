@@ -45,6 +45,18 @@ public final class TerminalSelectionController {
         surface.sendMousePos(x: Double(point.x), y: Double(point.y))
     }
 
+    /// Stop edge autoscrolling while retaining the held selection anchor.
+    public func endExtension(at point: CGPoint, viewportHeight: CGFloat, displayScale: CGFloat) {
+        guard isActive else { return }
+        let scale = max(1, displayScale)
+        let heightPixels = (viewportHeight * scale).rounded(.down)
+        // Ghostty scrolls within one pixel of an edge and ignores mouse
+        // moves smaller than one pixel. Two pixels crosses both thresholds.
+        let inset = min(2, heightPixels / 2)
+        let yPixels = min(max(point.y * scale, inset), heightPixels - inset)
+        extend(to: CGPoint(x: point.x, y: yPixels / scale))
+    }
+
     /// IOS-11.6: extract + clipboard + clear + exit. Returns the copied
     /// text (or nil if there was nothing to copy).
     @discardableResult

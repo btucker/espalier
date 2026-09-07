@@ -494,7 +494,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **GIT-5.22** Worktrees created through GitWorktreeAdd shall allow Git's installed post-checkout hook to complete before the creation call returns, matching a direct `git worktree add`.
 
-**GIT-5.23** When a paired client creates a worktree, the application shall register its first pane and return an attachable session without requiring a Mac terminal renderer or changing the Mac's selected worktree.
+**GIT-5.23** When a paired client creates a worktree, the application shall register its first pane for terminal attachment and listening-port discovery without requiring a Mac terminal renderer or changing the Mac's selected worktree.
 
 ## ATTN — Attention Notification System
 
@@ -1422,6 +1422,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-3.7** While the application is locked, the lock overlay shall display the Graftty logo above its unlock controls using a bundled image asset.
 
+**IOS-3.8** When authentication completes after the application has entered the background, the application shall discard that result and request fresh authentication on the next active foreground visit.
+
 ### IOS-4.x — Session fetching and rendering
 
 **IOS-4.1** When the user selects a paired Mac, the application shall consume its authenticated panes-state channel and render the snapshot as a **worktree** picker grouped by `WorktreePanes.repoDisplayName` (one row per running worktree, not one row per pane). The mobile flow remains drill-down — worktree → pane tree → single pane.
@@ -1618,7 +1620,9 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-11.12** When the user taps Paste from the terminal long-press edit menu, the application shall forward the clipboard paste request and re-focus the eligible `UITerminalView` after UIKit's edit-menu dismissal completes, so the dismissal cannot subsequently resign the terminal and leave the user without keyboard control.
 
-**IOS-11.13** When the user presses and holds a displayed HTTP or HTTPS URL in the terminal, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.
+**IOS-11.13** When the user presses and holds a displayed HTTP or HTTPS URL whose terminal cells map unambiguously to the viewport text, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.
+
+**IOS-11.14** When a terminal selection drag ends or is cancelled at a viewport edge, the application shall stop selection autoscrolling while preserving the selection anchor for another drag.", arguments: [CGFloat(1), 2, 3]) func endingDragStopsAtTheViewportBoundaryWithoutReleasingTheAnchor(scale: CGFloat) { let surface = FakeSurfaceProxy() let controller = TerminalSelectionController(surface: surface) let height: CGFloat = 400.25 let heightPixels = (height * scale).rounded(.down) controller.beginSelection(at: CGPoint(x: 30, y: 100)) // Ghostty scrolls at y <= 1px or y > heightPixels - 1px, // and drops mouse moves smaller than one surface pixel. for yPixels in [CGFloat(-20), 1, heightPixels - 0.5, heightPixels + 20] { let point = CGPoint(x: 30, y: yPixels / scale) controller.extend(to: point) surface.events.removeAll() controller.endExtension(at: point, viewportHeight: height, displayScale: scale) #expect(controller.isActive) #expect(surface.events.count == 1) guard case let .mousePos(x, y) = surface.events.last else { Issue.record("Ending the drag must send a bounded position without releasing the button") return } #expect(x == 30) let boundedPixels = CGFloat(y) * scale #expect(boundedPixels > 1) #expect(boundedPixels <= heightPixels - 1) #expect(abs(boundedPixels - yPixels) >= 1) } controller.extend(to: CGPoint(x: 60, y: 200)) #expect(surface.events.last == .mousePos(60, 200)) controller.cancel() #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")]) } @Test func realSurfaceSelectionExtendsAcrossWordsAndLinesAndStopsAutoscrolling() async throws { let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400)) let host = UIViewController() window.rootViewController = host window.makeKeyAndVisible() let view = UITerminalView(frame: window.bounds) let metrics = SelectionMetrics() view.delegate = metrics let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in }) let renderer = MobileTerminalControllerFactory.make(configText:
 
 ## IPAD — iPad Layout
 
@@ -2243,6 +2247,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 ### URL-2.x
 
 **URL-2.1** When the macOS app opens a `graftty://open` URL that resolves to a tracked worktree, the application shall select that worktree, focus the resolved pane when one is present and the worktree is running, and bring the app to the foreground.
+
+**URL-2.2** When a macOS deep link selects a running worktree, the application shall restore any missing terminal surfaces using the worktree's existing pane sessions before bringing the app to the foreground.
 
 ### URL-3.x
 

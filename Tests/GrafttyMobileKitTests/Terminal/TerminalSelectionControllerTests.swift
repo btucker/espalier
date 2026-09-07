@@ -89,8 +89,42 @@ struct TerminalSelectionControllerTests {
         #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("select_all")])
     }
 
+    @Test("@spec IOS-11.14: When a terminal selection drag ends or is cancelled at a viewport edge, the application shall stop selection autoscrolling while preserving the selection anchor for another drag.", arguments: [CGFloat(1), 2, 3])
+    func endingDragStopsAtTheViewportBoundaryWithoutReleasingTheAnchor(scale: CGFloat) {
+        let surface = FakeSurfaceProxy()
+        let controller = TerminalSelectionController(surface: surface)
+        let height: CGFloat = 400.25
+        let heightPixels = (height * scale).rounded(.down)
+        controller.beginSelection(at: CGPoint(x: 30, y: 100))
+
+        // Ghostty scrolls at y <= 1px or y > heightPixels - 1px,
+        // and drops mouse moves smaller than one surface pixel.
+        for yPixels in [CGFloat(-20), 1, heightPixels - 0.5, heightPixels + 20] {
+            let point = CGPoint(x: 30, y: yPixels / scale)
+            controller.extend(to: point)
+            surface.events.removeAll()
+            controller.endExtension(at: point, viewportHeight: height, displayScale: scale)
+            #expect(controller.isActive)
+            #expect(surface.events.count == 1)
+            guard case let .mousePos(x, y) = surface.events.last else {
+                Issue.record("Ending the drag must send a bounded position without releasing the button")
+                return
+            }
+            #expect(x == 30)
+            let boundedPixels = CGFloat(y) * scale
+            #expect(boundedPixels > 1)
+            #expect(boundedPixels <= heightPixels - 1)
+            #expect(abs(boundedPixels - yPixels) >= 1)
+        }
+
+        controller.extend(to: CGPoint(x: 60, y: 200))
+        #expect(surface.events.last == .mousePos(60, 200))
+        controller.cancel()
+        #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")])
+    }
+
     @Test
-    func realSurfaceSelectionExtendsAcrossWordsAndLines() async throws {
+    func realSurfaceSelectionExtendsAcrossWordsAndLinesAndStopsAutoscrolling() async throws {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
         let host = UIViewController()
         window.rootViewController = host
@@ -129,6 +163,31 @@ struct TerminalSelectionControllerTests {
         let selected = try #require(surface.readSelection())
         #expect(selected.contains("alpha beta gamma"))
         #expect(selected.contains("second line"))
+
+        controller.cancel()
+        session.receive("\r\n" + (0..<80).map { "history \($0)" }.joined(separator: "\r\n"))
+        for _ in 0..<100 where session.readViewportText()?.contains("history 79") != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.readViewportText()?.contains("history 79") == true)
+        controller.beginSelection(at: CGPoint(x: cellWidth * 1.5, y: view.bounds.midY))
+        let beforeScrolling = session.readViewportText()
+        controller.extend(to: CGPoint(x: cellWidth * 1.5, y: 0))
+        for _ in 0..<100 where session.readViewportText() == beforeScrolling {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.readViewportText() != beforeScrolling, "The edge drag must start autoscrolling")
+        controller.endExtension(
+            at: CGPoint(x: cellWidth * 1.5, y: 0),
+            viewportHeight: view.bounds.height,
+            displayScale: scale
+        )
+        let pausedViewport = session.readViewportText()
+        let pausedSelection = surface.readSelection()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(session.readViewportText() == pausedViewport)
+        #expect(surface.readSelection() == pausedSelection)
+        #expect(controller.isActive)
     }
 
     private final class SelectionMetrics: TerminalSurfaceGridResizeDelegate {
