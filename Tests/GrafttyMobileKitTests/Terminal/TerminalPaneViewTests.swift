@@ -76,7 +76,7 @@ struct TerminalPaneViewTests {
     }
 
     @Test("""
-@spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
+@spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
 """)
     func terminalLongPressUsesGhosttySelectionRequestDelegate() throws {
         let container = TerminalInputContainerView(
@@ -91,10 +91,10 @@ struct TerminalPaneViewTests {
         #expect(container.terminalView.delegate === container)
         #expect(container.terminalView.gestureRecognizerShouldBegin(terminalLongPress))
         #expect(container.gestureRecognizers?.contains { $0 is UILongPressGestureRecognizer } == false)
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
             "Select", "Select All",
         ])
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: true) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: true) == [
             "Select", "Select All", "Paste",
         ])
     }

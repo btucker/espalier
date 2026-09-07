@@ -1153,6 +1153,9 @@ public final class WebServer {
 
         func handlerAdded(context: ChannelHandlerContext) {
             channel = context.channel
+            let writeOnLoop = NIOLoopBound({ [weak self] (data: Data) in
+                self?.session?.write(data)
+            }, eventLoop: context.eventLoop)
             let bridge = TerminalAttachCoordinator(
                 sessionName: sessionName,
                 clientID: clientID,
@@ -1171,8 +1174,12 @@ public final class WebServer {
                 resize: { [weak self] cols, rows in
                     self?.session?.resize(cols: cols, rows: rows)
                 },
-                write: { [weak self] data in
-                    self?.session?.write(data)
+                write: { [channel = context.channel] data in
+                    if channel.eventLoop.inEventLoop {
+                        writeOnLoop.value(data)
+                    } else {
+                        channel.eventLoop.execute { writeOnLoop.value(data) }
+                    }
                 }
             )
             coordinator = bridge

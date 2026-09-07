@@ -1,0 +1,119 @@
+import Foundation
+import AppKit
+import Testing
+import GrafttyProtocol
+@testable import GrafttyKit
+
+@MainActor
+struct ImagePasteHostTests {
+    final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [String] = []
+        func record(_ event: String) { lock.withLock { events.append(event) } }
+        var snapshot: [String] { lock.withLock { events } }
+    }
+
+    private func make(
+        _ recorder: Recorder, clipboardSucceeds: Bool = true,
+        store: SessionDisplayOwnershipStore = .init(), supportsImagePaste: Bool = true
+    ) -> TerminalAttachCoordinator {
+        let coordinator = TerminalAttachCoordinator(
+            sessionName: "image-pane", clientID: DisplayClientID("phone"), defaultKind: .ios,
+            ownershipStore: store, broadcaster: DisplayOwnershipBroadcaster(),
+            sendText: { text in
+                if case .imagePaste(.result(_, let error)) = try? WebControlEnvelope.parse(Data(text.utf8)) {
+                    recorder.record(error == nil ? "success" : "error")
+                }
+            }, resize: { _, _ in },
+            write: { data in recorder.record(data == Data([0x16]) ? "ctrl-v" : "unexpected-input") },
+            supportsImagePaste: supportsImagePaste,
+            pasteImage: { _ in
+                recorder.record("clipboard")
+                return clipboardSucceeds
+            }
+        )
+        coordinator.handleControl(.hello(clientID: DisplayClientID("phone"), kind: .ios,
+            role: .interactive, visible: true, cols: 80, rows: 24))
+        coordinator.handleControl(.takeControl(clientID: DisplayClientID("phone"), kind: .ios, cols: 80, rows: 24))
+        return coordinator
+    }
+
+    private func upload(to coordinator: TerminalAttachCoordinator) {
+        let id = UUID()
+        coordinator.handleControl(.imagePaste(.begin(id: id, byteCount: 3)))
+        coordinator.handleControl(.imagePaste(.chunk(id: id, offset: 0, data: Data([1, 2, 3]))))
+        coordinator.handleControl(.imagePaste(.commit(id: id)))
+    }
+
+    @Test("""
+    @spec IOS-11.15: When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
+    """)
+    func clipboardBeforeKeystroke() async {
+        let recorder = Recorder()
+        let coordinator = make(recorder)
+        upload(to: coordinator)
+        for _ in 0..<100 where recorder.snapshot.count < 3 { await Task.yield() }
+        #expect(recorder.snapshot == ["clipboard", "ctrl-v", "success"])
+    }
+
+    @Test("""
+    @spec IOS-11.16: If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
+    """)
+    func failureDoesNotSendKeystroke() async {
+        let recorder = Recorder()
+        let coordinator = make(recorder, clipboardSucceeds: false)
+        upload(to: coordinator)
+        for _ in 0..<100 where recorder.snapshot.count < 2 { await Task.yield() }
+        #expect(recorder.snapshot == ["clipboard", "error"])
+    }
+
+    @Test
+    func disconnectedUploadDoesNotTouchClipboard() async {
+        let recorder = Recorder()
+        let coordinator = make(recorder)
+        upload(to: coordinator)
+        coordinator.detach()
+        for _ in 0..<100 { await Task.yield() }
+        #expect(!recorder.snapshot.contains("clipboard"))
+        #expect(!recorder.snapshot.contains("ctrl-v"))
+    }
+
+    @Test
+    func ownershipLossBeforeClipboardWriteRejectsPaste() async {
+        let recorder = Recorder()
+        let store = SessionDisplayOwnershipStore()
+        let coordinator = make(recorder, store: store)
+        upload(to: coordinator)
+        _ = store.detachClient(sessionName: "image-pane", clientID: DisplayClientID("phone"), fallbackGrid: .daemonFallback)
+        for _ in 0..<100 { await Task.yield() }
+        #expect(recorder.snapshot == ["error"])
+    }
+
+    @Test
+    func relayedSessionRejectsClipboardMutation() async {
+        let recorder = Recorder()
+        let coordinator = make(recorder, supportsImagePaste: false)
+        upload(to: coordinator)
+        for _ in 0..<100 { await Task.yield() }
+        #expect(!recorder.snapshot.contains("clipboard"))
+        #expect(!recorder.snapshot.contains("ctrl-v"))
+    }
+
+    @Test
+    func nativeClipboardContainsReadableImageAndRejectsInvalidData() throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 8, bitsPerPixel: 32
+        ))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        #expect(HostImagePasteboard.write(png, to: pasteboard))
+        #expect(NSImage(pasteboard: pasteboard) != nil)
+        #expect(pasteboard.data(forType: .tiff) != nil)
+        let changeCount = pasteboard.changeCount
+        #expect(!HostImagePasteboard.write(Data([1, 2, 3]), to: pasteboard))
+        #expect(pasteboard.changeCount == changeCount)
+    }
+}

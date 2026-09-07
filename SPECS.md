@@ -1586,7 +1586,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### IOS-11.x
 
-**IOS-11.1** While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
+**IOS-11.1** While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
 
 **IOS-11.2** When the user taps **Select** in the long-press menu, the application shall ask libghostty to word-select the cell under the long-press point by synthesizing a LEFT mouse-down/up pair plus a second click within libghostty's double-click window, and shall enter selection mode for that pane.
 
@@ -1600,7 +1600,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-11.7** When the user taps **Cancel**, taps outside the highlighted selection, or presses a key on the terminal control bar while in selection mode, the application shall clear libghostty's selection and exit selection mode without modifying the pasteboard.
 
-**IOS-11.8** When the user taps **Paste** in the long-press menu, the application shall read `UIPasteboard.general.string` and, when non-empty, send it via `SessionClient.sendPaste(_:)`. An empty or absent clipboard string shall be a silent no-op.
+**IOS-11.8** When the user taps Paste in the long-press menu, the application shall upload a clipboard image when present, otherwise send non-empty clipboard text as bracketed paste; an empty clipboard shall be a silent no-op.
 
 **IOS-11.9** `SessionClient.sendPaste(_:)` shall wrap the payload in `ESC [ 200 ~` and `ESC [ 201 ~` and emit the wrapped sequence as a single binary WebSocket frame. Committed software Return normalization from `IOS-6.3` shall not apply to this path; the payload's own line endings shall be preserved verbatim.
 
@@ -1609,6 +1609,20 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **IOS-11.11** While a pane is rendered as a worktree-detail preview tile (`IOS-4.10`), the long-press selection menu shall not be installed; tapping the tile shall continue to open the fullscreen pane per `IOS-4.21`. Guaranteed by `.allowsHitTesting(false)` applied to the inner `TerminalPaneView` in `paneContent` — `TerminalInputContainerView`'s long-press gesture recogniser never receives touches. The `onPasteRequested` closure is also left `nil` at the `TerminalPaneView` call site.
 
 **IOS-11.12** When the user taps Paste from the terminal long-press edit menu, the application shall forward the clipboard paste request and re-focus the eligible `UITerminalView` after UIKit's edit-menu dismissal completes, so the dismissal cannot subsequently resign the terminal and leave the user without keyboard control.
+
+**IOS-11.13** When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
+
+**IOS-11.14** If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
+
+**IOS-11.15** When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
+
+**IOS-11.16** If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
+
+**IOS-11.17** When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
+
+**IOS-11.18** If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+
+**IOS-11.19** When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
 
 ## IPAD — iPad Layout
 

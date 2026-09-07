@@ -118,6 +118,11 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
     private var attached = false
     private var detached = false
     private var lastAcceptedOwnerGrid: DisplayGrid?
+    private let supportsImagePaste: Bool
+    private let pasteImage: @MainActor @Sendable (Data) -> Bool
+    private var imageUpload = ImagePasteUpload()
+    private var imageUploadEpoch: UInt64?
+    private var pendingImageCommit: UUID?
 
     public init(
         sessionName: String,
@@ -127,7 +132,9 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
         broadcaster: DisplayOwnershipBroadcaster,
         sendText: @escaping @Sendable (String) -> Void,
         resize: @escaping @Sendable (UInt16, UInt16) -> Void,
-        write: @escaping @Sendable (Data) -> Void
+        write: @escaping @Sendable (Data) -> Void,
+        supportsImagePaste: Bool = true,
+        pasteImage: (@MainActor @Sendable (Data) -> Bool)? = nil
     ) {
         self.sessionName = sessionName
         self.clientID = clientID
@@ -137,6 +144,8 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
         self.sendText = sendText
         self.resize = resize
         self.write = write
+        self.supportsImagePaste = supportsImagePaste
+        self.pasteImage = pasteImage ?? { HostImagePasteboard.write($0) }
         self.registration = broadcaster.register(sessionName: sessionName, clientID: clientID) { [weak self] snapshot in
             self?.sendOwnershipSnapshot(snapshot)
         }
@@ -166,6 +175,7 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
             )
             noteAcceptedOwnerGridIfCurrentOwner(snapshot: snapshot)
             broadcaster.broadcast(snapshot)
+            if supportsImagePaste { sendText(WebControlEnvelope.imagePaste(.available).encoded()) }
 
         case let .takeControl(protocolClientID, _, cols, rows):
             guard bindOrVerify(protocolClientID: protocolClientID) else { return }
@@ -203,8 +213,80 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
         case let .resize(cols, rows):
             handleLegacyResize(cols: cols, rows: rows)
 
+        case .imagePaste(let message):
+            handleImagePaste(message)
+
         case .grid, .ownership:
             break
+        }
+    }
+
+    private func handleImagePaste(_ message: ImagePasteMessage) {
+        let id: UUID
+        switch message {
+        case .begin(let value, _), .chunk(let value, _, _), .commit(let value), .cancel(let value):
+            id = value
+        case .available, .result:
+            return
+        }
+        do {
+            let completed: Data? = try lock.withLock {
+                let snapshot = ownershipStore.snapshot(sessionName: sessionName)
+                guard supportsImagePaste, !detached, attached, snapshot.ownerClientID == clientID else {
+                    throw ImagePasteUpload.UploadError.invalidUpload
+                }
+                if case .cancel = message {
+                    imageUpload.cancel(id: id)
+                    if pendingImageCommit == id { pendingImageCommit = nil }
+                    return nil
+                }
+                guard pendingImageCommit == nil else { throw ImagePasteUpload.UploadError.invalidUpload }
+                switch message {
+                case .begin(_, let byteCount):
+                    try imageUpload.begin(id: id, byteCount: byteCount)
+                    imageUploadEpoch = snapshot.epoch
+                case .chunk(_, let offset, let data):
+                    guard imageUploadEpoch == snapshot.epoch else { throw ImagePasteUpload.UploadError.invalidUpload }
+                    try imageUpload.append(id: id, offset: offset, data: data)
+                case .commit:
+                    guard imageUploadEpoch == snapshot.epoch else { throw ImagePasteUpload.UploadError.invalidUpload }
+                    let data = try imageUpload.finish(id: id)
+                    pendingImageCommit = id
+                    return data
+                default:
+                    break
+                }
+                return nil
+            }
+            guard let completed else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let error: String? = self.lock.withLock {
+                    let snapshot = self.ownershipStore.snapshot(sessionName: self.sessionName)
+                    guard !self.detached, self.pendingImageCommit == id,
+                          snapshot.ownerClientID == self.clientID,
+                          snapshot.epoch == self.imageUploadEpoch else {
+                        if self.pendingImageCommit == id { self.pendingImageCommit = nil }
+                        return "Pane control changed before the image could be pasted."
+                    }
+                    defer { self.pendingImageCommit = nil }
+                    guard self.pasteImage(completed) else {
+                        return "The host could not put this image on its clipboard."
+                    }
+                    let current = self.ownershipStore.snapshot(sessionName: self.sessionName)
+                    guard current.ownerClientID == self.clientID, current.epoch == snapshot.epoch else {
+                        return "Pane control changed before the image could be pasted."
+                    }
+                    self.write(Data([0x16]))
+                    return nil
+                }
+                self.sendText(WebControlEnvelope.imagePaste(.result(id: id, error: error)).encoded())
+            }
+        } catch {
+            lock.withLock { imageUpload.cancel(id: id) }
+            sendText(WebControlEnvelope.imagePaste(.result(
+                id: id, error: "Image upload rejected. Check pane control and try pasting again."
+            )).encoded())
         }
     }
 
@@ -236,6 +318,9 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
             return
         }
         detached = true
+        imageUpload = .init()
+        imageUploadEpoch = nil
+        pendingImageCommit = nil
         let wasAttached = attached
         let fallbackGrid = lastAcceptedOwnerGrid
         let registration = self.registration

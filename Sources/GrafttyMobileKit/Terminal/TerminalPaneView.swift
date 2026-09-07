@@ -750,10 +750,10 @@ public final class TerminalInputContainerView: UIView,
         onUserInteraction?()
     }
 
-    func longPressMenuActionTitlesForTesting(hasPasteString: Bool) -> [String] {
+    func longPressMenuActionTitlesForTesting(hasPasteContent: Bool) -> [String] {
         longPressUIMenu(
             for: longPressMenuGeneration,
-            hasPasteString: hasPasteString
+            hasPasteContent: hasPasteContent
         ).children.compactMap { ($0 as? UIAction)?.title }
     }
 
@@ -937,7 +937,7 @@ public final class TerminalInputContainerView: UIView,
 }
 
 extension TerminalInputContainerView: TerminalSurfaceTextSelectionRequestDelegate {
-    /// @spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
+    /// @spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
     public func terminalDidRequestTextSelection(_ request: TerminalTextSelectionRequest) {
         presentLongPressMenu(at: request.sourcePoint)
     }
@@ -974,7 +974,7 @@ extension TerminalInputContainerView: UIEditMenuInteractionDelegate {
             else { return nil }
             return longPressUIMenu(
                 for: longPressMenuGeneration,
-                hasPasteString: UIPasteboard.general.hasStrings
+                hasPasteContent: UIPasteboard.general.hasStrings || UIPasteboard.general.hasImages
             )
         }
         return selectionUIMenu()
@@ -996,12 +996,12 @@ extension TerminalInputContainerView: UIEditMenuInteractionDelegate {
         }
     }
 
-    private func longPressUIMenu(for generation: UInt, hasPasteString: Bool) -> UIMenu {
+    private func longPressUIMenu(for generation: UInt, hasPasteContent: Bool) -> UIMenu {
         var children: [UIMenuElement] = [
             UIAction(title: "Select") { [weak self] _ in self?.performSelectAtLongPressPoint() },
             UIAction(title: "Select All") { [weak self] _ in self?.performSelectAll() },
         ]
-        if hasPasteString {
+        if hasPasteContent {
             children.append(UIAction(title: "Paste") { [weak self] _ in
                 self?.performPaste(for: generation)
             })

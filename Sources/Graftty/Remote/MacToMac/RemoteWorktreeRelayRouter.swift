@@ -510,7 +510,7 @@ final class RelayedTerminalByteStream:
             handleOwnershipSnapshot(snapshot)
         case .grid(let cols, let rows):
             reportPTYSize(cols: cols, rows: rows)
-        case .resize, .hello, .takeControl, .ownerResize:
+        case .resize, .hello, .takeControl, .ownerResize, .imagePaste:
             break
         }
     }

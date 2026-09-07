@@ -432,12 +432,17 @@ public final class TerminalSessionHandler: ChannelInboundHandler, @unchecked Sen
                 }
             },
             write: { [weak self] data in
-                // Only called from `handleBinary` (owner-gated inbound
-                // bytes), which runs on the event loop via channelRead —
-                // yield into the same FIFO pipe as the legacy path so
-                // byte order is preserved across both.
-                self?.enqueuePTYWrite(data, channel: channel)
-            }
+                // Image paste completes on MainActor after writing the
+                // clipboard; ordinary input already runs on this loop.
+                if loop.inEventLoop {
+                    self?.enqueuePTYWrite(data, channel: channel)
+                } else {
+                    loop.execute { [weak self] in
+                        self?.enqueuePTYWrite(data, channel: channel)
+                    }
+                }
+            },
+            supportsImagePaste: stream.usesHostClipboard
         )
         self.coordinator = coordinator
 
