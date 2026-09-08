@@ -8,6 +8,19 @@ private final class NilInputKeyCommand: UIKeyCommand {
     override var input: String? { nil }
 }
 
+private final class TerminalResponseRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ data: Data) {
+        lock.withLock { self.data.append(data) }
+    }
+
+    func contains(_ response: String) -> Bool {
+        lock.withLock { data.range(of: Data(response.utf8)) != nil }
+    }
+}
+
 @MainActor
 private final class DeferredEditMenuAnimator: NSObject, UIEditMenuInteractionAnimating {
     private var completions: [() -> Void] = []
@@ -30,6 +43,175 @@ private final class DeferredEditMenuAnimator: NSObject, UIEditMenuInteractionAni
 @Suite
 @MainActor
 struct TerminalPaneViewTests {
+
+    @Test("@spec IOS-11.13: When the user presses and holds a displayed HTTP or HTTPS URL whose terminal cells map unambiguously to the viewport text, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.")
+    func longPressOpensTheCompleteURLUnderThePressedWord() throws {
+        let container = TerminalInputContainerView(frame: .zero)
+        let text = "See https://example.com/first and https://example.org/path?q=hello#part."
+        container.terminalView.contentScaleFactor = 1
+        container.terminalDidResize(TerminalGridMetrics(
+            columns: 100, rows: 1, widthPixels: 1000, heightPixels: 20,
+            cellWidthPixels: 10, cellHeightPixels: 20
+        ))
+        var opened: [URL] = []
+        container.openURL = { opened.append($0) }
+        container.prepareLongPressMenu(
+            at: CGPoint(x: CGFloat((text as NSString).range(of: "hello").location) * 10 + 5, y: 10),
+            text: text
+        )
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
+            "Open Link", "Select", "Select All",
+        ])
+        let action = try #require(container.longPressMenuForTesting(hasPasteContent: false)
+            .children.compactMap { $0 as? UIAction }.first { $0.title == "Open Link" })
+        let button = UIButton()
+        button.addAction(action, for: .touchUpInside)
+        button.sendActions(for: .touchUpInside)
+        #expect(opened.map(\.absoluteString) == ["https://example.org/path?q=hello#part"])
+        #expect(!container.selectionController.isActive)
+
+        container.prepareLongPressMenu(
+            at: CGPoint(x: 5, y: 10), text: text
+        )
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
+            "Select", "Select All",
+        ])
+        button.sendActions(for: .touchUpInside)
+        #expect(opened.count == 1, "A dismissed menu must not open a stale URL")
+    }
+
+    @Test
+    func terminalLinksRejectMissingGeometryAndUnsupportedSchemes() {
+        let container = TerminalInputContainerView(frame: .zero)
+        container.prepareLongPressMenu(at: .zero, text: "https://example.com/path")
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
+        #expect(TerminalLinkResolver.webURL("file:///tmp/file") == nil)
+        #expect(TerminalLinkResolver.webURL("javascript:alert(1)") == nil)
+    }
+
+    @Test
+    func terminalLinksUsePhysicalRowsAfterASCIIWrapping() {
+        let grid = TerminalGridMetrics(
+            columns: 40, rows: 12, widthPixels: 400, heightPixels: 240,
+            cellWidthPixels: 10, cellHeightPixels: 20
+        )
+        let text = String(repeating: "a", count: 50)
+            + "\n\nhttps://one.example/same\nhttps://two.example/same"
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 215, y: 90), grid: grid, displayScale: 1
+        )?.absoluteString == "https://two.example/same")
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 215, y: 50), grid: grid, displayScale: 1
+        ) == nil)
+
+        let wrappedURL = "https://example.com/" + String(repeating: "path", count: 15)
+        #expect(TerminalLinkResolver.url(
+            in: wrappedURL, at: CGPoint(x: 45, y: 30), grid: grid, displayScale: 1
+        )?.absoluteString == wrappedURL)
+        #expect(TerminalLinkResolver.url(
+            in: "界\n" + wrappedURL, at: CGPoint(x: 45, y: 30), grid: grid, displayScale: 1
+        ) == nil)
+    }
+
+    @Test
+    func terminalLinksRequireEveryPossiblePaddedCellToMatch() {
+        let grid = TerminalGridMetrics(
+            columns: 40, rows: 10, widthPixels: 420, heightPixels: 200,
+            cellWidthPixels: 10, cellHeightPixels: 20
+        )
+        let text = "https://example.com/path ordinary"
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 50, y: 5), grid: grid, displayScale: 2
+        )?.absoluteString == "https://example.com/path")
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 120, y: 5), grid: grid, displayScale: 2
+        ) == nil)
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 2.5, y: 5), grid: grid, displayScale: 2
+        ) == nil, "A possible left margin must not count as the URL's first cell")
+        var paddedVertically = grid
+        paddedVertically.heightPixels = 220
+        #expect(TerminalLinkResolver.url(
+            in: text, at: CGPoint(x: 50, y: 2.5), grid: paddedVertically, displayScale: 2
+        ) == nil, "A possible top margin must not count as the URL's first row")
+    }
+
+    @Test
+    func realSurfaceLinksResolveAfterWrappedOutput() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let container = TerminalInputContainerView(frame: window.bounds)
+        container.layoutIfNeeded()
+        let responses = TerminalResponseRecorder()
+        let session = InMemoryTerminalSession(write: { responses.append($0) }, resize: { _ in })
+        let renderer = MobileTerminalControllerFactory.make(configText: "font-size = 14")
+        container.terminalView.configuration = .init(backend: .inMemory(session))
+        container.terminalView.controller = renderer
+        host.view.addSubview(container)
+        container.layoutIfNeeded()
+        defer {
+            container.removeFromSuperview()
+            window.isHidden = true
+        }
+        let grid = try #require(container.terminalGridMetrics)
+        try #require(grid.rows >= 8)
+        // Public UI metrics arrive before the parser resizes. A cursor
+        // clamped to the bottom-right proves the parser reached this grid
+        // before the fixture can wrap and scroll at its startup dimensions.
+        let bottomRight = "\u{1b}[\(grid.rows);\(grid.columns)R"
+        for _ in 0..<100 where !responses.contains(bottomRight) {
+            session.receive("\u{1b}[999;999H\u{1b}[6n")
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(responses.contains(bottomRight))
+        let prefix = String(repeating: "a", count: Int(grid.columns) + 5)
+        session.receive("\u{1b}[H\u{1b}[2J" + prefix + "\r\n\r\nhttps://one.example/same\r\nhttps://two.example/same")
+        for _ in 0..<100 where session.readViewportText()?.contains("https://two.example/same") != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let text = try #require(session.readViewportText())
+        #expect(container.terminalGridMetrics == grid)
+        #expect(text.hasPrefix(prefix + "\n\n"), "Soft wraps join, while hard blank rows remain. Grid: \(grid)")
+        let cellHeight = CGFloat(grid.cellHeightPixels)
+        let unusedHeight = CGFloat(grid.heightPixels) - CGFloat(grid.rows) * cellHeight
+        try #require(unusedHeight < cellHeight)
+        let scale = container.terminalView.contentScaleFactor
+        let point = CGPoint(
+            x: CGFloat(grid.cellWidthPixels) * 15.5 / scale,
+            y: (cellHeight * 4 + (cellHeight + unusedHeight) / 2) / scale
+        )
+        var opened: URL?
+        container.openURL = { opened = $0 }
+        container.prepareLongPressMenu(at: point, text: text)
+        let action = try #require(container.longPressMenuForTesting(hasPasteContent: false)
+            .children.compactMap { $0 as? UIAction }.first { $0.title == "Open Link" })
+        let button = UIButton()
+        button.addAction(action, for: .touchUpInside)
+        button.sendActions(for: .touchUpInside)
+        #expect(opened?.absoluteString == "https://two.example/same")
+    }
+
+    @Test("When the terminal surface is replaced, selection and cached link targets are discarded")
+    func detachedSurfaceClearsSelectionAndLinks() {
+        let container = TerminalInputContainerView(frame: .zero)
+        container.terminalView.contentScaleFactor = 1
+        container.terminalDidResize(TerminalGridMetrics(
+            columns: 100, rows: 1, widthPixels: 1000, heightPixels: 20,
+            cellWidthPixels: 10, cellHeightPixels: 20
+        ))
+        container.selectionController.beginSelection(at: .zero)
+        container.enterSelectionModeForTesting()
+        container.prepareLongPressMenu(at: CGPoint(x: 100, y: 10), text: "https://example.com/old-surface")
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
+        container.terminalDidDetachSurface()
+        #expect(!container.selectionController.isActive)
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
+        container.prepareLongPressMenu(at: .zero, text: "New text")
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
+        #expect(container.terminalPanRecognizersAllowIndirectScrollingForTesting)
+    }
 
     @Test
     func terminalDoesNotExposeGhosttyAccessoryView() {

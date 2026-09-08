@@ -66,7 +66,7 @@ struct ImagePasteHostTests {
     }
 
     @Test("""
-    @spec IOS-11.15: When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
+    @spec IOS-11.17: When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
     """)
     func clipboardBeforeKeystroke() async {
         let recorder = Recorder()
@@ -77,7 +77,7 @@ struct ImagePasteHostTests {
     }
 
     @Test("""
-    @spec IOS-11.16: If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
+    @spec IOS-11.18: If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
     """)
     func failureDoesNotSendKeystroke() async {
         let recorder = Recorder()

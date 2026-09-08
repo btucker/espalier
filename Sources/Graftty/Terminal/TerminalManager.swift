@@ -661,12 +661,12 @@ final class TerminalManager: ObservableObject {
             && configuration?.shellReadySignalAvailable == true
     }
 
-    /// PORTS-4.5: At surface-creation time the zmx daemon may not have
+    /// PORTS-4.5: At pane-registration time the zmx daemon may not have
     /// written its `pty spawned ... pid=N` line yet, so `lookupShellPID`
     /// can transiently return nil. Register as pending in that case so
     /// the scanner re-attempts resolution on each tick — otherwise the
     /// pane silently never gets scanned and chips never appear.
-    private func registerForPortScan(_ terminalID: PaneSlotID) {
+    func registerForPortScan(_ terminalID: PaneSlotID) {
         guard let scanner = portScanner else { return }
         if let pid = lookupShellPID(for: terminalID) {
             Task { await scanner.registerPane(terminalID, shellPID: pid) }

@@ -494,6 +494,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **GIT-5.22** Worktrees created through GitWorktreeAdd shall allow Git's installed post-checkout hook to complete before the creation call returns, matching a direct `git worktree add`.
 
+**GIT-5.23** When a paired client creates a worktree, the application shall register its first pane for terminal attachment and listening-port discovery without requiring a Mac terminal renderer or changing the Mac's selected worktree.
+
 ## ATTN — Attention Notification System
 
 ### ATTN-1.x — CLI Tool
@@ -1414,6 +1416,14 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-3.4** During pre-main launch, the application's `LaunchScreen.storyboard` shall render a uniform `systemGroupedBackgroundColor` background with no foreground image and no branded color, so the visual transition from pre-main into the first frame is seamless. The first visible frame after pre-main is the lock overlay (`IOS-3.1`), which paints `.regularMaterial` over the host picker's `List` (whose default background is `systemGroupedBackground`). Matching the launch backdrop to the post-launch lock state's underlying color eliminates the launch → blur → list color flash that a branded launch image would otherwise introduce. Per Apple's HIG, the launch screen is a shell that resembles the first screen, not a branding splash.
 
+**IOS-3.5** When launch, scene activation, or the Unlock button requests authentication while a prompt is pending, the application shall keep a single authentication request in flight.
+
+**IOS-3.6** When the scene first becomes active while locked, the application shall promptly request authentication once per foreground visit. Transient inactive-to-active transitions after denial or cancellation shall leave the retry button available without reopening the prompt.
+
+**IOS-3.7** While the application is locked, the lock overlay shall display the Graftty logo above its unlock controls using a bundled image asset.
+
+**IOS-3.8** When authentication completes after the application has entered the background, the application shall discard that result and request fresh authentication on the next active foreground visit.
+
 ### IOS-4.x — Session fetching and rendering
 
 **IOS-4.1** When the user selects a paired Mac, the application shall consume its authenticated panes-state channel and render the snapshot as a **worktree** picker grouped by `WorktreePanes.repoDisplayName` (one row per running worktree, not one row per pane). The mobile flow remains drill-down — worktree → pane tree → single pane.
@@ -1588,7 +1598,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-11.1** While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
 
-**IOS-11.2** When the user taps **Select** in the long-press menu, the application shall ask libghostty to word-select the cell under the long-press point by synthesizing a LEFT mouse-down/up pair plus a second click within libghostty's double-click window, and shall enter selection mode for that pane.
+**IOS-11.2** When the user taps **Select** in the long-press menu, the application shall word-select the cell under the press by synthesizing a left click followed by a held second press, so subsequent drags extend the selection across words and lines. Copy, Cancel, and Select All shall release the held button.
 
 **IOS-11.3** When the user taps **Select All** in the long-press menu, the application shall invoke libghostty's `select_all` binding action via `surface.performAction("select_all")` and shall enter selection mode for that pane with the visible viewport highlighted.
 
@@ -1610,21 +1620,25 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-11.12** When the user taps Paste from the terminal long-press edit menu, the application shall forward the clipboard paste request and re-focus the eligible `UITerminalView` after UIKit's edit-menu dismissal completes, so the dismissal cannot subsequently resign the terminal and leave the user without keyboard control.
 
-**IOS-11.13** When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
+**IOS-11.13** When the user presses and holds a displayed HTTP or HTTPS URL whose terminal cells map unambiguously to the viewport text, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.
 
-**IOS-11.14** If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
+**IOS-11.14** When a terminal selection drag ends or is cancelled at a viewport edge, the application shall stop selection autoscrolling while preserving the selection anchor for another drag.", arguments: [CGFloat(1), 2, 3]) func endingDragStopsAtTheViewportBoundaryWithoutReleasingTheAnchor(scale: CGFloat) { let surface = FakeSurfaceProxy() let controller = TerminalSelectionController(surface: surface) let height: CGFloat = 400.25 let heightPixels = (height * scale).rounded(.down) controller.beginSelection(at: CGPoint(x: 30, y: 100)) // Ghostty scrolls at y <= 1px or y > heightPixels - 1px, // and drops mouse moves smaller than one surface pixel. for yPixels in [CGFloat(-20), 1, heightPixels - 0.5, heightPixels + 20] { let point = CGPoint(x: 30, y: yPixels / scale) controller.extend(to: point) surface.events.removeAll() controller.endExtension(at: point, viewportHeight: height, displayScale: scale) #expect(controller.isActive) #expect(surface.events.count == 1) guard case let .mousePos(x, y) = surface.events.last else { Issue.record("Ending the drag must send a bounded position without releasing the button") return } #expect(x == 30) let boundedPixels = CGFloat(y) * scale #expect(boundedPixels > 1) #expect(boundedPixels <= heightPixels - 1) #expect(abs(boundedPixels - yPixels) >= 1) } controller.extend(to: CGPoint(x: 60, y: 200)) #expect(surface.events.last == .mousePos(60, 200)) controller.cancel() #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")]) } @Test func realSurfaceSelectionExtendsAcrossWordsAndLinesAndStopsAutoscrolling() async throws { let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400)) let host = UIViewController() window.rootViewController = host window.makeKeyAndVisible() let view = UITerminalView(frame: window.bounds) let metrics = SelectionMetrics() view.delegate = metrics let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in }) let renderer = MobileTerminalControllerFactory.make(configText:
 
-**IOS-11.15** When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
+**IOS-11.15** When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
 
-**IOS-11.16** If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
+**IOS-11.16** If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
 
-**IOS-11.17** When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
+**IOS-11.17** When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
 
-**IOS-11.18** If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+**IOS-11.18** If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
 
-**IOS-11.19** When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
+**IOS-11.19** When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
 
-**IOS-11.20** While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
+**IOS-11.20** If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+
+**IOS-11.21** When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
+
+**IOS-11.22** While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
 
 ## IPAD — iPad Layout
 
@@ -2249,6 +2263,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 ### URL-2.x
 
 **URL-2.1** When the macOS app opens a `graftty://open` URL that resolves to a tracked worktree, the application shall select that worktree, focus the resolved pane when one is present and the worktree is running, and bring the app to the foreground.
+
+**URL-2.2** When a macOS deep link selects a running worktree, the application shall restore any missing terminal surfaces using the worktree's existing pane sessions before bringing the app to the foreground.
 
 ### URL-3.x
 

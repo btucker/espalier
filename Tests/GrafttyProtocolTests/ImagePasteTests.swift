@@ -4,7 +4,7 @@ import Testing
 
 struct ImagePasteTests {
     @Test("""
-    @spec IOS-11.13: When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
+    @spec IOS-11.15: When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
     """)
     func transferRoundTrip() throws {
         let id = UUID()
@@ -33,7 +33,7 @@ struct ImagePasteTests {
     }
 
     @Test("""
-    @spec IOS-11.14: If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
+    @spec IOS-11.16: If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
     """)
     func rejectsInvalidTransfers() throws {
         let id = UUID()

@@ -729,7 +729,7 @@ struct SessionClientTests {
     }
 
     @Test("""
-    @spec IOS-11.19: When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
+    @spec IOS-11.21: When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
     """)
     func controlVPastesLocalImageOrPreservesControlByte() async throws {
         let ws = FakeWS()
@@ -781,7 +781,7 @@ struct SessionClientTests {
     }
 
     @Test("""
-    @spec IOS-11.20: While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
+    @spec IOS-11.22: While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
     """, arguments: [false, true])
     func imagePasteOrdersLaterInputAfterConfirmation(fails: Bool) async throws {
         let ws = FakeWS()
@@ -902,7 +902,7 @@ struct SessionClientTests {
     }
 
     @Test("""
-    @spec IOS-11.17: When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
+    @spec IOS-11.19: When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
     """)
     func imagePasteUsesControlFramesAndWaitsForHost() async throws {
         let ws = FakeWS()
@@ -932,7 +932,7 @@ struct SessionClientTests {
     }
 
     @Test("""
-    @spec IOS-11.18: If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+    @spec IOS-11.20: If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
     """)
     func imagePasteRequiresHostSupport() async throws {
         let ws = FakeWS()
