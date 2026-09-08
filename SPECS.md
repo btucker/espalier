@@ -322,6 +322,28 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **TERM-11.17** When a zmx-backed pane starts while backgrounded before its view lays out and then enters the visible set for the first time, the application shall forward the current live libghostty grid to the running zmx PTY unconditionally, without waiting for a later layout-settled or viewport callback; a same-size forward is a kernel no-op, so ordinary focus switches do not create harmful resize churn.
 
+### TERM-12.x — Paged History on Mac and Mobile
+
+**TERM-12.1** When Graftty on Mac or mobile opens a terminal through a paging-capable attachment, the application shall restore the current screen and parser state with a bounded recent-history allowance before fetching older history, without serializing or transferring the complete retained history on the initial path.
+
+**TERM-12.2** When the user approaches the oldest loaded history on Mac or mobile, the application shall request the next contiguous older page and retain fetched pages in a bounded in-memory cache, without requesting the entire remaining history.
+
+**TERM-12.3** While older history is loading, the application shall continue applying live output and forwarding authorized user input without waiting for history completion, with bounded history work and queued history bytes.
+
+**TERM-12.4** When a history page arrives, the application shall validate its session incarnation, checkpoint, screen, and page position before importing it, reject stale or duplicate pages, and preserve a contiguous history range without mixing content across checkpoints.
+
+**TERM-12.5** When older history is inserted while the user is reading or selecting text, the application shall preserve the visible content anchor and selection on Mac and mobile; when the user follows live output, history insertion shall preserve that following behavior.
+
+**TERM-12.6** When the terminal grid changes while history is pending, the application shall preserve access to retained older history through compatible reflow or explicit checkpoint recovery, reject incompatible page replies, and never treat discarded pages as successfully loaded.
+
+**TERM-12.7** If a history request fails or its checkpoint expires, then the application shall keep the live terminal and already loaded content usable, distinguish unavailable history from fully loaded history, and provide explicit retry or recovery without silently removing the reader's current content.
+
+**TERM-12.8** When the user selects an already mounted and connected Mac terminal, the application shall reuse its terminal state and loaded history without opening a replacement attachment or fetching a replacement checkpoint solely because of selection.
+
+**TERM-12.9** When either endpoint lacks a compatible paged-history protocol or snapshot codec, the application shall select the existing VT attach path before rendering binary snapshot data, and shall not interleave that fallback with a partially imported checkpoint.
+
+**TERM-12.10** When a paged attachment closes or a checkpoint is replaced, the application shall cancel its pending history requests and release its checkpoint resources; while attachments remain open, the host shall bound retained checkpoint resources across clients.
+
 ## GIT — Worktree Discovery & Monitoring
 
 ### GIT-1.x — Initial Discovery
@@ -1551,6 +1573,8 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **IOS-7.4** On authenticated terminal-channel failure for a pane whose session name is still present in the latest paired panes-state snapshot, the application shall display a per-pane "disconnected" banner with "Reconnect" and "Back to worktrees" buttons. While the host view is visible, the application shall retry automatically with exponential backoff: the delay starts at 1 second, doubles after each successive failure, and is capped at 30 seconds. Each successful connect resets the delay to 1 second. When the host view is not visible, no automatic retry shall occur.
 
 **IOS-7.5** When the host reports that a live terminal process reached EOF, the iPad application shall mark that pane ended and shall not reconnect its terminal channel. Clean process exit is distinct from the retryable authenticated-channel failures in `IOS-7.4`; reattaching after EOF can recreate the zmx session before the host removes the pane from its authoritative split tree.
+
+**IOS-7.6** When a mobile terminal channel is replaced after its mounted terminal has received output, the application shall cancel unfinished VT parsing and reset the retained terminal before applying the replacement zmx attach's first replay bytes, so the replay replaces the existing screen and scrollback instead of appending a duplicate copy.
 
 ### IOS-8.x — Non-goals (recorded for future specs)
 

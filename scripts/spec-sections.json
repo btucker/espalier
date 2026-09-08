@@ -76,6 +76,7 @@
     "TERM.6": "Stopping a Worktree",
     "TERM.7": "Focus Management",
     "TERM.8": "Context Menu",
+    "TERM.12": "Paged History on Mac and Mobile",
     "GIT.1": "Initial Discovery",
     "GIT.2": "Filesystem Monitoring",
     "GIT.3": "Change Handling",
