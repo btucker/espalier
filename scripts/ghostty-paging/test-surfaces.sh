@@ -38,6 +38,7 @@ xcrun clang -std=c11 -Wall -Wextra -Werror -DGHOSTTY_STATIC \
     -I "$ghostty_source/include" "$probe_dir/make-fixture.c" \
     "$probe_build/core/lib/libghostty-vt.a" -lc++ -o "$probe_build/make-fixture"
 "$probe_build/make-fixture" "$probe_build/surface-fixture.bin"
+"$probe_build/make-fixture" "$probe_build/surface-modes.bin" --modes
 
 frameworks=(
     -framework Foundation -framework Metal -framework QuartzCore -framework CoreText
@@ -46,18 +47,19 @@ frameworks=(
 xcrun clang -fobjc-arc -Wall -Wextra -Werror -I "$ghostty_source/include" \
     "$probe_dir/surface-probe.m" "$probe_build/macos/lib/libghostty.a" -lc++ \
     "${frameworks[@]}" -framework AppKit -framework Carbon -o "$probe_build/surface-probe"
-"$probe_build/surface-probe" "$probe_build/surface-fixture.bin"
+"$probe_build/surface-probe" "$probe_build/surface-fixture.bin" "$probe_build/surface-modes.bin"
 
 if [[ $# == 2 ]]; then
     echo "UIKit test skipped. Pass a simulator UDID to run both platforms."
     exit 0
 fi
 
-build_library ios -Dapp-runtime=none -Dtarget=aarch64-ios-simulator -Dcpu=apple_a17
+build_library ios -Dapp-runtime=none -Dtarget=aarch64-ios-simulator -Dcpu=apple_m1
 probe_app="$probe_build/SurfaceProbe.app"
 mkdir "$probe_app"
 cp "$probe_dir/SurfaceProbe-Info.plist" "$probe_app/Info.plist"
 cp "$probe_build/surface-fixture.bin" "$probe_app/surface-fixture.bin"
+cp "$probe_build/surface-modes.bin" "$probe_app/surface-modes.bin"
 simulator_sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
 xcrun clang -fobjc-arc -Wall -Wextra -Werror -target arm64-apple-ios15.0-simulator \
     -isysroot "$simulator_sdk" -I "$ghostty_source/include" \
@@ -69,4 +71,4 @@ xcrun simctl install "$3" "$probe_app"
 xcrun simctl launch --console "$3" dev.graftty.snapshot-probe | tee "$probe_build/ios.log"
 # simctl can return success even when the launched app asserts. Require the
 # final scenario's marker, which is emitted only after all assertions pass.
-rg -q '^UIKit snapshot surface: scenario=5 pages=169 READY/live/draw/destroy PASS' "$probe_build/ios.log"
+rg -q '^UIKit snapshot surface: scenario=6 pages=169 READY/live/draw/destroy PASS' "$probe_build/ios.log"

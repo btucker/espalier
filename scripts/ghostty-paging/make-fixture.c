@@ -4,7 +4,7 @@
 #include <string.h>
 
 int main(int argc, char **argv) {
-    assert(argc == 2);
+    assert(argc == 2 || (argc == 3 && strcmp(argv[2], "--modes") == 0));
     GhosttyTerminal terminal = NULL;
     assert(ghostty_terminal_new(NULL, &terminal, 80, 24) == GHOSTTY_SUCCESS);
     size_t limit = 1024;
@@ -15,6 +15,10 @@ int main(int argc, char **argv) {
         char line[32];
         snprintf(line, sizeof(line), "row-%06d\r\n", i);
         ghostty_terminal_vt_write(terminal, (const uint8_t *)line, strlen(line));
+    }
+    if (argc == 3) {
+        const char *modes = "\x1b[20h\x1b[?2026h";
+        ghostty_terminal_vt_write(terminal, (const uint8_t *)modes, strlen(modes));
     }
     ghostty_terminal_vt_write(terminal, (const uint8_t *)"\x1b[31", 4);
     uint8_t *snapshot;

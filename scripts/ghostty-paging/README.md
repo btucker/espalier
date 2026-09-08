@@ -74,13 +74,16 @@ experimental patches to a shared dependency checkout or a release build.
    scripts/ghostty-paging/test-surfaces.sh "$probe_source/ghostty" /path/to/zig SIMULATOR_UDID
    ```
 
-The runner builds isolated libraries, generates a trusted 100,000-row snapshot,
+The runner builds isolated libraries, generates two trusted 100,000-row snapshots,
 and opens test windows. With a simulator UDID, it also boots that simulator if
 needed and installs `dev.graftty.snapshot-probe`. It does not replace Graftty or
 GrafttyMobile. Each platform must print passing markers for scenarios 0, 1,
-2, 3, 4, and 5. Scenarios 2 through 4 require recovery without consuming pending
+2, 3, 4, 5, and 6. Scenarios 2 through 4 require recovery without consuming pending
 pages. They do not perform checkpoint recovery. Scenario 5 checks height-only
-resizing and completion after a later width change. See [the results and
+resizing and completion after a later width change. Scenario 6 checks restored
+input modes and the synchronized-output timeout. The runner also verifies
+presented IOSurface dimensions and rejection of stale frames. It targets the
+M1 instruction-set baseline for the arm64 simulator. See [the results and
 limitations](RESULTS.md).
 
 The scripts keep build artifacts in the printed temporary directories. Set

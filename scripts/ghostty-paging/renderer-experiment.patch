@@ -235,10 +235,11 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
      /// Surface initialization options.
      pub const Options = extern struct {
          /// The platform that this surface is being initialized for and
-@@ -468,6 +506,20 @@
+@@ -467,6 +505,20 @@
+
          /// Userdata passed to some of the callbacks.
          userdata: ?*anyopaque = null,
-
++
 +        /// The backend used to satisfy terminal IO for this surface.
 +        backend: TermioBackend = .exec,
 +
@@ -252,10 +253,9 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        /// Called when the terminal size changes and the host transport
 +        /// should be updated.
 +        receive_resize: ?termio.HostManaged.Config.Resize = null,
-+
+
          /// The scale factor of the screen.
          scale_factor: f64 = 1,
-
 @@ -506,6 +558,12 @@
              .app = app,
              .platform = try .init(opts.platform_tag, opts.platform),
@@ -277,7 +277,7 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
      }
 
      /// Initialize the inspector instance. A surface can only have one
-@@ -669,8 +728,21 @@
+@@ -669,6 +728,19 @@
 
      pub fn core(self: *Surface) *CoreSurface {
          return &self.core_surface;
@@ -285,8 +285,8 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +
 +    pub fn termioBackend(self: *const Surface) TermioBackend {
 +        return self.termio_backend;
-     }
-
++    }
++
 +    pub fn hostManagedConfig(self: *const Surface) !termio.HostManaged.Config {
 +        const write = self.host_io.receive_buffer orelse return error.HostManagedWriteRequired;
 +        return .{
@@ -294,17 +294,13 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +            .write = write,
 +            .resize = self.host_io.receive_resize,
 +        };
-+    }
-+
-     pub fn rtApp(self: *const Surface) *App {
-         return self.app;
      }
-@@ -1857,8 +1929,130 @@
-     /// Returns true if the surface process has exited.
-     export fn ghostty_surface_process_exited(surface: *Surface) bool {
+
+     pub fn rtApp(self: *const Surface) *App {
+@@ -1859,6 +1931,135 @@
          return surface.core_surface.child_exited;
-+    }
-+
+     }
+
 +    export fn ghostty_surface_write_buffer(
 +        surface: *Surface,
 +        ptr: [*]const u8,
@@ -368,12 +364,19 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        io.terminal.width_px = io.terminal.cols * io.size.cell.width;
 +        io.terminal.height_px = io.terminal.rows * io.size.cell.height;
 +        io.terminal_stream = .init(.{ .allocator = io.alloc, .handler = handler });
++        // Snapshot decode restores mode bits without StreamHandler.setMode's
++        // I/O-thread side effects. Restore those before any continuation or
++        // new input can depend on them.
++        io.mailbox.send(.{ .linefeed_mode = io.terminal.modes.get(.linefeed) }, core.renderer_state.mutex);
++        if (io.terminal.modes.get(.synchronized_output))
++            io.mailbox.send(.{ .start_synchronized_output = {} }, core.renderer_state.mutex);
 +        switch (decoded.continuation) {
 +            .ground => {},
 +            .bytes => |bytes| io.terminal_stream.nextSlice(bytes),
 +        }
 +        io.terminal.flags.dirty.clear = true;
 +        surface.probe_snapshot = snapshot;
++        io.mailbox.notify();
 +        io.terminal_stream.handler.queueRender() catch {};
 +        return true;
 +    }
@@ -383,8 +386,8 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        core.renderer_state.mutex.lockUncancelable(global.io());
 +        defer core.renderer_state.mutex.unlock(global.io());
 +        return core.io.terminal.cols == cols and core.io.terminal.rows == rows;
-     }
-
++    }
++
 +    export fn graftty_probe_surface_snapshot_offset(surface: *Surface) usize {
 +        const core = &surface.core_surface;
 +        core.renderer_state.mutex.lockUncancelable(global.io());
@@ -556,7 +559,7 @@ diff --git a/src/termio/HostManaged.zig b/src/termio/HostManaged.zig
 new file mode 100644
 --- /dev/null
 +++ b/src/termio/HostManaged.zig
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,156 @@
 +const HostManaged = @This();
 +
 +const std = @import("std");
@@ -656,10 +659,30 @@ new file mode 100644
 +) !void {
 +    _ = alloc;
 +    _ = td;
-+    _ = linefeed;
 +
 +    if (data.len == 0) return;
-+    self.write(self.userdata, data.ptr, data.len);
++    if (!linefeed) {
++        self.write(self.userdata, data.ptr, data.len);
++        return;
++    }
++
++    // Match Exec's CR-to-CRLF conversion without allocating a second copy
++    // of a potentially large paste. Callback bytes are borrowed per call.
++    var buffer: [1024]u8 = undefined;
++    var used: usize = 0;
++    for (data) |byte| {
++        if (used + 2 > buffer.len) {
++            self.write(self.userdata, &buffer, used);
++            used = 0;
++        }
++        buffer[used] = byte;
++        used += 1;
++        if (byte == '\r') {
++            buffer[used] = '\n';
++            used += 1;
++        }
++    }
++    if (used > 0) self.write(self.userdata, &buffer, used);
 +}
 +
 +pub fn childExitedAbnormally(

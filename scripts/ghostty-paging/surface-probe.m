@@ -6,14 +6,116 @@
 #import <AppKit/AppKit.h>
 #define PROBE_PLATFORM "AppKit"
 #endif
+#import <QuartzCore/QuartzCore.h>
+#if TARGET_OS_IPHONE
+// The simulator exports these functions but does not ship IOSurface headers.
+typedef struct __IOSurface *IOSurfaceRef;
+extern CFTypeID IOSurfaceGetTypeID(void);
+extern size_t IOSurfaceGetWidth(IOSurfaceRef);
+extern size_t IOSurfaceGetHeight(IOSurfaceRef);
+#else
+#import <IOSurface/IOSurface.h>
+#endif
 #include <ghostty.h>
 #include <assert.h>
 #include <stdio.h>
+#include <pthread.h>
 
 extern bool graftty_probe_surface_snapshot_ready(ghostty_surface_t, const uint8_t *, size_t);
 extern int graftty_probe_surface_snapshot_next(ghostty_surface_t, size_t *);
 extern size_t graftty_probe_surface_snapshot_offset(ghostty_surface_t);
 extern bool graftty_probe_surface_grid_matches(ghostty_surface_t, uint16_t, uint16_t);
+extern bool graftty_probe_layer_present(void *, IOSurfaceRef);
+
+#if TARGET_OS_IPHONE
+typedef UIView ProbeView;
+#else
+typedef NSView ProbeView;
+#endif
+
+static CALayer *render_layer(ProbeView *view) {
+#if TARGET_OS_IPHONE
+    for (CALayer *layer in view.layer.sublayers) {
+        if ([layer isKindOfClass:NSClassFromString(@"IOSurfaceLayer")]) return layer;
+    }
+    assert(!"missing Ghostty rendering layer");
+    return nil;
+#else
+    return view.layer;
+#endif
+}
+
+static void layout_renderer(ProbeView *view) {
+#if TARGET_OS_IPHONE
+    // Match UITerminalView's layout contract: the embedder owns sublayer size.
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    render_layer(view).frame = view.bounds;
+    [CATransaction commit];
+#else
+    (void)view;
+#endif
+}
+
+static void resize_probe(ghostty_surface_t surface, ProbeView *view, uint32_t width, uint32_t height) {
+#if TARGET_OS_IPHONE
+    view.frame = CGRectMake(0, 0, width, height);
+#else
+    [view.window setContentSize:NSMakeSize(width, height)];
+#endif
+    layout_renderer(view);
+    ghostty_surface_set_size(surface, width, height);
+}
+
+static void wait_frame(ghostty_app_t app, ghostty_surface_t surface, ProbeView *view) {
+    CALayer *layer = render_layer(view);
+    assert(layer.bounds.size.width > 0 && layer.bounds.size.height > 0);
+    for (int i = 0; i < 200; i++) {
+        ghostty_app_tick(app);
+        ghostty_surface_draw(surface);
+        id contents = layer.contents;
+        if (contents && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID()) {
+            IOSurfaceRef frame = (__bridge IOSurfaceRef)contents;
+            size_t width = IOSurfaceGetWidth(frame), height = IOSurfaceGetHeight(frame);
+            size_t expected_width = (size_t)(layer.bounds.size.width * layer.contentsScale);
+            size_t expected_height = (size_t)(layer.bounds.size.height * layer.contentsScale);
+            size_t dw = width > expected_width ? width - expected_width : expected_width - width;
+            size_t dh = height > expected_height ? height - expected_height : expected_height - height;
+            size_t tolerance = TARGET_OS_IPHONE ? 1 : 0;
+            if (width > 0 && height > 0 && dw <= tolerance && dh <= tolerance) return;
+        }
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    }
+    assert(!"timed out waiting for a presented IOSurface");
+}
+
+static void check_stale_frame(ProbeView *view) {
+    CALayer *layer = render_layer(view);
+    id contents = layer.contents;
+    assert(contents && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID());
+    CGRect bounds = layer.bounds;
+    CGFloat scale = layer.contentsScale;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    layer.bounds = CGRectMake(0, 0, bounds.size.width / 2, bounds.size.height);
+    layer.contents = nil;
+    // Deliver the old completed frame after layout changed, before any next
+    // draw. This drives the same callback used by asynchronous presentation.
+    assert(graftty_probe_layer_present((__bridge void *)layer, (__bridge IOSurfaceRef)contents));
+    assert(layer.contents == nil && layer.contentsScale == scale);
+    IOSurfaceRef frame = (__bridge IOSurfaceRef)contents;
+    layer.bounds = CGRectMake(0, 0, (IOSurfaceGetWidth(frame) - 1) / scale, IOSurfaceGetHeight(frame) / scale);
+    assert(graftty_probe_layer_present((__bridge void *)layer, frame));
+#if TARGET_OS_IPHONE
+    assert(layer.contents == contents); // The one-pixel tolerance remains.
+#else
+    assert(layer.contents == nil);
+#endif
+    assert(layer.contentsScale == scale);
+    layer.bounds = bounds;
+    layer.contents = contents;
+    [CATransaction commit];
+}
 
 static void wait_grid(ghostty_app_t app, ghostty_surface_t surface, uint16_t cols, uint16_t rows) {
     for (int i = 0; i < 200; i++) {
@@ -28,8 +130,43 @@ static void wakeup(void *data) { (void)data; }
 static bool action(ghostty_app_t app, ghostty_target_s target, ghostty_action_s event) {
     (void)app; (void)target; (void)event; return false;
 }
+typedef struct {
+    pthread_mutex_t mutex;
+    uint8_t bytes[8192];
+    size_t len;
+} OutputCapture;
+
 static void output(void *data, const uint8_t *bytes, size_t len) {
-    (void)data; (void)bytes; (void)len;
+    OutputCapture *capture = data;
+    pthread_mutex_lock(&capture->mutex);
+    assert(len <= sizeof(capture->bytes) - capture->len);
+    memcpy(capture->bytes + capture->len, bytes, len);
+    capture->len += len;
+    pthread_mutex_unlock(&capture->mutex);
+}
+
+static bool expect_output(ghostty_app_t app, ghostty_surface_t surface, OutputCapture *capture,
+    const char *input, const char *expected, bool terminal_output) {
+    pthread_mutex_lock(&capture->mutex);
+    capture->len = 0;
+    pthread_mutex_unlock(&capture->mutex);
+    if (terminal_output) ghostty_surface_write_buffer(surface, (const uint8_t *)input, strlen(input));
+    else ghostty_surface_text(surface, input, strlen(input));
+    const size_t expected_len = strlen(expected);
+    for (int i = 0; i < 200; i++) {
+        ghostty_app_tick(app);
+        pthread_mutex_lock(&capture->mutex);
+        bool matches = capture->len == expected_len && memcmp(capture->bytes, expected, expected_len) == 0;
+        pthread_mutex_unlock(&capture->mutex);
+        if (matches) return true;
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    }
+    pthread_mutex_lock(&capture->mutex);
+    fprintf(stderr, "output mismatch: expected %zu bytes, received %zu:", expected_len, capture->len);
+    for (size_t i = 0; i < capture->len; i++) fprintf(stderr, " %02x", capture->bytes[i]);
+    fprintf(stderr, "\n");
+    pthread_mutex_unlock(&capture->mutex);
+    return false;
 }
 static ghostty_clipboard_read_result_e read_clipboard(void *data, ghostty_clipboard_e clipboard,
     void *state, const char *const *mimes, size_t count, bool prompt) {
@@ -45,14 +182,16 @@ static void write_clipboard(void *data, ghostty_clipboard_e clipboard,
     (void)data; (void)clipboard; (void)content; (void)count; (void)confirm;
 }
 
-static int run_probe(int argc, char **argv, NSData *snapshot) {
+static int run_probe(int argc, char **argv, NSData *snapshot, NSData *mode_snapshot) {
     @autoreleasepool {
         assert(snapshot.length > 0);
+        assert(mode_snapshot.length > 0);
         assert(ghostty_init(argc, argv) == 0);
 #if !TARGET_OS_IPHONE
         [NSApplication sharedApplication];
 #endif
-        for (int scenario = 0; scenario < 6; scenario++) {
+        for (int scenario = 0; scenario < 7; scenario++) {
+            NSData *fixture = scenario == 6 ? mode_snapshot : snapshot;
             const bool needs_recovery = scenario >= 2 && scenario <= 4;
 #if TARGET_OS_IPHONE
             UIWindow *window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
@@ -84,28 +223,26 @@ static int run_probe(int argc, char **argv, NSData *snapshot) {
             options.platform.macos.nsview = (__bridge void *)view;
 #endif
             options.backend = GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED;
+            OutputCapture capture = {0};
+            assert(pthread_mutex_init(&capture.mutex, NULL) == 0);
+            options.receive_userdata = &capture;
             options.receive_buffer = output;
             ghostty_surface_t surface = ghostty_surface_new(app, &options);
             assert(surface);
-            ghostty_surface_set_size(surface, 800, 480);
+            resize_probe(surface, view, 800, 480);
             ghostty_surface_size_s size = ghostty_surface_size(surface);
             const uint32_t width = 800 + (80 - size.columns) * size.cell_width_px;
             const uint32_t height = 480 + (24 - size.rows) * size.cell_height_px;
-#if TARGET_OS_IPHONE
-            view.frame = CGRectMake(0, 0, width, height);
-#else
-            [window setContentSize:NSMakeSize(width, height)];
-#endif
-            ghostty_surface_set_size(surface, width, height);
+            resize_probe(surface, view, width, height);
 #if !TARGET_OS_IPHONE
             [window orderFront:nil];
 #endif
             wait_grid(app, surface, 80, 24);
             // A truncated READY must leave the original surface usable.
-            assert(!graftty_probe_surface_snapshot_ready(surface, snapshot.bytes, 16));
-            assert(graftty_probe_surface_snapshot_ready(surface, snapshot.bytes, snapshot.length));
+            assert(!graftty_probe_surface_snapshot_ready(surface, fixture.bytes, 16));
+            assert(graftty_probe_surface_snapshot_ready(surface, fixture.bytes, fixture.length));
             // This experiment supports exactly one install per fresh surface.
-            assert(!graftty_probe_surface_snapshot_ready(surface, snapshot.bytes, snapshot.length));
+            assert(!graftty_probe_surface_snapshot_ready(surface, fixture.bytes, fixture.length));
             const char *live = "msurface-live-output\r\n";
             ghostty_surface_write_buffer(surface, (const uint8_t *)live, strlen(live));
             for (int i = 0; i < 20; i++) {
@@ -113,6 +250,33 @@ static int run_probe(int argc, char **argv, NSData *snapshot) {
                 ghostty_surface_draw(surface);
                 [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
             }
+            if (scenario == 6) {
+                bool restored_input = expect_output(app, surface, &capture, "\r", "\r\n", false);
+                const char *disable = "\x1b[20l";
+                ghostty_surface_write_buffer(surface, (const uint8_t *)disable, strlen(disable));
+                bool disabled_input = expect_output(app, surface, &capture, "a\rb\r", "a\rb\r", false);
+                const char *enable = "\x1b[20h";
+                ghostty_surface_write_buffer(surface, (const uint8_t *)enable, strlen(enable));
+                bool enabled_input = expect_output(app, surface, &capture, "a\rb\r", "a\r\nb\r\n", false);
+                char long_input[2050], long_expected[2053];
+                memset(long_input, 'x', sizeof(long_input) - 1);
+                long_input[1023] = long_input[1024] = long_input[2048] = '\r';
+                long_input[2049] = '\0';
+                size_t expected_pos = 0;
+                for (size_t i = 0; i < sizeof(long_input) - 1; i++) {
+                    long_expected[expected_pos++] = long_input[i];
+                    if (long_input[i] == '\r') long_expected[expected_pos++] = '\n';
+                }
+                long_expected[expected_pos] = '\0';
+                bool chunked_input = expect_output(app, surface, &capture, long_input, long_expected, false);
+                // No closing reset is sent. The ordinary one-second watchdog
+                // must release synchronized output restored by the checkpoint.
+                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:1.2]];
+                bool sync_timeout = expect_output(app, surface, &capture, "\x1b[?2026$p", "\x1b[?2026;2$y", true);
+                assert(restored_input && disabled_input && enabled_input && chunked_input && sync_timeout);
+            }
+            wait_frame(app, surface, view);
+            if (scenario == 0) check_stale_frame(view);
             ghostty_selection_s selection = {
                 .top_left = {.tag = GHOSTTY_POINT_SCREEN, .coord = GHOSTTY_POINT_COORD_TOP_LEFT},
                 .bottom_right = {.tag = GHOSTTY_POINT_SCREEN, .coord = GHOSTTY_POINT_COORD_BOTTOM_RIGHT},
@@ -164,20 +328,20 @@ static int run_probe(int argc, char **argv, NSData *snapshot) {
                 const char *alternate = "\x1b[?1049halt-screen";
                 ghostty_surface_write_buffer(surface, (const uint8_t *)alternate, strlen(alternate));
             } else if (needs_recovery) {
-                ghostty_surface_set_size(surface, width - 40 * size.cell_width_px, height);
+                resize_probe(surface, view, width - 40 * size.cell_width_px, height);
                 wait_grid(app, surface, 40, 24);
                 if (scenario == 3) {
                     // No history call sees the intermediate width. Checking
                     // only current columns would accept stale pages again.
-                    ghostty_surface_set_size(surface, width, height);
+                    resize_probe(surface, view, width, height);
                     wait_grid(app, surface, 80, 24);
                 }
             } else if (scenario == 5) {
-                ghostty_surface_set_size(surface, width, height + 4 * size.cell_height_px);
+                resize_probe(surface, view, width, height + 4 * size.cell_height_px);
                 wait_grid(app, surface, 80, 28);
             }
             const size_t offset_before = graftty_probe_surface_snapshot_offset(surface);
-            assert(offset_before < snapshot.length);
+            assert(offset_before < fixture.length);
             int status;
             while ((status = graftty_probe_surface_snapshot_next(surface, &applied)) == 1) {
                 assert(!needs_recovery && applied > 0);
@@ -201,7 +365,7 @@ static int run_probe(int argc, char **argv, NSData *snapshot) {
                 assert(status == 0 && pages > 1);
                 assert(graftty_probe_surface_snapshot_next(surface, &applied) == 0 && applied == 0);
                 if (scenario == 5) {
-                    ghostty_surface_set_size(surface, width - 40 * size.cell_width_px, height);
+                    resize_probe(surface, view, width - 40 * size.cell_width_px, height);
                     wait_grid(app, surface, 40, 24);
                     assert(graftty_probe_surface_snapshot_next(surface, &applied) == 0 && applied == 0);
                 }
@@ -244,7 +408,9 @@ static int run_probe(int argc, char **argv, NSData *snapshot) {
                 assert(!strstr(text.text, "row-000000"));
             }
             ghostty_surface_free_text(surface, &text);
+            wait_frame(app, surface, view);
             ghostty_surface_free(surface);
+            assert(pthread_mutex_destroy(&capture.mutex) == 0);
             ghostty_app_free(app);
             ghostty_config_free(config);
 #if TARGET_OS_IPHONE
@@ -276,7 +442,8 @@ static char **probe_argv;
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *path = [[NSBundle mainBundle] pathForResource:@"surface-fixture" ofType:@"bin"];
         NSData *snapshot = [NSData dataWithContentsOfFile:path];
-        exit(run_probe(probe_argc, probe_argv, snapshot));
+        NSString *mode_path = [[NSBundle mainBundle] pathForResource:@"surface-modes" ofType:@"bin"];
+        exit(run_probe(probe_argc, probe_argv, snapshot, [NSData dataWithContentsOfFile:mode_path]));
     });
     return YES;
 }
@@ -292,9 +459,10 @@ int main(int argc, char **argv) {
 #else
 int main(int argc, char **argv) {
     @autoreleasepool {
-        assert(argc == 2);
+        assert(argc == 3);
         NSData *snapshot = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[1]]];
-        return run_probe(argc, argv, snapshot);
+        NSData *mode_snapshot = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:argv[2]]];
+        return run_probe(argc, argv, snapshot, mode_snapshot);
     }
 }
 #endif

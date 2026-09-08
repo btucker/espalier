@@ -73,9 +73,15 @@ On September 6, 2026, Xcode Metal Toolchain 17F109 was installed. The newer
 renderer then built for macOS and the arm64 iOS Simulator. The UIKit test ran on
 an iPhone 17 Pro simulator with iOS 26.5.
 
+Review on September 8 found that the original UIKit probe never sized the
+renderer sublayer. Its text assertions passed while drawing skipped the zero-size
+layer. Those earlier UIKit results verified terminal state, not frame rendering.
+The corrected probe sizes the sublayer during layout, as Graftty's UIKit wrapper
+does, and requires a presented IOSurface with dimensions matching the layer.
+
 `surface-probe.m` uses the same test body on both platforms. It creates real
 host-managed Ghostty surfaces backed by an `NSView` or `UIView`, calls their draw
-API, and checks their text through the surface C API. Six scenarios passed:
+API, and checks their text through the surface C API. It covers seven scenarios:
 
 - Restore READY, apply live output, select loaded content, and scroll to its
   oldest row. Import all 169 older pages, then verify the same selection and
@@ -90,15 +96,53 @@ API, and checks their text through the surface C API. Six scenarios passed:
   resizing. Preserve selection, the visible row, and all remaining page records.
 - Change only the terminal height, then import and verify all 100,000 rows.
   After completion, change the width and verify that history stays complete.
+- Restore a second snapshot with newline mode and synchronized output already
+  enabled. Verify CRLF input conversion before and after mode changes, including
+  carriage returns at buffer boundaries. Verify that the normal watchdog clears
+  synchronized output without receiving a closing reset, then finish paging.
 
 Each scenario also rejects a truncated READY and a second snapshot installation,
 checks repeated page status calls, and destroys its surface and app. The test waits
 for the actual terminal grid and scroll position, because surface resize and
 scroll actions can be queued to the I/O thread.
 
-These checks exercise drawing and surface readback. They do not compare rendered
-pixels, simulate selection gestures, rotate a physical device, test memory
-pressure, or verify Graftty's Swift wrapper lifecycle.
+The probe also delivers a completed old frame after changing the layer bounds.
+It requires rejection without changing the layer's scale. A separate check
+preserves the one-pixel iOS tolerance, while Mac still requires exact dimensions.
+
+These checks require frame presentation and terminal readback. They do not
+compare glyph pixels, simulate selection gestures, rotate a physical device,
+test memory pressure, or verify Graftty's Swift wrapper lifecycle.
+
+## Review fixes restore mode side effects and layout ownership
+
+The original bridge restored terminal mode bits without their I/O-thread state.
+An enabled synchronized-output mode had no watchdog and could suppress frame
+updates indefinitely. An enabled newline mode left the I/O thread's cached flag
+false. Snapshot installation now queues both required mode updates before replaying
+the parser continuation and notifies the I/O mailbox.
+
+The host-managed backend also ignored the newline flag on ordinary input writes.
+It now converts each carriage return to CRLF when enabled, matching the exec
+backend. Conversion uses a fixed 1,024-byte buffer instead of allocating a copy
+of the entire paste. The native callback test covers restored, disabled, and
+enabled modes, plus input spanning multiple conversion buffers.
+
+The iOS presentation callback previously accepted a mismatched frame and changed
+`contentsScale` to make that frame fit. A late frame could therefore overwrite
+the host's layout after resize. It now discards larger mismatches and leaves
+scale under host control. The deterministic native regression failed against
+the original callback, as did the new layer-size and mode-restoration assertions.
+
+The simulator build now targets `apple_m1`, not `apple_a17`, to match the documented
+Apple Silicon baseline. The review identified a possible unsupported-instruction
+risk on M1, not an observed crash on an M1 host.
+
+On September 8, the corrected probe passed all seven scenarios on AppKit and
+the iPhone 17 Pro simulator running iOS 26.5. Those runs required presented frames,
+passed the stale-frame and mode regressions, and verified all 100,000 history
+rows in the complete-import scenarios. The saved patches applied cleanly to a
+fresh pinned source tree and reproduced the tested source.
 
 ## Resize invalidation stops before a pending page
 
