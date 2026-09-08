@@ -222,4 +222,54 @@ struct TermTodo {
 @spec TERM-9.2: When the user activates "Open Ghostty Settings"
 """, .disabled("not yet implemented"))
     func term_9_2() async throws { }
+
+    @Test("""
+@spec TERM-12.1: When Graftty on Mac or mobile opens a terminal through a paging-capable attachment, the application shall restore the current screen and parser state with a bounded recent-history allowance before fetching older history, without serializing or transferring the complete retained history on the initial path.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_1() async throws { }
+
+    @Test("""
+@spec TERM-12.2: When the user approaches the oldest loaded history on Mac or mobile, the application shall request the next contiguous older page and retain fetched pages in a bounded in-memory cache, without requesting the entire remaining history.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_2() async throws { }
+
+    @Test("""
+@spec TERM-12.3: While older history is loading, the application shall continue applying live output and forwarding authorized user input without waiting for history completion, with bounded history work and queued history bytes.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_3() async throws { }
+
+    @Test("""
+@spec TERM-12.4: When a history page arrives, the application shall validate its session incarnation, checkpoint, screen, and page position before importing it, reject stale or duplicate pages, and preserve a contiguous history range without mixing content across checkpoints.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_4() async throws { }
+
+    @Test("""
+@spec TERM-12.5: When older history is inserted while the user is reading or selecting text, the application shall preserve the visible content anchor and selection on Mac and mobile; when the user follows live output, history insertion shall preserve that following behavior.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_5() async throws { }
+
+    @Test("""
+@spec TERM-12.6: When the terminal grid changes while history is pending, the application shall preserve access to retained older history through compatible reflow or explicit checkpoint recovery, reject incompatible page replies, and never treat discarded pages as successfully loaded.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_6() async throws { }
+
+    @Test("""
+@spec TERM-12.7: If a history request fails or its checkpoint expires, then the application shall keep the live terminal and already loaded content usable, distinguish unavailable history from fully loaded history, and provide explicit retry or recovery without silently removing the reader's current content.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_7() async throws { }
+
+    @Test("""
+@spec TERM-12.8: When the user selects an already mounted and connected Mac terminal, the application shall reuse its terminal state and loaded history without opening a replacement attachment or fetching a replacement checkpoint solely because of selection.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_8() async throws { }
+
+    @Test("""
+@spec TERM-12.9: When either endpoint lacks a compatible paged-history protocol or snapshot codec, the application shall select the existing VT attach path before rendering binary snapshot data, and shall not interleave that fallback with a partially imported checkpoint.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_9() async throws { }
+
+    @Test("""
+@spec TERM-12.10: When a paged attachment closes or a checkpoint is replaced, the application shall cancel its pending history requests and release its checkpoint resources; while attachments remain open, the host shall bound retained checkpoint resources across clients.
+""", .disabled("paged history is not yet implemented"))
+    func term_12_10() async throws { }
 }
