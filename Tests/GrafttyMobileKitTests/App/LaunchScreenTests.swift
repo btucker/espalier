@@ -4,6 +4,22 @@ import Testing
 @Suite
 struct LaunchScreenTests {
 
+    @Test("@spec IOS-3.7: While the application is locked, the lock overlay shall display the Graftty logo above its unlock controls using a bundled image asset.")
+    func lockScreenLogoIsBundled() throws {
+        let appDirectory = launchScreenURL().deletingLastPathComponent()
+        let imageSet = appDirectory.appendingPathComponent("Assets.xcassets/GrafttyLogo.imageset")
+        let manifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: imageSet.appendingPathComponent("Contents.json"))
+        ) as? [String: Any]
+        let images = try #require(manifest?["images"] as? [[String: String]])
+        let filename = try #require(images.first?["filename"])
+        let logo = try Data(contentsOf: imageSet.appendingPathComponent(filename))
+        let appIcon = try Data(contentsOf: appDirectory.appendingPathComponent(
+            "Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+        ))
+        #expect(logo == appIcon)
+    }
+
     @Test("""
 @spec IOS-3.4: During pre-main launch, the application's `LaunchScreen.storyboard` shall render a uniform `systemGroupedBackgroundColor` background with no foreground image and no branded color, so the visual transition from pre-main into the first frame is seamless. The first visible frame after pre-main is the lock overlay (`IOS-3.1`), which paints `.regularMaterial` over the host picker's `List` (whose default background is `systemGroupedBackground`). Matching the launch backdrop to the post-launch lock state's underlying color eliminates the launch → blur → list color flash that a branded launch image would otherwise introduce. Per Apple's HIG, the launch screen is a shell that resembles the first screen, not a branding splash.
 """)

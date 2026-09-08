@@ -30,19 +30,22 @@ enum AddWorktreeFlow {
     enum TerminalStartTiming: Equatable {
         case afterViewLayout
         case immediately
+        case onClientAttach
     }
 
     enum CreationEntryPoint {
         case nativeSidebar
         case cli
         case web
+        case pairedClient
     }
 
     /// CLI creation has no mounted view and must start the backend as part of
     /// creation. Native creation deliberately waits for the selected view's
     /// first nonzero layout so zmx replay is parsed at the settled grid size.
     /// The web client attaches to the returned zmx session itself, so its
-    /// hidden Mac surface stays deferred too.
+    /// hidden Mac surface stays deferred too. Paired clients need only the
+    /// session mapping; their terminal channel creates zmx on attachment.
     static func terminalStartTiming(
         for entryPoint: CreationEntryPoint
     ) -> TerminalStartTiming {
@@ -51,6 +54,8 @@ enum AddWorktreeFlow {
             return .immediately
         case .nativeSidebar, .web:
             return .afterViewLayout
+        case .pairedClient:
+            return .onClientAttach
         }
     }
 
@@ -278,49 +283,60 @@ enum AddWorktreeFlow {
         if let primaryPane {
             terminalManager.markFirstPane(primaryPane)
         }
-        let createdSurfaces = terminalManager.createSurfaces(
-            for: splitTree,
-            paneSessions: appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].paneSessions,
-            worktreePath: worktreePath,
-            extraInitialInput: initialCommand.map { $0 + "\r" }
-        )
-
         guard let firstLeaf = splitTree.allLeaves.first else {
             return .failure(.discoveryFailed("split tree produced no leaves"))
         }
-        guard let firstHandle = createdSurfaces[firstLeaf] ?? terminalManager.handle(for: firstLeaf) else {
-            appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-            return .failure(.discoveryFailed("failed to create terminal surface"))
-        }
-        // CLI-created worktrees may never be selected in the Mac window, so
-        // their view never receives the layout callback that normally starts
-        // the host-managed zmx backend. This must be an explicit caller
-        // choice rather than inferred from `initialCommand`: a plain
-        // `graftty worktree add <name>` still promises to start a shell.
-        //
-        if terminalStartTiming == .immediately,
-           !firstHandle.startForBackgroundLaunch() {
-            terminalManager.destroySurfaces(terminalIDs: splitTree.allLeaves)
-            appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-            return .failure(.discoveryFailed("failed to start terminal backend"))
-        }
-        if initialCommand != nil {
-            let accepted = await terminalManager.waitForExplicitInitialInputDelivery(
-                for: firstLeaf
+        if terminalStartTiming == .onClientAttach {
+            // The paired client's terminal channel starts zmx. Register
+            // the cwd before returning the session so
+            // that attach can create the shell without a hidden Mac renderer.
+            precondition(initialCommand == nil)
+            terminalManager.recordPaneSessions(
+                for: splitTree,
+                paneSessions: appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].paneSessions,
+                worktreePath: worktreePath
             )
-            guard accepted else {
+            for pane in splitTree.allLeaves {
+                terminalManager.registerForPortScan(pane)
+            }
+        } else {
+            let createdSurfaces = terminalManager.createSurfaces(
+                for: splitTree,
+                paneSessions: appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].paneSessions,
+                worktreePath: worktreePath,
+                extraInitialInput: initialCommand.map { $0 + "\r" }
+            )
+            guard let firstHandle = createdSurfaces[firstLeaf] ?? terminalManager.handle(for: firstLeaf) else {
+                appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
+                return .failure(.discoveryFailed("failed to create terminal surface"))
+            }
+            // CLI creation must start even if no Mac view ever mounts.
+            if terminalStartTiming == .immediately,
+               !firstHandle.startForBackgroundLaunch() {
                 terminalManager.destroySurfaces(terminalIDs: splitTree.allLeaves)
                 appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
-                return .failure(.discoveryFailed(
-                    "terminal shell did not become ready to accept the launch command"
-                ))
+                return .failure(.discoveryFailed("failed to start terminal backend"))
+            }
+            if initialCommand != nil {
+                let accepted = await terminalManager.waitForExplicitInitialInputDelivery(
+                    for: firstLeaf
+                )
+                guard accepted else {
+                    terminalManager.destroySurfaces(terminalIDs: splitTree.allLeaves)
+                    appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .closed
+                    return .failure(.discoveryFailed(
+                        "terminal shell did not become ready to accept the launch command"
+                    ))
+                }
             }
         }
         appState.wrappedValue.repos[repoIdx].worktrees[wtIdx].state = .running
-        terminalManager.surfaceBudget.noteCreated(
-            worktreePath: worktreePath,
-            splitTreesByPath: appState.wrappedValue.runningSplitTreesByPath()
-        )
+        if terminalStartTiming != .onClientAttach {
+            terminalManager.surfaceBudget.noteCreated(
+                worktreePath: worktreePath,
+                splitTreesByPath: appState.wrappedValue.runningSplitTreesByPath()
+            )
+        }
         let firstSessionID = appState.wrappedValue.repos[repoIdx].worktrees[wtIdx]
             .ensurePaneSession(for: firstLeaf)
         let sessionName = ZmxLauncher.sessionName(for: firstSessionID)
@@ -328,8 +344,8 @@ enum AddWorktreeFlow {
     }
 
     /// Blocking convenience: run both phases inline. Used by the web
-    /// `POST /worktrees` endpoint, whose response includes the
-    /// `sessionName` the client needs for `zmx attach`. The native
+    /// endpoint and paired worktree-management channel, whose responses
+    /// include the session name the client needs for `zmx attach`. The native
     /// sidebar uses `beginCreate` + `finishCreate` separately so the
     /// sheet can dismiss optimistically.
     static func add(
@@ -340,7 +356,8 @@ enum AddWorktreeFlow {
         worktreeMonitor: WorktreeMonitor,
         statsStore: WorktreeStatsStore,
         terminalManager: TerminalManager,
-        teamEventDispatcher: TeamEventDispatcher
+        teamEventDispatcher: TeamEventDispatcher,
+        entryPoint: CreationEntryPoint = .web
     ) async -> Swift.Result<Result, FlowError> {
         let worktreePath: String
         switch beginCreate(
@@ -361,7 +378,7 @@ enum AddWorktreeFlow {
             statsStore: statsStore,
             terminalManager: terminalManager,
             teamEventDispatcher: teamEventDispatcher,
-            terminalStartTiming: terminalStartTiming(for: .web)
+            terminalStartTiming: terminalStartTiming(for: entryPoint)
         )
     }
 

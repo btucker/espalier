@@ -16,6 +16,7 @@ struct AddWorktreeFlowBeginCreateTests {
         )
         #expect(AddWorktreeFlow.terminalStartTiming(for: .cli) == .immediately)
         #expect(AddWorktreeFlow.terminalStartTiming(for: .web) == .afterViewLayout)
+        #expect(AddWorktreeFlow.terminalStartTiming(for: .pairedClient) == .onClientAttach)
     }
 
     @Test("@spec GIT-5.11: When BranchSelection.useExisting is submitted and the same repo already has the branch mounted in another worktree, the application shall reject the create with branchAlreadyMounted(at:) before invoking git.")

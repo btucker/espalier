@@ -1136,17 +1136,40 @@ struct GrafttyApp: App {
     /// that worktree, focus the resolved pane when one is present and the
     /// worktree is running, and bring the app to the foreground.
     private func handleDeepLink(_ url: URL) {
-        guard let target = GrafttyDeepLink.parse(url) else { return }
-        guard case let .resolved(path, paneSlot) = DeepLinkResolver.resolve(target, inRepos: appState.repos) else {
-            return
-        }
-        appState.selectedWorktreePath = path
-        if let paneSlot,
-           let wt = appState.worktree(forPath: path),
-           wt.state == .running, wt.paneSessions[paneSlot] != nil {
-            appState.setFocusedTerminal(paneSlot, forWorktreePath: path)
-        }
+        guard Self.applyDeepLink(
+            url,
+            appState: $appState,
+            prepareRunningWorktree: { worktree in
+                terminalManager.createSurfaces(
+                    for: worktree.splitTree,
+                    paneSessions: worktree.paneSessions,
+                    worktreePath: worktree.path
+                )
+            }
+        ) else { return }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    static func applyDeepLink(
+        _ url: URL,
+        appState: Binding<AppState>,
+        prepareRunningWorktree: (WorktreeEntry) -> Void
+    ) -> Bool {
+        guard let target = GrafttyDeepLink.parse(url),
+              case let .resolved(path, paneSlot) = DeepLinkResolver.resolve(
+                  target,
+                  inRepos: appState.wrappedValue.repos
+              ) else { return false }
+        appState.wrappedValue.selectedWorktreePath = path
+        if let worktree = appState.wrappedValue.worktree(forPath: path),
+           worktree.state == .running {
+            prepareRunningWorktree(worktree)
+            if let paneSlot, worktree.paneSessions[paneSlot] != nil {
+                appState.wrappedValue.setFocusedTerminal(paneSlot, forWorktreePath: path)
+            }
+        }
+        return true
     }
 
     private func startup() {
@@ -2569,7 +2592,8 @@ struct GrafttyApp: App {
                         worktreeMonitor: worktreeMonitor,
                         statsStore: statsStore,
                         terminalManager: terminalManager,
-                        teamEventDispatcher: dispatcherForWeb
+                        teamEventDispatcher: dispatcherForWeb,
+                        entryPoint: .pairedClient
                     )
                     switch result {
                     case .success(let outcome):

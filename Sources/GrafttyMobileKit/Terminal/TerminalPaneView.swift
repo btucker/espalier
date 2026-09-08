@@ -445,6 +445,8 @@ public final class TerminalInputContainerView: UIView,
 
     private lazy var selectionPanRecognizer: UIPanGestureRecognizer = {
         let r = UIPanGestureRecognizer(target: self, action: #selector(handleSelectionPan(_:)))
+        r.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        r.maximumNumberOfTouches = 1
         r.isEnabled = false
         return r
     }()
@@ -453,6 +455,9 @@ public final class TerminalInputContainerView: UIView,
     /// `Select` action can word-select at the original touch point even
     /// after the gesture has ended. Updated on `.began`.
     private var lastLongPressPoint: CGPoint = .zero
+    private var longPressURL: URL?
+    private(set) var terminalGridMetrics: TerminalGridMetrics?
+    var openURL: (URL) -> Void = { UIApplication.shared.open($0) }
     /// Paste and edit-menu dismissal are independent UIKit callbacks whose
     /// relative ordering is not part of our contract. Pair them by long-press
     /// menu generation and refocus only after both have happened.
@@ -581,14 +586,26 @@ public final class TerminalInputContainerView: UIView,
         terminalView.becomeFirstResponder()
     }
 
-    private func presentLongPressMenu(at point: CGPoint) {
+    func prepareLongPressMenu(at point: CGPoint, text: String) {
         lastLongPressPoint = point
+        longPressURL = terminalGridMetrics.flatMap {
+            TerminalLinkResolver.url(
+                in: text, at: point, grid: $0,
+                displayScale: terminalView.contentScaleFactor
+            )
+        }
         longPressMenuGeneration &+= 1
         pendingPasteRefocusGeneration = nil
         completedLongPressMenuDismissalGeneration = nil
+    }
+
+    private func presentLongPressMenu(for request: TerminalTextSelectionRequest) {
+        prepareLongPressMenu(
+            at: request.sourcePoint, text: request.text
+        )
         let config = UIEditMenuConfiguration(
             identifier: longPressMenuIdentifier(for: longPressMenuGeneration),
-            sourcePoint: point
+            sourcePoint: request.sourcePoint
         )
         longPressMenu.presentEditMenu(with: config)
     }
@@ -597,9 +614,17 @@ public final class TerminalInputContainerView: UIView,
         guard selectionController.isActive else { return }
         let point = recognizer.location(in: self)
         switch recognizer.state {
+        case .began:
+            selectionMenu.dismissMenu()
+            selectionController.extend(to: point)
         case .changed:
             selectionController.extend(to: point)
         case .ended, .cancelled, .failed:
+            selectionController.endExtension(
+                at: point,
+                viewportHeight: terminalView.bounds.height,
+                displayScale: terminalView.contentScaleFactor
+            )
             presentSelectionMenu(near: point)
         default: break
         }
@@ -751,10 +776,15 @@ public final class TerminalInputContainerView: UIView,
     }
 
     func longPressMenuActionTitlesForTesting(hasPasteString: Bool) -> [String] {
+        longPressMenuForTesting(hasPasteString: hasPasteString)
+            .children.compactMap { ($0 as? UIAction)?.title }
+    }
+
+    func longPressMenuForTesting(hasPasteString: Bool) -> UIMenu {
         longPressUIMenu(
             for: longPressMenuGeneration,
             hasPasteString: hasPasteString
-        ).children.compactMap { ($0 as? UIAction)?.title }
+        )
     }
 
     private func refocusKeyboardAfterEditMenuDismissalIfReady(for generation: UInt) {
@@ -939,7 +969,28 @@ public final class TerminalInputContainerView: UIView,
 extension TerminalInputContainerView: TerminalSurfaceTextSelectionRequestDelegate {
     /// @spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
     public func terminalDidRequestTextSelection(_ request: TerminalTextSelectionRequest) {
-        presentLongPressMenu(at: request.sourcePoint)
+        presentLongPressMenu(for: request)
+    }
+}
+
+extension TerminalInputContainerView: TerminalSurfaceLifecycleDelegate {
+    public func terminalDidAttachSurface(_ surface: TerminalSurface) {}
+
+    public func terminalDidDetachSurface() {
+        cancelActiveSelectionIfAny()
+        longPressURL = nil
+        terminalGridMetrics = nil
+        longPressMenuGeneration &+= 1
+        pendingPasteRefocusGeneration = nil
+        completedLongPressMenuDismissalGeneration = nil
+        longPressMenu.dismissMenu()
+        selectionMenu.dismissMenu()
+    }
+}
+
+extension TerminalInputContainerView: TerminalSurfaceGridResizeDelegate {
+    public func terminalDidResize(_ size: TerminalGridMetrics) {
+        terminalGridMetrics = size
     }
 }
 
@@ -1001,6 +1052,12 @@ extension TerminalInputContainerView: UIEditMenuInteractionDelegate {
             UIAction(title: "Select") { [weak self] _ in self?.performSelectAtLongPressPoint() },
             UIAction(title: "Select All") { [weak self] _ in self?.performSelectAll() },
         ]
+        if let url = longPressURL {
+            children.insert(UIAction(title: "Open Link", image: UIImage(systemName: "safari")) { [weak self] _ in
+                guard let self, self.longPressMenuGeneration == generation else { return }
+                self.openURL(url)
+            }, at: 0)
+        }
         if hasPasteString {
             children.append(UIAction(title: "Paste") { [weak self] _ in
                 self?.performPaste(for: generation)
