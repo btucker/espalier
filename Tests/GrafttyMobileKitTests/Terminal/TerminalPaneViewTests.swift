@@ -59,10 +59,10 @@ struct TerminalPaneViewTests {
             at: CGPoint(x: CGFloat((text as NSString).range(of: "hello").location) * 10 + 5, y: 10),
             text: text
         )
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
             "Open Link", "Select", "Select All",
         ])
-        let action = try #require(container.longPressMenuForTesting(hasPasteString: false)
+        let action = try #require(container.longPressMenuForTesting(hasPasteContent: false)
             .children.compactMap { $0 as? UIAction }.first { $0.title == "Open Link" })
         let button = UIButton()
         button.addAction(action, for: .touchUpInside)
@@ -73,7 +73,7 @@ struct TerminalPaneViewTests {
         container.prepareLongPressMenu(
             at: CGPoint(x: 5, y: 10), text: text
         )
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
             "Select", "Select All",
         ])
         button.sendActions(for: .touchUpInside)
@@ -84,7 +84,7 @@ struct TerminalPaneViewTests {
     func terminalLinksRejectMissingGeometryAndUnsupportedSchemes() {
         let container = TerminalInputContainerView(frame: .zero)
         container.prepareLongPressMenu(at: .zero, text: "https://example.com/path")
-        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
         #expect(TerminalLinkResolver.webURL("file:///tmp/file") == nil)
         #expect(TerminalLinkResolver.webURL("javascript:alert(1)") == nil)
     }
@@ -185,7 +185,7 @@ struct TerminalPaneViewTests {
         var opened: URL?
         container.openURL = { opened = $0 }
         container.prepareLongPressMenu(at: point, text: text)
-        let action = try #require(container.longPressMenuForTesting(hasPasteString: false)
+        let action = try #require(container.longPressMenuForTesting(hasPasteContent: false)
             .children.compactMap { $0 as? UIAction }.first { $0.title == "Open Link" })
         let button = UIButton()
         button.addAction(action, for: .touchUpInside)
@@ -204,12 +204,12 @@ struct TerminalPaneViewTests {
         container.selectionController.beginSelection(at: .zero)
         container.enterSelectionModeForTesting()
         container.prepareLongPressMenu(at: CGPoint(x: 100, y: 10), text: "https://example.com/old-surface")
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
         container.terminalDidDetachSurface()
         #expect(!container.selectionController.isActive)
-        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
         container.prepareLongPressMenu(at: .zero, text: "New text")
-        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteString: false).contains("Open Link"))
+        #expect(!container.longPressMenuActionTitlesForTesting(hasPasteContent: false).contains("Open Link"))
         #expect(container.terminalPanRecognizersAllowIndirectScrollingForTesting)
     }
 
@@ -258,7 +258,7 @@ struct TerminalPaneViewTests {
     }
 
     @Test("""
-@spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
+@spec IOS-11.1: While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
 """)
     func terminalLongPressUsesGhosttySelectionRequestDelegate() throws {
         let container = TerminalInputContainerView(
@@ -273,10 +273,10 @@ struct TerminalPaneViewTests {
         #expect(container.terminalView.delegate === container)
         #expect(container.terminalView.gestureRecognizerShouldBegin(terminalLongPress))
         #expect(container.gestureRecognizers?.contains { $0 is UILongPressGestureRecognizer } == false)
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: false) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: false) == [
             "Select", "Select All",
         ])
-        #expect(container.longPressMenuActionTitlesForTesting(hasPasteString: true) == [
+        #expect(container.longPressMenuActionTitlesForTesting(hasPasteContent: true) == [
             "Select", "Select All", "Paste",
         ])
     }

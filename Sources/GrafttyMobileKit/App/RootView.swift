@@ -633,6 +633,32 @@ struct SingleSessionView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+            .overlay(alignment: .top) {
+                if let client, isPaneFocused {
+                    if let progress = client.imagePasteProgress {
+                        VStack(spacing: 6) {
+                            Text(progress < 1 ? "Uploading image…" : "Pasting image…")
+                            ProgressView(value: progress)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: 260)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.top, 64)
+                    } else if let error = client.imagePasteError {
+                        HStack {
+                            Text(error).font(.callout)
+                            Button { client.imagePasteError = nil } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .accessibilityLabel("Dismiss image paste error")
+                        }
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 64)
+                    }
+                }
+            }
             .overlay(alignment: .bottom) {
                 // Keyboard-hidden affordances (Take Control / show-keyboard)
                 // float over the edge-to-edge terminal. When the keyboard is up
@@ -1175,15 +1201,8 @@ struct SingleSessionView: View {
             },
             onFontSizeChange: fontSizeChangeHandler(isOwner: client.isOwner),
             preferredInterfaceStyle: preferredStyle,
-            // @spec IOS-11.8: When the user taps **Paste** in the long-press menu,
-            // the application shall read `UIPasteboard.general.string` and, when
-            // non-empty, send it via `SessionClient.sendPaste(_:)`. An empty or
-            // absent clipboard string shall be a silent no-op.
             onPasteRequested: { [weak client] in
-                guard let client, let text = UIPasteboard.general.string, !text.isEmpty else {
-                    return
-                }
-                client.sendPaste(text)
+                client?.pasteFromClipboard()
             },
             captureContainer: { [paneContainerBox] view in
                 paneContainerBox.view = view

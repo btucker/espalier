@@ -16,6 +16,18 @@ import UIKit
 @MainActor
 public final class SessionClient {
 
+    public private(set) var imagePasteProgress: Double?
+    public var imagePasteError: String?
+    private var supportsImagePaste = false
+    private var imagePasteID: UUID?
+    private var imagePasteTask: Task<Void, Never>?
+    private var imagePasteInputTask: Task<Void, Never>?
+    private var imagePasteTimeout: Task<Void, Never>?
+    private var imagePasteEpoch: UInt64?
+    private var imagePasteInput = PendingInput()
+    @ObservationIgnored
+    internal var imagePasteboard: UIPasteboard = .general
+
     public let sessionName: String
     public let session: InMemoryTerminalSession
 
@@ -121,13 +133,14 @@ public final class SessionClient {
         var takeoverBaseEpoch: UInt64?
         var takeoverRequested = false
 
-        mutating func queue(_ data: Data) -> Bool {
+        mutating func queue(_ data: Data, replacingOverflow: Bool = true) -> Bool {
             guard data.count <= Self.maxBytes else {
                 clear()
                 return false
             }
             if frames.count >= Self.maxFrames || byteCount + data.count > Self.maxBytes {
                 clear()
+                guard replacingOverflow else { return false }
             }
             frames.append(data)
             byteCount += data.count
@@ -274,7 +287,11 @@ public final class SessionClient {
             guard let self else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.sendInput(data)
+                if data == Data([0x16]) {
+                    self.sendControlByte(0x16)
+                } else {
+                    self.sendInput(data)
+                }
             }
         }
         // Layout path: libghostty tells us "the iOS view is now N×M".
@@ -335,6 +352,7 @@ public final class SessionClient {
     }
 
     private func startTransport() {
+        resetImagePaste()
         transportGeneration &+= 1
         let generation = transportGeneration
         lastActivityAt = clock.now
@@ -389,6 +407,7 @@ public final class SessionClient {
                     // after a newer transport is already live. In particular,
                     // stale process EOF must not end the resumed client.
                     guard self.isCurrentTransport(generation) else { return }
+                    self.resetImagePaste()
                     if Self.isTerminalSessionEnded(error) {
                         // Process EOF is final for this pane. Retrying an SSH
                         // `zmx attach` here can recreate the exited session
@@ -443,6 +462,7 @@ public final class SessionClient {
     private func spawnOpenTask(
         generation: UInt64
     ) -> Task<WebSocketClient?, Never> {
+        resetImagePaste()
         let task: Task<WebSocketClient?, Never> = Task { @MainActor [weak self] in
             guard let self else { return nil }
             do {
@@ -535,6 +555,14 @@ public final class SessionClient {
     @MainActor
     private func sendInput(_ data: Data) {
         guard role != .preview else { return }
+        if let id = imagePasteID {
+            guard imagePasteInput.queue(data, replacingOverflow: false) else {
+                finishImagePaste(id: id, error: "Image paste was cancelled because too much input was queued. Queued input was discarded.")
+                return
+            }
+            recordActivity()
+            return
+        }
         switch ownershipTransportMode {
         case .webControl where isOwner:
             recordActivity()
@@ -578,7 +606,12 @@ public final class SessionClient {
     /// Send one terminal control byte without applying committed-text Return
     /// normalization. Physical Ctrl+letter corrections use this path so
     /// Ctrl+J remains LF instead of becoming CR.
-    public func sendControlByte(_ byte: UInt8) {
+    public func sendControlByte(_ byte: UInt8, pasteboard: UIPasteboard? = nil) {
+        let pasteboard = pasteboard ?? imagePasteboard
+        if byte == 0x16, pasteboard.hasImages {
+            pasteFromClipboard(pasteboard)
+            return
+        }
         sendInput(Data([byte]))
     }
 
@@ -591,6 +624,172 @@ public final class SessionClient {
         payload.append(Data(text.utf8))
         payload.append(Data("\u{1B}[201~".utf8))
         sendInput(payload)
+    }
+
+    public func pasteFromClipboard(_ pasteboard: UIPasteboard = .general) {
+        if pasteboard.hasImages {
+            guard canStartImagePaste() else { return }
+            guard let image = pasteboard.image,
+                  image.size.width * image.scale <= 16_384,
+                  image.size.height * image.scale <= 16_384,
+                  image.size.width * image.size.height * image.scale * image.scale <= 40_000_000 else {
+                imagePasteError = "This clipboard image could not be prepared for pasting."
+                return
+            }
+            startImagePaste {
+                await Task.detached(priority: .userInitiated) { image.pngData() }.value
+            }
+        } else if let text = pasteboard.string, !text.isEmpty {
+            sendPaste(text)
+        }
+    }
+
+    public func sendImagePaste(_ data: Data) {
+        guard canStartImagePaste() else { return }
+        guard !data.isEmpty, data.count <= ImagePasteMessage.maxImageBytes else {
+            imagePasteError = "Clipboard images must be no larger than 10 MB as PNG."
+            return
+        }
+        startImagePaste { data }
+    }
+
+    private func canStartImagePaste() -> Bool {
+        guard role != .preview, !stopped, imagePasteID == nil else { return false }
+        guard supportsImagePaste else {
+            imagePasteError = "Image paste requires an updated Graftty host running this pane locally."
+            return false
+        }
+        return true
+    }
+
+    private func startImagePaste(prepare: @escaping @Sendable () async -> Data?) {
+        let id = UUID()
+        let generation = transportGeneration
+        imagePasteID = id
+        imagePasteError = nil
+        imagePasteProgress = 0
+        recordActivity()
+        if !isOwner { requestTakeControl() }
+        imagePasteTimeout = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            guard let self, self.imagePasteID == id else { return }
+            self.finishImagePaste(id: id, error: "Image paste was not confirmed. Check the prompt before trying again.")
+        }
+        imagePasteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let prepared = await prepare()
+            guard !Task.isCancelled, self.imagePasteID == id, self.isCurrentTransport(generation) else { return }
+            guard let data = prepared else {
+                self.finishImagePaste(id: id, error: "This clipboard image could not be prepared for pasting.")
+                return
+            }
+            guard !data.isEmpty, data.count <= ImagePasteMessage.maxImageBytes else {
+                self.finishImagePaste(id: id, error: "Clipboard images must be no larger than 10 MB as PNG.")
+                return
+            }
+            guard let ws = await self.awaitWS(for: generation) else {
+                self.finishImagePaste(id: id, error: "Image paste was interrupted. Check the connection.")
+                return
+            }
+            do {
+                // Wait for the normal ownership handshake before uploading.
+                for _ in 0..<100 where !self.isOwner {
+                    try Task.checkCancellation()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                guard self.isOwner else { throw URLError(.noPermissionsToReadFile) }
+                let epoch = self.ownershipSnapshot?.epoch
+                self.imagePasteEpoch = epoch
+                @MainActor func send(_ message: ImagePasteMessage) async throws {
+                    try Task.checkCancellation()
+                    guard self.imagePasteID == id, self.isCurrentTransport(generation),
+                          self.isOwner, self.ownershipSnapshot?.epoch == epoch else {
+                        throw CancellationError()
+                    }
+                    try await ws.send(.text(WebControlEnvelope.imagePaste(message).encoded()))
+                }
+                try await send(.begin(id: id, byteCount: data.count))
+                for offset in stride(from: 0, to: data.count, by: ImagePasteMessage.chunkSize) {
+                    let end = min(offset + ImagePasteMessage.chunkSize, data.count)
+                    try await send(.chunk(id: id, offset: offset, data: data.subdata(in: offset..<end)))
+                    if self.imagePasteID == id { self.imagePasteProgress = Double(end) / Double(data.count) }
+                }
+                try await send(.commit(id: id))
+            } catch {
+                // A host acknowledgement can arrive before send(commit)
+                // resumes. Once queued input is flushing, that acknowledgement
+                // owns completion even if the earlier send reports an error.
+                guard self.imagePasteID == id, self.imagePasteInputTask == nil else { return }
+                self.finishImagePaste(id: id, error: "Image paste was interrupted. Check the connection and pane control.")
+            }
+        }
+    }
+
+    private func finishImagePaste(id: UUID, error: String?) {
+        guard imagePasteID == id else { return }
+        if error == nil {
+            guard imagePasteInputTask == nil else { return }
+            imagePasteTimeout?.cancel()
+            imagePasteTimeout = nil
+        }
+        if error == nil, !imagePasteInput.frames.isEmpty {
+            let generation = transportGeneration
+            let epoch = imagePasteEpoch
+            imagePasteInputTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    guard let ws = await self.awaitWS(for: generation) else { throw CancellationError() }
+                    // Keep the paste barrier active through delivery. Input arriving
+                    // while a write suspends joins the next batch in this loop.
+                    while !self.imagePasteInput.frames.isEmpty {
+                        let frames = self.imagePasteInput.drain()
+                        for frame in frames {
+                            try Task.checkCancellation()
+                            guard self.imagePasteID == id, self.isCurrentTransport(generation),
+                                  self.isOwner, self.ownershipSnapshot?.epoch == epoch else { throw CancellationError() }
+                            try await ws.send(.binary(frame))
+                        }
+                    }
+                    self.completeImagePaste(id: id, error: nil)
+                } catch {
+                    self.completeImagePaste(id: id, error: "Queued input was discarded because the connection or pane control changed. Check the prompt before continuing.")
+                }
+            }
+            return
+        }
+        let message = error.map {
+            imagePasteInput.frames.isEmpty && imagePasteInputTask == nil ? $0 : "\($0) Queued input was discarded."
+        }
+        completeImagePaste(id: id, error: message)
+    }
+
+    private func completeImagePaste(id: UUID, error: String?) {
+        guard imagePasteID == id else { return }
+        if error != nil {
+            let generation = transportGeneration
+            Task { @MainActor [weak self] in
+                guard let self, let ws = await self.awaitWS(for: generation) else { return }
+                try? await ws.send(.text(WebControlEnvelope.imagePaste(.cancel(id: id)).encoded()))
+            }
+        }
+        imagePasteID = nil
+        imagePasteEpoch = nil
+        imagePasteInput.clear()
+        imagePasteProgress = nil
+        imagePasteError = error
+        imagePasteTask?.cancel()
+        imagePasteTask = nil
+        imagePasteInputTask?.cancel()
+        imagePasteInputTask = nil
+        imagePasteTimeout?.cancel()
+        imagePasteTimeout = nil
+    }
+
+    private func resetImagePaste() {
+        supportsImagePaste = false
+        if let id = imagePasteID {
+            finishImagePaste(id: id, error: "The connection closed before image paste was confirmed. Check the prompt before trying again.")
+        }
     }
 
     public func deleteBackward() {
@@ -641,6 +840,7 @@ public final class SessionClient {
     public func suspend() {
         guard !stopped else { return }
         stopped = true
+        resetImagePaste()
         transportGeneration &+= 1
         receiveTask?.cancel()
         receiveTask = nil
@@ -825,6 +1025,12 @@ public final class SessionClient {
     internal func handleTextFrame(_ text: String) {
         guard let envelope = try? WebControlEnvelope.parse(Data(text.utf8)) else { return }
         switch envelope {
+        case .imagePaste(.available):
+            supportsImagePaste = true
+        case .imagePaste(.result(let id, let error)):
+            finishImagePaste(id: id, error: error)
+        case .imagePaste:
+            break
         case let .grid(cols, rows):
             if ownershipSnapshot == nil {
                 legacyServerGrid = GridSize(cols: cols, rows: rows)
@@ -847,6 +1053,10 @@ public final class SessionClient {
             }
             let wasOwner = isOwner
             ownershipSnapshot = snapshot
+            if let id = imagePasteID, let epoch = imagePasteEpoch,
+               !isOwner || snapshot.epoch != epoch {
+                finishImagePaste(id: id, error: "Image paste was interrupted because pane control changed.")
+            }
             if isOwner {
                 if !wasOwner,
                    ownershipTransportMode == .webControl,

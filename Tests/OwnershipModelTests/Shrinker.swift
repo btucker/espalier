@@ -233,7 +233,7 @@ private func webEnvelopeToOp(_ env: WebControlEnvelope) -> Op {
     case let .ownerResize(id, epoch, cols, rows):
         let grid = (try? DisplayGrid(cols: cols, rows: rows)) ?? .daemonFallback
         return .ownerResize(id, believedEpoch: epoch, grid: grid)
-    case .resize, .grid, .ownership:
+    case .resize, .grid, .ownership, .imagePaste:
         fatalError("unhandled envelope in webEnvelopeToOp: \(env)")
     }
 }
@@ -310,7 +310,7 @@ private func webEnvelopeSourceLiteral(_ env: WebControlEnvelope) -> String {
         return ".resize(cols: \(cols), rows: \(rows))"
     case let .grid(cols, rows):
         return ".grid(cols: \(cols), rows: \(rows))"
-    case .ownership:
-        return "/* .ownership cannot be emitted as a source literal */"
+    case .ownership, .imagePaste:
+        return "/* server response cannot be emitted as a source literal */"
     }
 }

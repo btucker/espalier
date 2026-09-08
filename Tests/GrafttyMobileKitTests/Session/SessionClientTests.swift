@@ -2,6 +2,7 @@
 import Foundation
 import GhosttyTerminal
 import Testing
+import UIKit
 @testable import GrafttyMobileKit
 import GrafttyProtocol
 
@@ -697,6 +698,254 @@ struct SessionClientTests {
         #expect(binaryFrames(ws).contains(expected))
     }
 
+    @Test("""
+    @spec IOS-11.8: When the user taps Paste in the long-press menu, the application shall upload a clipboard image when present, otherwise send non-empty clipboard text as bracketed paste; an empty clipboard shall be a silent no-op.
+    """)
+    func pasteFromClipboardSelectsImagesBeforeText() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        pasteboard.string = "hello"
+        client.pasteFromClipboard(pasteboard)
+        try await waitUntil("clipboard text") { !binaryFrames(ws).isEmpty }
+        let initialFrames = binaryFrames(ws)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        pasteboard.items = [["public.png": try #require(image.pngData()), "public.utf8-plain-text": "image text"]]
+        client.pasteFromClipboard(pasteboard)
+        // No capability was advertised, so an image produces an error and
+        // cannot accidentally fall through to the clipboard's text flavor.
+        #expect(client.imagePasteError != nil)
+        #expect(binaryFrames(ws) == initialFrames)
+        pasteboard.items = []
+        client.pasteFromClipboard(pasteboard)
+        #expect(binaryFrames(ws) == initialFrames)
+    }
+
+    @Test("""
+    @spec IOS-11.21: When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
+    """)
+    func controlVPastesLocalImageOrPreservesControlByte() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.sendControlByte(0x16, pasteboard: pasteboard)
+        try await waitUntil("ordinary Ctrl+V") { binaryFrames(ws).contains(Data([0x16])) }
+        ws.clearSent()
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        pasteboard.image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        client.sendControlByte(0x16, pasteboard: pasteboard)
+        try await waitUntil("Ctrl+V image upload") { client.imagePasteProgress == 1 }
+        #expect(binaryFrames(ws).isEmpty)
+    }
+
+    @Test
+    func stickyControlVPastesImageAndPreservesMultiByteInput() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.imagePasteboard = pasteboard
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        pasteboard.image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        let rawInput = Data([0x61, 0x16, 0x62])
+        client.session.sendInput(rawInput)
+        try await waitUntil("raw multi-byte input") { binaryFrames(ws).contains(rawInput) }
+        ws.clearSent()
+        // libghostty's sticky Ctrl modifier writes through this session callback.
+        client.session.sendInput(Data([0x16]))
+        try await waitUntil("sticky Ctrl+V processed") {
+            client.imagePasteProgress != nil || !binaryFrames(ws).isEmpty
+        }
+        #expect(client.imagePasteProgress != nil)
+        #expect(binaryFrames(ws).isEmpty)
+    }
+
+    @Test("""
+    @spec IOS-11.22: While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
+    """, arguments: [false, true])
+    func imagePasteOrdersLaterInputAfterConfirmation(fails: Bool) async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.submitReturn()
+        try await waitUntil("image upload finished") { imageCommitID(ws) != nil }
+        // Give unrelated input Tasks time to run before checking the barrier.
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        let id = try #require(imageCommitID(ws))
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: fails ? "Rejected" : nil)).encoded())
+        if fails {
+            try await waitUntil("failed paste cancellation") {
+                ws.sent.contains { frame in
+                    guard case .text(let text) = frame,
+                          case .imagePaste(.cancel(let cancelledID)) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return false }
+                    return cancelledID == id
+                }
+            }
+            #expect(binaryFrames(ws).isEmpty)
+            #expect(client.imagePasteError?.contains("discarded") == true)
+        } else {
+            // Duplicate acknowledgement must not cancel or restart delivery.
+            client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: nil)).encoded())
+            try await waitUntil("queued input delivered") { binaryFrames(ws).count == 2 }
+            #expect(binaryFrames(ws) == [Data("describe this".utf8), Data([0x0D])])
+        }
+    }
+
+    private func imageCommitID(_ ws: FakeWS) -> UUID? {
+        ws.sent.compactMap { frame -> UUID? in
+            guard case .text(let text) = frame,
+                  case .imagePaste(.commit(let id)) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return nil }
+            return id
+        }.first
+    }
+
+    @Test
+    func imagePasteChecksCapabilityBeforeDecodingClipboardImage() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        pasteboard.items = [["public.png": Data([1, 2, 3])]]
+        #expect(pasteboard.hasImages)
+        client.pasteFromClipboard(pasteboard)
+        #expect(client.imagePasteError?.contains("updated Graftty host") == true)
+        #expect(client.imagePasteProgress == nil)
+    }
+
+    @Test
+    func imagePasteQueueOverflowCancelsInsteadOfSubmittingPartialInput() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.sendSoftwareKeyboardText(String(repeating: "x", count: 1_048_576))
+        #expect(client.imagePasteProgress == nil)
+        #expect(client.imagePasteError?.contains("discarded") == true)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        #expect(imageCommitID(ws) == nil)
+    }
+
+    @Test
+    func imagePasteDropsQueuedReturnWhenOwnershipChangesBeforeFlush() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.submitReturn()
+        try await waitUntil("image commit") { imageCommitID(ws) != nil }
+        let id = try #require(imageCommitID(ws))
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: nil)).encoded())
+        try confirmFollower(client, epoch: 2)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        #expect(client.imagePasteError?.contains("discarded") == true)
+    }
+
+    @Test
+    func suspendCancelsImagePasteAndDoesNotReplayIt() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.submitReturn()
+        client.suspend()
+        #expect(client.imagePasteProgress == nil)
+        #expect(client.imagePasteError != nil)
+        await Task.yield()
+        #expect(!ws.sent.contains { frame in
+            guard case .text(let text) = frame,
+                  case .imagePaste(.commit) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return false }
+            return true
+        })
+        #expect(binaryFrames(ws).isEmpty)
+    }
+
+    @Test("""
+    @spec IOS-11.19: When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
+    """)
+    func imagePasteUsesControlFramesAndWaitsForHost() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        try await waitUntil("image upload commit") {
+            ws.sent.contains { frame in
+                guard case .text(let text) = frame,
+                      case .imagePaste(.commit) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return false }
+                return true
+            }
+        }
+        #expect(client.imagePasteProgress == 1)
+        #expect(binaryFrames(ws).isEmpty)
+        let id = try #require(ws.sent.compactMap { frame -> UUID? in
+            guard case .text(let text) = frame,
+                  case .imagePaste(.commit(let id)) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return nil }
+            return id
+        }.first)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: nil)).encoded())
+        #expect(client.imagePasteProgress == nil)
+        #expect(client.imagePasteError == nil)
+    }
+
+    @Test("""
+    @spec IOS-11.20: If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+    """)
+    func imagePasteRequiresHostSupport() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.sendImagePaste(Data([1]))
+        #expect(client.imagePasteError != nil)
+        #expect(client.imagePasteProgress == nil)
+        #expect(binaryFrames(ws).isEmpty)
+    }
+
     @Test
     func sendPastePreservesEmbeddedNewlinesVerbatim() async throws {
         let ws = FakeWS()
@@ -843,7 +1092,7 @@ struct SessionClientTests {
                 switch envelope {
                 case .resize, .ownerResize, .takeControl:
                     return true
-                case .hello, .grid, .ownership:
+                case .hello, .grid, .ownership, .imagePaste:
                     return false
                 }
             }
@@ -852,7 +1101,7 @@ struct SessionClientTests {
             switch envelope {
             case .resize, .ownerResize, .takeControl:
                 return true
-            case .hello, .grid, .ownership:
+            case .hello, .grid, .ownership, .imagePaste:
                 return false
             }
         }

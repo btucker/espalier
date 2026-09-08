@@ -45,6 +45,7 @@ import Darwin
 /// SIGTERM (not SIGKILL) per WEB-4.5 so the client exits gracefully
 /// while the daemon survives.
 public final class ZmxAttachEngine: TerminalByteStream, TerminalSizeReporting, TerminalSyncResizing, @unchecked Sendable {
+    public var usesHostClipboard: Bool { true }
 
     public struct Config {
         public let zmxExecutable: URL

@@ -55,6 +55,7 @@ public enum WebControlEnvelope: Equatable {
     case takeControl(clientID: DisplayClientID, kind: DisplayClientKind, cols: UInt16, rows: UInt16)
     case ownerResize(clientID: DisplayClientID, epoch: UInt64, cols: UInt16, rows: UInt16)
     case ownership(DisplayOwnershipSnapshot)
+    case imagePaste(ImagePasteMessage)
 
     public enum ParseError: Error, Equatable {
         case notJSON
@@ -74,6 +75,13 @@ public enum WebControlEnvelope: Equatable {
         guard let dict = json as? [String: Any] else { throw ParseError.notJSON }
         guard let type = dict["type"] as? String else { throw ParseError.missingField("type") }
         switch type {
+        case "imagePaste":
+            guard let message = dict["message"] else { throw ParseError.missingField("message") }
+            guard JSONSerialization.isValidJSONObject(message) else {
+                throw ParseError.invalidField("message")
+            }
+            let bytes = try JSONSerialization.data(withJSONObject: message)
+            return .imagePaste(try JSONDecoder().decode(ImagePasteMessage.self, from: bytes))
         case "resize":
             let grid = try parseGrid(dict)
             return .resize(cols: grid.cols, rows: grid.rows)
@@ -162,6 +170,10 @@ public enum WebControlEnvelope: Equatable {
                 "rows": rows,
                 "type": "ownerResize",
             ])
+        case let .imagePaste(message):
+            let data = try! JSONEncoder().encode(message)
+            let object = try! JSONSerialization.jsonObject(with: data)
+            return Self.encodeObject(["type": "imagePaste", "message": object])
         case let .ownership(snapshot):
             let snapshotData = try! JSONEncoder().encode(snapshot)
             let snapshotObject = try! JSONSerialization.jsonObject(with: snapshotData)

@@ -1596,7 +1596,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 ### IOS-11.x
 
-**IOS-11.1** While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when `UIPasteboard.general.hasStrings` is true at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
+**IOS-11.1** While a focused terminal pane is interactive, the application shall handle libghostty's built-in long-press selection request through `TerminalInputContainerView` and present a menu at the touch point containing **Select**, **Select All**, and (when the clipboard contains text or an image at menu-build time) **Paste**, without installing a competing long-press recognizer on the container.
 
 **IOS-11.2** When the user taps **Select** in the long-press menu, the application shall word-select the cell under the press by synthesizing a left click followed by a held second press, so subsequent drags extend the selection across words and lines. Copy, Cancel, and Select All shall release the held button.
 
@@ -1610,7 +1610,7 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 
 **IOS-11.7** When the user taps **Cancel**, taps outside the highlighted selection, or presses a key on the terminal control bar while in selection mode, the application shall clear libghostty's selection and exit selection mode without modifying the pasteboard.
 
-**IOS-11.8** When the user taps **Paste** in the long-press menu, the application shall read `UIPasteboard.general.string` and, when non-empty, send it via `SessionClient.sendPaste(_:)`. An empty or absent clipboard string shall be a silent no-op.
+**IOS-11.8** When the user taps Paste in the long-press menu, the application shall upload a clipboard image when present, otherwise send non-empty clipboard text as bracketed paste; an empty clipboard shall be a silent no-op.
 
 **IOS-11.9** `SessionClient.sendPaste(_:)` shall wrap the payload in `ESC [ 200 ~` and `ESC [ 201 ~` and emit the wrapped sequence as a single binary WebSocket frame. Committed software Return normalization from `IOS-6.3` shall not apply to this path; the payload's own line endings shall be preserved verbatim.
 
@@ -1623,6 +1623,22 @@ This file is generated from `@spec` annotations in `Sources/` and `Tests/`. Do n
 **IOS-11.13** When the user presses and holds a displayed HTTP or HTTPS URL whose terminal cells map unambiguously to the viewport text, the application shall offer Open Link alongside its text-selection actions and open the complete URL in the system browser when chosen. Pressing ordinary text shall not offer Open Link.
 
 **IOS-11.14** When a terminal selection drag ends or is cancelled at a viewport edge, the application shall stop selection autoscrolling while preserving the selection anchor for another drag.", arguments: [CGFloat(1), 2, 3]) func endingDragStopsAtTheViewportBoundaryWithoutReleasingTheAnchor(scale: CGFloat) { let surface = FakeSurfaceProxy() let controller = TerminalSelectionController(surface: surface) let height: CGFloat = 400.25 let heightPixels = (height * scale).rounded(.down) controller.beginSelection(at: CGPoint(x: 30, y: 100)) // Ghostty scrolls at y <= 1px or y > heightPixels - 1px, // and drops mouse moves smaller than one surface pixel. for yPixels in [CGFloat(-20), 1, heightPixels - 0.5, heightPixels + 20] { let point = CGPoint(x: 30, y: yPixels / scale) controller.extend(to: point) surface.events.removeAll() controller.endExtension(at: point, viewportHeight: height, displayScale: scale) #expect(controller.isActive) #expect(surface.events.count == 1) guard case let .mousePos(x, y) = surface.events.last else { Issue.record("Ending the drag must send a bounded position without releasing the button") return } #expect(x == 30) let boundedPixels = CGFloat(y) * scale #expect(boundedPixels > 1) #expect(boundedPixels <= heightPixels - 1) #expect(abs(boundedPixels - yPixels) >= 1) } controller.extend(to: CGPoint(x: 60, y: 200)) #expect(surface.events.last == .mousePos(60, 200)) controller.cancel() #expect(Array(surface.events.suffix(2)) == [.leftUp, .action("clear_selection")]) } @Test func realSurfaceSelectionExtendsAcrossWordsAndLinesAndStopsAutoscrolling() async throws { let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 400)) let host = UIViewController() window.rootViewController = host window.makeKeyAndVisible() let view = UITerminalView(frame: window.bounds) let metrics = SelectionMetrics() view.delegate = metrics let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in }) let renderer = MobileTerminalControllerFactory.make(configText:
+
+**IOS-11.15** When a clipboard image is transferred, the application shall carry bounded image chunks separately from PTY bytes and require a complete, ordered upload before committing the paste.
+
+**IOS-11.16** If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
+
+**IOS-11.17** When an image upload completes for the controlling client, the host shall write the image to its clipboard before sending Ctrl+V to that client's attached pane, without sending Enter or restoring the clipboard.
+
+**IOS-11.18** If the host cannot write a clipboard image or the originating attachment loses control or disconnects, then the application shall report failure and shall not send Ctrl+V.
+
+**IOS-11.19** When the user pastes an image to a capable host, the mobile application shall send image control frames, show upload progress until the host replies, and shall not inject image bytes or Ctrl+V into the PTY itself.
+
+**IOS-11.20** If a host does not advertise image paste support, then the mobile application shall explain that the host needs an update and shall not send the image or Ctrl+V.
+
+**IOS-11.21** When the user sends Ctrl+V with an image on the mobile clipboard, the application shall upload that image; if the clipboard has no image, then Ctrl+V shall retain its terminal control-byte behavior.
+
+**IOS-11.22** While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
 
 ## IPAD — iPad Layout
 

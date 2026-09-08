@@ -5,6 +5,10 @@ import Foundation
 /// these per session via an injected `Factory` callback. Production
 /// wires `Factory` to `zmx attach`; tests pass a fake.
 public protocol TerminalByteStream: Sendable {
+    /// True only when this stream's process can read this Mac's clipboard.
+    /// Relays to another machine must not replace the intermediary clipboard.
+    var usesHostClipboard: Bool { get }
+
     /// Send bytes to the underlying PTY (keystrokes from the remote
     /// client).
     func send(_ bytes: Data) async throws
@@ -30,6 +34,7 @@ public protocol TerminalByteStream: Sendable {
 }
 
 public extension TerminalByteStream {
+    var usesHostClipboard: Bool { false }
     func resize(cols: Int, rows: Int) async {}
 }
 

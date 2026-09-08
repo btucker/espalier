@@ -1164,7 +1164,7 @@ private final class TestAttachCoordinator: @unchecked Sendable {
             let result = store.ownerResize(sessionName: sessionName, clientID: clientID, epoch: epoch, grid: grid)
             broadcaster.broadcast(result.snapshot)
 
-        case .resize, .grid, .ownership:
+        case .resize, .grid, .ownership, .imagePaste:
             break
         }
     }
