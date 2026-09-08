@@ -77,6 +77,9 @@ public enum WebControlEnvelope: Equatable {
         switch type {
         case "imagePaste":
             guard let message = dict["message"] else { throw ParseError.missingField("message") }
+            guard JSONSerialization.isValidJSONObject(message) else {
+                throw ParseError.invalidField("message")
+            }
             let bytes = try JSONSerialization.data(withJSONObject: message)
             return .imagePaste(try JSONDecoder().decode(ImagePasteMessage.self, from: bytes))
         case "resize":

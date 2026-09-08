@@ -13,13 +13,30 @@ struct ImagePasteHostTests {
         var snapshot: [String] { lock.withLock { events } }
     }
 
+    final class DelayedDispatcher: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: (@Sendable () -> Void)?
+        func schedule(_ action: @escaping @Sendable () -> Void) {
+            lock.withLock { pending = action }
+        }
+        func run() {
+            let action = lock.withLock {
+                let action = pending
+                pending = nil
+                return action
+            }
+            action?()
+        }
+    }
+
     private func make(
         _ recorder: Recorder, clipboardSucceeds: Bool = true,
-        store: SessionDisplayOwnershipStore = .init(), supportsImagePaste: Bool = true
+        store: SessionDisplayOwnershipStore = .init(), supportsImagePaste: Bool = true,
+        dispatcher: DelayedDispatcher? = nil
     ) -> TerminalAttachCoordinator {
         let coordinator = TerminalAttachCoordinator(
             sessionName: "image-pane", clientID: DisplayClientID("phone"), defaultKind: .ios,
-            ownershipStore: store, broadcaster: DisplayOwnershipBroadcaster(),
+            ownershipStore: store, broadcaster: DisplayOwnershipBroadcaster(store: store),
             sendText: { text in
                 if case .imagePaste(.result(_, let error)) = try? WebControlEnvelope.parse(Data(text.utf8)) {
                     recorder.record(error == nil ? "success" : "error")
@@ -30,6 +47,9 @@ struct ImagePasteHostTests {
             pasteImage: { _ in
                 recorder.record("clipboard")
                 return clipboardSucceeds
+            },
+            dispatchImageCommit: { action in
+                if let dispatcher { dispatcher.schedule(action) } else { action() }
             }
         )
         coordinator.handleControl(.hello(clientID: DisplayClientID("phone"), kind: .ios,
@@ -87,6 +107,45 @@ struct ImagePasteHostTests {
         _ = store.detachClient(sessionName: "image-pane", clientID: DisplayClientID("phone"), fallbackGrid: .daemonFallback)
         for _ in 0..<100 { await Task.yield() }
         #expect(recorder.snapshot == ["error"])
+    }
+
+    @Test
+    func ownershipLossBeforeInputEnqueueRejectsPaste() async {
+        let recorder = Recorder()
+        let store = SessionDisplayOwnershipStore()
+        let dispatcher = DelayedDispatcher()
+        let coordinator = make(recorder, store: store, dispatcher: dispatcher)
+        upload(to: coordinator)
+        for _ in 0..<100 where recorder.snapshot.isEmpty { await Task.yield() }
+        #expect(recorder.snapshot == ["clipboard"])
+        _ = store.detachClient(sessionName: "image-pane", clientID: DisplayClientID("phone"), fallbackGrid: .daemonFallback)
+        dispatcher.run()
+        #expect(recorder.snapshot == ["clipboard", "error"])
+    }
+
+    @Test
+    func disconnectedAttachmentBeforeInputEnqueueRejectsPaste() async {
+        let recorder = Recorder()
+        let dispatcher = DelayedDispatcher()
+        let coordinator = make(recorder, dispatcher: dispatcher)
+        upload(to: coordinator)
+        for _ in 0..<100 where recorder.snapshot.isEmpty { await Task.yield() }
+        #expect(recorder.snapshot == ["clipboard"])
+        coordinator.detach()
+        dispatcher.run()
+        #expect(recorder.snapshot == ["clipboard", "error"])
+    }
+
+    @Test
+    func acknowledgesOnlyAfterInputEnqueue() async {
+        let recorder = Recorder()
+        let dispatcher = DelayedDispatcher()
+        let coordinator = make(recorder, dispatcher: dispatcher)
+        upload(to: coordinator)
+        for _ in 0..<100 where recorder.snapshot.isEmpty { await Task.yield() }
+        #expect(recorder.snapshot == ["clipboard"])
+        dispatcher.run()
+        #expect(recorder.snapshot == ["clipboard", "ctrl-v", "success"])
     }
 
     @Test

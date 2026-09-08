@@ -24,6 +24,14 @@ struct ImagePasteTests {
         #expect(throws: (any Error).self) { try upload.finish(id: id) }
     }
 
+    @Test(arguments: ["null", "true", "42", "\"invalid\"", "[]"])
+    func malformedImageMessageIsRejected(_ message: String) {
+        let wire = "{\"type\":\"imagePaste\",\"message\":\(message)}"
+        #expect(throws: (any Error).self) {
+            try WebControlEnvelope.parse(Data(wire.utf8))
+        }
+    }
+
     @Test("""
     @spec IOS-11.14: If an image upload is oversized, incomplete, out of order, or belongs to another request, then the application shall reject it without pasting.
     """)

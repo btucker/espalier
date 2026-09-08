@@ -1174,12 +1174,9 @@ public final class WebServer {
                 resize: { [weak self] cols, rows in
                     self?.session?.resize(cols: cols, rows: rows)
                 },
-                write: { [channel = context.channel] data in
-                    if channel.eventLoop.inEventLoop {
-                        writeOnLoop.value(data)
-                    } else {
-                        channel.eventLoop.execute { writeOnLoop.value(data) }
-                    }
+                write: { data in writeOnLoop.value(data) },
+                dispatchImageCommit: { [loop = context.eventLoop] action in
+                    loop.execute(action)
                 }
             )
             coordinator = bridge

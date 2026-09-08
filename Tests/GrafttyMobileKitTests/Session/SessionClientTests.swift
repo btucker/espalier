@@ -753,6 +753,133 @@ struct SessionClientTests {
     }
 
     @Test
+    func stickyControlVPastesImageAndPreservesMultiByteInput() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.imagePasteboard = pasteboard
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        pasteboard.image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        let rawInput = Data([0x61, 0x16, 0x62])
+        client.session.sendInput(rawInput)
+        try await waitUntil("raw multi-byte input") { binaryFrames(ws).contains(rawInput) }
+        ws.clearSent()
+        // libghostty's sticky Ctrl modifier writes through this session callback.
+        client.session.sendInput(Data([0x16]))
+        try await waitUntil("sticky Ctrl+V processed") {
+            client.imagePasteProgress != nil || !binaryFrames(ws).isEmpty
+        }
+        #expect(client.imagePasteProgress != nil)
+        #expect(binaryFrames(ws).isEmpty)
+    }
+
+    @Test("""
+    @spec IOS-11.20: While an image paste awaits host confirmation, the mobile application shall queue subsequent terminal input in order and send it only after a successful confirmation; if image paste fails or the input queue exceeds its limit, then the application shall discard queued input and explain the failure.
+    """, arguments: [false, true])
+    func imagePasteOrdersLaterInputAfterConfirmation(fails: Bool) async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.submitReturn()
+        try await waitUntil("image upload finished") { imageCommitID(ws) != nil }
+        // Give unrelated input Tasks time to run before checking the barrier.
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        let id = try #require(imageCommitID(ws))
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: fails ? "Rejected" : nil)).encoded())
+        if fails {
+            try await waitUntil("failed paste cancellation") {
+                ws.sent.contains { frame in
+                    guard case .text(let text) = frame,
+                          case .imagePaste(.cancel(let cancelledID)) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return false }
+                    return cancelledID == id
+                }
+            }
+            #expect(binaryFrames(ws).isEmpty)
+            #expect(client.imagePasteError?.contains("discarded") == true)
+        } else {
+            // Duplicate acknowledgement must not cancel or restart delivery.
+            client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: nil)).encoded())
+            try await waitUntil("queued input delivered") { binaryFrames(ws).count == 2 }
+            #expect(binaryFrames(ws) == [Data("describe this".utf8), Data([0x0D])])
+        }
+    }
+
+    private func imageCommitID(_ ws: FakeWS) -> UUID? {
+        ws.sent.compactMap { frame -> UUID? in
+            guard case .text(let text) = frame,
+                  case .imagePaste(.commit(let id)) = try? WebControlEnvelope.parse(Data(text.utf8)) else { return nil }
+            return id
+        }.first
+    }
+
+    @Test
+    func imagePasteChecksCapabilityBeforeDecodingClipboardImage() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        pasteboard.items = [["public.png": Data([1, 2, 3])]]
+        #expect(pasteboard.hasImages)
+        client.pasteFromClipboard(pasteboard)
+        #expect(client.imagePasteError?.contains("updated Graftty host") == true)
+        #expect(client.imagePasteProgress == nil)
+    }
+
+    @Test
+    func imagePasteQueueOverflowCancelsInsteadOfSubmittingPartialInput() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.sendSoftwareKeyboardText(String(repeating: "x", count: 1_048_576))
+        #expect(client.imagePasteProgress == nil)
+        #expect(client.imagePasteError?.contains("discarded") == true)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        #expect(imageCommitID(ws) == nil)
+    }
+
+    @Test
+    func imagePasteDropsQueuedReturnWhenOwnershipChangesBeforeFlush() async throws {
+        let ws = FakeWS()
+        let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
+        client.start()
+        defer { client.stop() }
+        try await confirmOwner(client, ws: ws)
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
+        client.sendImagePaste(Data([1, 2, 3]))
+        client.sendSoftwareKeyboardText("describe this")
+        client.submitReturn()
+        try await waitUntil("image commit") { imageCommitID(ws) != nil }
+        let id = try #require(imageCommitID(ws))
+        client.handleTextFrame(WebControlEnvelope.imagePaste(.result(id: id, error: nil)).encoded())
+        try confirmFollower(client, epoch: 2)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(binaryFrames(ws).isEmpty)
+        #expect(client.imagePasteError?.contains("discarded") == true)
+    }
+
+    @Test
     func suspendCancelsImagePasteAndDoesNotReplayIt() async throws {
         let ws = FakeWS()
         let client = SessionClient(sessionName: "s", webSocketFactory: { ws })
@@ -761,6 +888,7 @@ struct SessionClientTests {
         try await confirmOwner(client, ws: ws)
         client.handleTextFrame(WebControlEnvelope.imagePaste(.available).encoded())
         client.sendImagePaste(Data([1, 2, 3]))
+        client.submitReturn()
         client.suspend()
         #expect(client.imagePasteProgress == nil)
         #expect(client.imagePasteError != nil)

@@ -432,17 +432,12 @@ public final class TerminalSessionHandler: ChannelInboundHandler, @unchecked Sen
                 }
             },
             write: { [weak self] data in
-                // Image paste completes on MainActor after writing the
-                // clipboard; ordinary input already runs on this loop.
-                if loop.inEventLoop {
-                    self?.enqueuePTYWrite(data, channel: channel)
-                } else {
-                    loop.execute { [weak self] in
-                        self?.enqueuePTYWrite(data, channel: channel)
-                    }
-                }
+                // Ordinary input and the image commit continuation both
+                // run on this event loop, preserving the FIFO enqueue.
+                self?.enqueuePTYWrite(data, channel: channel)
             },
-            supportsImagePaste: stream.usesHostClipboard
+            supportsImagePaste: stream.usesHostClipboard,
+            dispatchImageCommit: { action in loop.execute(action) }
         )
         self.coordinator = coordinator
 

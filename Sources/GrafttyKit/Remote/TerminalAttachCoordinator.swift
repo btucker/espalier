@@ -120,6 +120,9 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
     private var lastAcceptedOwnerGrid: DisplayGrid?
     private let supportsImagePaste: Bool
     private let pasteImage: @MainActor @Sendable (Data) -> Bool
+    /// Run the final ownership check and input enqueue together on the
+    /// transport's event loop, after clipboard work leaves MainActor.
+    private let dispatchImageCommit: @Sendable (@escaping @Sendable () -> Void) -> Void
     private var imageUpload = ImagePasteUpload()
     private var imageUploadEpoch: UInt64?
     private var pendingImageCommit: UUID?
@@ -134,7 +137,8 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
         resize: @escaping @Sendable (UInt16, UInt16) -> Void,
         write: @escaping @Sendable (Data) -> Void,
         supportsImagePaste: Bool = true,
-        pasteImage: (@MainActor @Sendable (Data) -> Bool)? = nil
+        pasteImage: (@MainActor @Sendable (Data) -> Bool)? = nil,
+        dispatchImageCommit: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { $0() }
     ) {
         self.sessionName = sessionName
         self.clientID = clientID
@@ -146,6 +150,7 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
         self.write = write
         self.supportsImagePaste = supportsImagePaste
         self.pasteImage = pasteImage ?? { HostImagePasteboard.write($0) }
+        self.dispatchImageCommit = dispatchImageCommit
         self.registration = broadcaster.register(sessionName: sessionName, clientID: clientID) { [weak self] snapshot in
             self?.sendOwnershipSnapshot(snapshot)
         }
@@ -269,18 +274,19 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
                         if self.pendingImageCommit == id { self.pendingImageCommit = nil }
                         return "Pane control changed before the image could be pasted."
                     }
-                    defer { self.pendingImageCommit = nil }
                     guard self.pasteImage(completed) else {
+                        self.pendingImageCommit = nil
                         return "The host could not put this image on its clipboard."
                     }
-                    let current = self.ownershipStore.snapshot(sessionName: self.sessionName)
-                    guard current.ownerClientID == self.clientID, current.epoch == snapshot.epoch else {
-                        return "Pane control changed before the image could be pasted."
-                    }
-                    self.write(Data([0x16]))
                     return nil
                 }
-                self.sendText(WebControlEnvelope.imagePaste(.result(id: id, error: error)).encoded())
+                if let error {
+                    self.sendText(WebControlEnvelope.imagePaste(.result(id: id, error: error)).encoded())
+                } else {
+                    self.dispatchImageCommit { [weak self] in
+                        self?.enqueueImagePaste(id: id)
+                    }
+                }
             }
         } catch {
             lock.withLock { imageUpload.cancel(id: id) }
@@ -288,6 +294,25 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
                 id: id, error: "Image upload rejected. Check pane control and try pasting again."
             )).encoded())
         }
+    }
+
+    private func enqueueImagePaste(id: UUID) {
+        let error: String? = lock.withLock {
+            defer { if pendingImageCommit == id { pendingImageCommit = nil } }
+            let snapshot = ownershipStore.snapshot(sessionName: sessionName)
+            guard !detached, pendingImageCommit == id,
+                  snapshot.ownerClientID == clientID,
+                  snapshot.epoch == imageUploadEpoch else {
+                return "Pane control changed before the image could be pasted."
+            }
+            return nil
+        }
+        // A writer may close its channel synchronously on queue overflow,
+        // which re-enters detach(). Do not hold our lock across that call.
+        if error == nil { write(Data([0x16])) }
+        // Success confirms submission to the transport's input writer.
+        // The terminal protocol cannot acknowledge the CLI's clipboard read.
+        sendText(WebControlEnvelope.imagePaste(.result(id: id, error: error)).encoded())
     }
 
     public func handleBinary(_ data: Data) {
@@ -421,6 +446,13 @@ public final class TerminalAttachCoordinator: @unchecked Sendable {
     }
 
     private func sendOwnershipSnapshot(_ snapshot: DisplayOwnershipSnapshot) {
+        lock.withLock {
+            if let epoch = imageUploadEpoch,
+               snapshot.epoch > epoch || (snapshot.epoch == epoch && snapshot.ownerClientID != clientID) {
+                imageUpload = .init()
+                imageUploadEpoch = nil
+            }
+        }
         sendText(WebControlEnvelope.ownership(localizedSnapshot(snapshot)).encoded())
     }
 
